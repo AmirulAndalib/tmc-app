@@ -14,6 +14,7 @@
 
 pub mod a2s;
 pub mod fivem;
+pub mod frostbite;
 pub mod gamespy;
 pub mod minecraft;
 pub mod quake3;
@@ -96,6 +97,7 @@ impl QueryProtocol {
                 | Self::Gamespy3
                 | Self::Samp
                 | Self::Fivem
+                | Self::Frostbite
                 | Self::TcpOnly
         )
     }
@@ -104,7 +106,7 @@ impl QueryProtocol {
     pub fn is_tcp(self) -> bool {
         matches!(
             self,
-            Self::Minecraft | Self::MinecraftSlp | Self::Fivem | Self::TcpOnly
+            Self::Minecraft | Self::MinecraftSlp | Self::Fivem | Self::Frostbite | Self::TcpOnly
         )
     }
 }
@@ -281,6 +283,17 @@ impl QueryTarget {
             QueryProtocol::Fivem => 30120,
             // `spy/internal/protocols/scum.go`: game port + 2.
             QueryProtocol::Scum => self.game_port.saturating_add(2),
+            /*
+             * `spy/internal/protocols/frostbite.go`: R-CON is on game + 22000,
+             * and the scanner declines the arithmetic above 43535 rather than
+             * wrapping past 65535. `checked_add` is that same guard, and the
+             * fallback is the game port — which is wrong, but it is the
+             * scanner's own behaviour, and a wrapped port is wrong AND probes a
+             * stranger's unrelated service.
+             */
+            QueryProtocol::Frostbite => {
+                self.game_port.checked_add(22_000).unwrap_or(self.game_port)
+            }
             _ => self.game_port,
         })
     }
@@ -309,6 +322,7 @@ pub async fn query(target: &QueryTarget) -> AppResult<ServerQueryResult> {
         QueryProtocol::Gamespy3 => gamespy::query_v3(addr, timeout, target.want_players).await,
         QueryProtocol::Samp => samp::query(addr, timeout).await,
         QueryProtocol::Fivem => fivem::query(addr, timeout, target.want_players).await,
+        QueryProtocol::Frostbite => frostbite::query(addr, timeout, target.want_players).await,
 
         // Everything else, including the recognised-but-unimplemented set.
         _ => tcp_only(addr, timeout, protocol).await,
@@ -418,6 +432,22 @@ mod tests {
         }
     }
 
+    /// A game port high enough that `+ 22000` would wrap keeps the game port
+    /// instead. `spy` declines the arithmetic above 43535 for the same reason:
+    /// a wrapped port is not merely wrong, it probes a stranger's unrelated
+    /// service on a low port number.
+    #[test]
+    fn a_frostbite_port_that_would_wrap_is_left_alone() {
+        let mut t = target(None, 0, false);
+        t.protocol = Some(QueryProtocol::Frostbite);
+
+        for game_port in [43_536u16, 60_000, u16::MAX] {
+            t.game_port = game_port;
+
+            assert_eq!(t.resolve_port().expect("port"), game_port);
+        }
+    }
+
     /// `swapGamePort` is post-scan bookkeeping in the scanner, not a port
     /// rule. Either way the answer is the game port, and it must be the game
     /// port for the same reason in both cases.
@@ -436,6 +466,10 @@ mod tests {
 
         t.protocol = Some(QueryProtocol::Scum);
         assert_eq!(t.resolve_port().expect("port"), 27017);
+
+        // Frostbite R-CON is not on the game port at all.
+        t.protocol = Some(QueryProtocol::Frostbite);
+        assert_eq!(t.resolve_port().expect("port"), 49015);
 
         // …and an explicit query port still overrides them.
         t.query_port = Some(40120);

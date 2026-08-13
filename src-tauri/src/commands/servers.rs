@@ -385,10 +385,23 @@ pub async fn ping_server(
 mod tests {
     use super::*;
 
+    /// Stand-in for "recognised, but this crate cannot speak it".
+    ///
+    /// It has to be a variant `is_native` rejects, so implementing a protocol
+    /// natively breaks these two tests — which is the intended signal, not a
+    /// nuisance: pick the next one still on the list. Frostbite used to sit
+    /// here and no longer qualifies.
+    const UNIMPLEMENTED: QueryProtocol = QueryProtocol::Teamspeak3;
+
+    #[test]
+    fn the_stand_in_is_still_unimplemented() {
+        assert!(!UNIMPLEMENTED.is_native());
+    }
+
     #[test]
     fn the_first_natively_implemented_protocol_wins() {
         assert_eq!(
-            choose(&[QueryProtocol::Frostbite, QueryProtocol::A2S]),
+            choose(&[UNIMPLEMENTED, QueryProtocol::A2S]),
             QueryProtocol::A2S
         );
         assert_eq!(
@@ -399,7 +412,7 @@ mod tests {
 
     #[test]
     fn an_unimplemented_or_empty_list_falls_back_to_tcp() {
-        assert_eq!(choose(&[QueryProtocol::Frostbite]), QueryProtocol::TcpOnly);
+        assert_eq!(choose(&[UNIMPLEMENTED]), QueryProtocol::TcpOnly);
         assert_eq!(choose(&[]), QueryProtocol::TcpOnly);
     }
 }

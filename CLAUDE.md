@@ -267,7 +267,10 @@ treating them as such is what made every Source server look dead:
 
 The only per-protocol exceptions are the scanner's own hardcoded ones, and they
 apply only when the row has no explicit query port: **FiveM → 30120**,
-**SCUM → game + 2**. `resolve_port` carries both with the Go file named.
+**SCUM → game + 2**, **Frostbite → game + 22000**. `resolve_port` carries all
+three with the Go file named. Frostbite's also declines the arithmetic above a
+game port of 43535 rather than wrapping past 65535 — a wrapped port is not just
+wrong, it probes a stranger's unrelated service on a low port number.
 
 Getting this wrong is still the single most common reason a live server shows as
 dead — which is why the rule is copied rather than invented.
@@ -289,6 +292,7 @@ probe, and it must not fall back to guessing.
 | `GAMESPY3` | Minecraft's query port, many others | Signed challenge — see below |
 | `SAMP` | SA-MP, open.mp | IPv4 only, by protocol design |
 | `FIVEM` | GTA V, RedM | HTTP `/dynamic.json` + `/info.json` |
+| `FROSTBITE` | BF3, BF4, Bad Company 2, Hardline | R-CON over TCP on game + 22000; roster columns keyed by tag name |
 
 Everything else in the enum is recognised but falls through to `TCP_ONLY`, which
 still yields a real latency figure. A Server Live Query plugin can cover any of
@@ -832,9 +836,10 @@ Honest list, so nothing here reads as finished when it is not:
   script — died with the native dialog and cannot be recovered while the picker
   is drawn by the app. Restoring it needs an OS-level confirmation the webview
   cannot forge.
-- **Protocols left on `TCP_ONLY`.** `FROSTBITE`, `GAMESPY4`, `DISCORD`,
-  `TEAMSPEAK3`, `HYTALE_NITRADO`, `GTA_NETWORK`, `GTA_RAGE`, `SCUM`. Each is a
-  module under `net/query/` away.
+- **Protocols left on `TCP_ONLY`.** `GAMESPY4`, `DISCORD`, `TEAMSPEAK3`,
+  `HYTALE_NITRADO`, `GTA_NETWORK`, `GTA_RAGE`, `SCUM`. Each is a module under
+  `net/query/` away. `commands/servers.rs`'s `UNIMPLEMENTED` test constant has
+  to name one of them, so implementing the next one fails two tests on purpose.
 - **A2S compressed split replies.** Reassembly handles the ordinary split
   format; the bzip2-compressed variant (old mods only) is not decoded, so those
   rosters are skipped. The info reply, which is what the browser renders, is
