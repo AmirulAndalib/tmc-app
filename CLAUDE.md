@@ -290,6 +290,7 @@ probe, and it must not fall back to guessing.
 | `GAMESPY1` | Unreal Tournament, early Battlefield | `\status\` |
 | `GAMESPY2` | Battlefield 2, UT2004 | Binary, per-section request byte |
 | `GAMESPY3` | Minecraft's query port, many others | Signed challenge — see below |
+| `GAMESPY4` | Games listing v4 | Identical game-server query to v3; shares its implementation, tagged separately |
 | `SAMP` | SA-MP, open.mp | IPv4 only, by protocol design |
 | `FIVEM` | GTA V, RedM | HTTP `/dynamic.json` + `/info.json` |
 | `FROSTBITE` | BF3, BF4, Bad Company 2, Hardline | R-CON over TCP on game + 22000; roster columns keyed by tag name |
@@ -838,7 +839,7 @@ Honest list, so nothing here reads as finished when it is not:
   script — died with the native dialog and cannot be recovered while the picker
   is drawn by the app. Restoring it needs an OS-level confirmation the webview
   cannot forge.
-- **Protocols left on `TCP_ONLY`.** `GAMESPY4`, `DISCORD`, `TEAMSPEAK3`,
+- **Protocols left on `TCP_ONLY`.** `DISCORD`, `TEAMSPEAK3`,
   `HYTALE_NITRADO`, `GTA_NETWORK`, `GTA_RAGE`, `SCUM`. Each is a module under
   `net/query/` away. `commands/servers.rs`'s `UNIMPLEMENTED` test constant has
   to name one of them, so implementing the next one fails two tests on purpose.

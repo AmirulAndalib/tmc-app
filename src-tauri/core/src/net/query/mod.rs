@@ -60,13 +60,18 @@ pub enum QueryProtocol {
     Gamespy2,
     /// GameSpy v3: challenge/response, used by Minecraft's query port too.
     Gamespy3,
+    /// GameSpy v4 — the same game-server query as v3, tagged separately.
+    ///
+    /// v4's additions (optional encryption, a reworked master server) do not
+    /// touch the query a client makes to a game server, so this shares v3's
+    /// implementation exactly as `spy` does.
+    Gamespy4,
     /// San Andreas Multiplayer.
     Samp,
     /// FiveM / CitizenFX — HTTP JSON endpoints rather than a game protocol.
     Fivem,
 
     // ---- Recognised but not natively implemented; see `is_native`. ----
-    Gamespy4,
     Discord,
     Teamspeak3,
     HytaleNitrado,
@@ -95,6 +100,7 @@ impl QueryProtocol {
                 | Self::Gamespy1
                 | Self::Gamespy2
                 | Self::Gamespy3
+                | Self::Gamespy4
                 | Self::Samp
                 | Self::Fivem
                 | Self::Frostbite
@@ -320,6 +326,7 @@ pub async fn query(target: &QueryTarget) -> AppResult<ServerQueryResult> {
         QueryProtocol::Gamespy1 => gamespy::query_v1(addr, timeout).await,
         QueryProtocol::Gamespy2 => gamespy::query_v2(addr, timeout, target.want_players).await,
         QueryProtocol::Gamespy3 => gamespy::query_v3(addr, timeout, target.want_players).await,
+        QueryProtocol::Gamespy4 => gamespy::query_v4(addr, timeout, target.want_players).await,
         QueryProtocol::Samp => samp::query(addr, timeout).await,
         QueryProtocol::Fivem => fivem::query(addr, timeout, target.want_players).await,
         QueryProtocol::Frostbite => frostbite::query(addr, timeout, target.want_players).await,

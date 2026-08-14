@@ -241,6 +241,36 @@ pub async fn query_v3(
     timeout: Duration,
     want_players: bool,
 ) -> AppResult<ServerQueryResult> {
+    query_v3_as(addr, timeout, want_players, QueryProtocol::Gamespy3).await
+}
+
+/// GameSpy v4.
+///
+/// **The same wire protocol as v3.** v4 added optional encryption and a
+/// reworked master-server side; the game-server query itself is unchanged, and
+/// `spy`'s own `QueryGameSpy4` is a one-line delegation to its v3 handler for
+/// exactly this reason. Sharing the implementation rather than copying it means
+/// the signed-challenge rule and the split-packet handling below cannot drift
+/// apart between the two.
+///
+/// The result is tagged `Gamespy4` rather than `Gamespy3` so the UI reports the
+/// protocol the server was actually configured with. Reporting the one we
+/// happened to reuse would make the app disagree with the website over the same
+/// server for no reason a user could act on.
+pub async fn query_v4(
+    addr: SocketAddr,
+    timeout: Duration,
+    want_players: bool,
+) -> AppResult<ServerQueryResult> {
+    query_v3_as(addr, timeout, want_players, QueryProtocol::Gamespy4).await
+}
+
+async fn query_v3_as(
+    addr: SocketAddr,
+    timeout: Duration,
+    want_players: bool,
+    protocol: QueryProtocol,
+) -> AppResult<ServerQueryResult> {
     // Handshake: type 9, session id, no payload.
     let mut handshake = Vec::with_capacity(7);
     handshake.extend_from_slice(&V3_MAGIC);
@@ -267,7 +297,7 @@ pub async fn query_v3(
 
     // The RTT that matters is the whole exchange, both round trips.
     let mut result = parse_v3(&packets, addr.port(), rtt1.saturating_add(rtt2))?;
-    result.protocol = QueryProtocol::Gamespy3;
+    result.protocol = protocol;
 
     Ok(result)
 }
@@ -558,6 +588,36 @@ mod tests {
 
         assert_eq!(out.name.as_deref(), Some("Real Name"));
         assert_eq!(out.player_list[0].name, "hostname");
+    }
+
+    // ------------------------------------------------------------------ v4
+
+    #[test]
+    fn v4_is_spoken_natively_over_udp() {
+        assert!(QueryProtocol::Gamespy4.is_native());
+
+        // v4 is UDP. Were it to answer `is_tcp`, `QueryTarget` would resolve
+        // its port by the TCP rules and query the wrong one.
+        assert!(!QueryProtocol::Gamespy4.is_tcp());
+    }
+
+    // v4 delegates to v3's implementation, so the thing worth pinning is that
+    // it reports itself as v4 — a shared parser makes it easy to leak the
+    // borrowed protocol into the result and disagree with the website about
+    // what a server speaks.
+    #[test]
+    fn v4_and_v3_share_a_parser_but_not_a_label() {
+        let out = parse_v3(&[v3_packet()], 25565, 40).expect("parses");
+
+        // parse_v3 labels its own; query_v3_as overwrites it per caller.
+        assert_eq!(out.protocol, QueryProtocol::Gamespy3);
+        assert_eq!(out.name.as_deref(), Some("A Minecraft Server"));
+
+        let mut tagged = out;
+        tagged.protocol = QueryProtocol::Gamespy4;
+
+        assert_eq!(tagged.protocol, QueryProtocol::Gamespy4);
+        assert_eq!(tagged.players, Some(3));
     }
 
     #[test]
