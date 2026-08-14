@@ -788,10 +788,12 @@ all read `ServerQueryResult`.
   signal.** Anything that puts a context accessor in an effect dependency list
   re-runs that effect on its own result — which, for the server panel, was an
   unbounded query loop against a real game server.
-- **`lucide-react` is pinned to `0.468.0`.** `@modcommunity/shared@4.2.0`'s
-  `Footer` imports `Github` / `Twitter` / `Facebook`, which lucide removed in
-  ~0.475. Unpinning breaks the build with a `MISSING_EXPORT`. Fix belongs in
-  tmc-global; until then, the pin stays.
+- **Brand marks come from `react-icons/fa6`, never lucide.** lucide dropped its
+  brand glyphs; `Github` / `Twitter` / `Facebook` survived only as deprecated
+  aliases and are gone from ~0.475. `@modcommunity/shared` imported all three,
+  which is why this package pinned `lucide-react` to `0.468.0` to build at all.
+  Fixed in `shared@4.2.3`, so the pin is gone and lucide tracks `^0.542.0` with
+  the other repos. lucide stays the house icon set for everything else.
 - **Vite 8 minifies with oxc.** Setting `minify: 'esbuild'` demands esbuild as a
   separate install.
 - **`@source` in `app.css` is required.** Tailwind ignores `node_modules`, so
