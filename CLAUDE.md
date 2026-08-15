@@ -13,8 +13,14 @@ server maps, articles, communities, collections and members — plus the things 
 browser tab cannot do:
 
 - **One-click installs** through a declarative plugin system
+- **Sandboxes** — named mod profiles, deployed by hard link, symbolic link or
+  direct copy, with the game folder recoverable either way
 - **Real latency pings** measured from the user's own device
 - **Live server queries** over game-specific protocols
+- **A download queue** with pause, resume, priorities and bandwidth limits
+- **RCON**, with the passwords encrypted on the device and never uploaded
+- **Finding the games** — Steam, Epic, GOG and the rest, read from what they
+  already wrote down
 - **Local-first settings**, kept deliberately separate from account settings
 
 It is **not** a wrapper around the website. There is no landing page, no
@@ -56,17 +62,26 @@ tmc-app  (src-tauri/src/)          ← the Tauri shell, and nothing else
   ▼
 tmc-core (src-tauri/core/src/)     ← NO Tauri dependency; tests anywhere
   ├── auth.rs     PKCE + device grant; tokens never leave this process
-  ├── secure.rs   refresh token → OS credential store
+  ├── secure.rs   refresh token + named secrets → OS credential store
+  ├── crypto.rs   XChaCha20-Poly1305 for what has to be kept, not hashed
   ├── api.rs      the ONLY HTTP client; attaches the bearer, handles refresh
   ├── net/        address guard, transports, latency history, game protocols
-  ├── plugins/    manifest → sandbox → step executor, all declarative
+  ├── rcon/       Source and Frostbite consoles; the one deliberate SSRF gap
+  ├── download/   the queue: priorities, resume, rate limits
+  ├── detect/     where the launchers say the games are
+  ├── plugins/    manifest → jail → step executor, all declarative
+  ├── deploy/     merge tree → link/copy → ledger; how mods reach the game
+  ├── library/    subscriptions, sandboxes, staging, deployment
+  ├── launch.rs   the only place a process is spawned
+  ├── deeplink.rs what a `tmc://` link may mean, which is "show a page"
   └── logging.rs  the audit trail Settings → Logging reads
   │
-  ├──► website-city  /api/app/v1   (catalogue, auth)
-  └──► game servers directly       (live queries, latency)
+  ├──► website-city  /api/app/v1   (catalogue, auth, sandboxes)
+  ├──► game servers directly       (live queries, latency, RCON)
+  └──► wherever a mod's files are  (the download queue)
 ```
 
-**The workspace split is load-bearing.** `tmc-core` holds the plugin sandbox,
+**The workspace split is load-bearing.** `tmc-core` holds the plugin jail,
 the protocol parsers and the token lifecycle — the three things you most want to
 compile and fuzz on a CI runner with no display stack, no WebKit and no dbus.
 `cargo test -p tmc-core` needs none of them. Anything you add that does not
@@ -82,7 +97,9 @@ genuinely need a window belongs on that side of the line.
 | `auth.rs` | PKCE, device-grant state, in-memory access token |
 | `secure.rs` | Keychain / Credential Manager / Secret Service, file fallback on mobile. Keyed per API base |
 | `settings.rs` | App-local settings (`settings.json`), clamped on read |
-| `anchor.rs` | **What a sandbox root may be.** Guards `gameDirs` / `downloadDir` |
+| `anchor.rs` | **What a jail anchor may be.** Guards `gameDirs` / `downloadDir` |
+| `crypto.rs` | The device key, and what it does and does not buy |
+| `deeplink.rs` | The closed list of what a `tmc://` link may ask for |
 | `logging.rs` | Append-only JSONL audit log + `audit!` macro |
 | `net/addr.rs` | **The public-address guard.** Resolve once, connect to that |
 | `net/transport.rs` | Bounded UDP/TCP exchanges — every read has a deadline and a cap |
@@ -91,11 +108,33 @@ genuinely need a window belongs on that side of the line.
 | `net/latency.rs` | Rolling per-server history, bounded on both axes |
 | `net/query/` | The game protocols — see below |
 | `plugins/manifest.rs` | The manifest format and its validation |
-| `plugins/sandbox.rs` | The path jail |
+| `plugins/jail.rs` | **The path jail.** Called a jail, not a sandbox — see below |
 | `plugins/steps.rs` | The install/uninstall executor |
+| `plugins/apps.rs` | Per-game rules: where mods go, how to launch, sandbox presets |
 | `plugins/query.rs` | The declarative parser for Server Live Query plugins |
 | `plugins/theme.rs` | Theme token validation |
 | `plugins/registry.rs` | Installed plugins, approvals, fingerprint drift |
+| `deploy/merge.rs` | The virtual tree: who wins each path, and what conflicts |
+| `deploy/link.rs` | One syscall each, and the platform reason it might fail |
+| `deploy/ledger.rs` | What landed, what it displaced, and how to undo both |
+| `deploy/engine.rs` | Strategy selection, the diff against last time, placement |
+| `library/db.rs` | The device's SQLite store — subscriptions, sandboxes, queue, RCON |
+| `library/sync.rs` | Reconciling against the account, on a watermark |
+| `library/install.rs` | Materialising one subscription into the main game folder |
+| `library/sandbox.rs` | Sandboxes: environment, strategy, options, load order |
+| `library/deploy.rs` | Staging a mod into a sandbox, then deploying the sandbox |
+| `download/rate.rs` | The token bucket behind both bandwidth limits |
+| `download/mod.rs` | The queue itself |
+| `download/store.rs` | The queue, across a restart |
+| `detect/steam.rs` | `libraryfolders.vdf`, then every `appmanifest_*.acf` |
+| `detect/epic.rs` | Epic's `.item` manifests, and Heroic/Legendary on Linux |
+| `detect/gog.rs` | Galaxy's SQLite, read-only and `immutable=1` |
+| `detect/folders.rs` | Xbox, Ubisoft, EA, Battle.net, and a game's own hints |
+| `detect/vdf.rs` | Valve KeyValues, bounded on every axis |
+| `rcon/source.rs` | Valve's protocol, which is also Minecraft's |
+| `rcon/frostbite.rs` | Battlefield's, with `login.hashed` |
+| `rcon/store.rs` | Saved servers. Passwords encrypted; none of it leaves the device |
+| `launch.rs` | The only place in the app that spawns a process |
 
 **`src-tauri/src/` — `tmc-app`**
 
@@ -104,6 +143,11 @@ genuinely need a window belongs on that side of the line.
 | `lib.rs` | Builder, plugin registration, the command list |
 | `commands/` | The whole IPC surface. Nothing privileged happens outside it |
 | `commands/fs.rs` | Directory listing for the app's folder picker. Names only, never contents |
+| `commands/sandbox.rs` | Sandboxes, staging, deploying. Never takes a directory |
+| `commands/downloads.rs` | The queue. No command here takes a URL or a destination |
+| `commands/detect.rs` | Scan, and separately apply. A scan configures nothing |
+| `commands/rcon.rs` | Consoles. No command returns a password |
+| `commands/library.rs` | Sync, install, uninstall, launch |
 | `state.rs` | `AppState`, assembled once — shared locks and caches depend on that |
 | `paths.rs` | Every path, from Tauri's resolver — never `$HOME` |
 
@@ -121,17 +165,28 @@ genuinely need a window belongs on that side of the line.
 | `lib/hooks/use-breakpoint.ts` | Layout decisions, keyed on the window |
 | `lib/hooks/use-platform.ts` | The few decisions that genuinely are per-OS, not per-window |
 | `lib/hooks/use-live-query.tsx` | The live-server registry: one timer, one batch |
+| `lib/hooks/use-deep-link.tsx` | Turns a `tmc://` link into a route. Never into an action |
+| `lib/downloads/provider.tsx` | The queue, pushed from Rust and coalesced |
+| `lib/library/provider.tsx` | The subscription sync loop |
 | `lib/external.ts` | Which content kinds are handed to the system browser |
 | `components/shell.tsx` | Sidebar ≥768px, bottom tabs below |
 | `components/titlebar.tsx` | The app's own window frame — see "Cross-platform" |
 | `components/folder-picker.tsx` | The in-app folder chooser, over `commands/fs.rs` |
 | `components/markdown.tsx` | The safe renderer for untrusted bodies |
+| `components/select.tsx` | **The app's own dropdown.** A native `<select>`'s popup cannot be themed |
+| `components/speed-graph.tsx` | A download's recent speed, hand-rolled SVG |
+| `components/gallery.tsx` | Screenshots, and the lightbox behind them |
+| `components/reviews.tsx` | The review list and its distribution bars |
+| `components/report-button.tsx` | Reporting, into the website's own moderation queue |
 | `components/latency-graph.tsx` | Sparkline + full chart + the latency ladder, hand-rolled SVG |
 | `components/server-live.tsx` | The live strip on a server card |
 | `components/server-table.tsx` | The server browser's default view: table, expandable rows |
 | `components/browse-filters.tsx` | The filter panel: collapsible groups, kind-aware, URL-backed |
 | `components/server-panel.tsx` | The live panel on a server's page |
-| `routes/` | Browse, view, account, settings panes |
+| `routes/sandboxes.tsx` | The mod manager: what is in a sandbox, and whether it is applied |
+| `routes/downloads.tsx` | The queue, and everything to do when one is stuck |
+| `routes/rcon.tsx` | The server console |
+| `routes/` | Browse, view, library, installs, account, settings panes |
 
 ## Authentication
 
@@ -445,7 +500,7 @@ merge them into the widest one.
 | Streaming download counter | A server lying in `Content-Length` |
 | `https`-only + host allow-list, re-checked after placeholder substitution | A template smuggling in a host |
 | SHA-256 verification, file deleted on mismatch | A tampered download reaching a later step |
-| `is_public()` in `net.rs` | SSRF into the LAN or a cloud metadata endpoint |
+| `is_public()` in `net/addr.rs` | SSRF into the LAN or a cloud metadata endpoint |
 | Theme token + colour allow-list | `url()` beacons, `display:none` on the uninstall button |
 | Grants as filters over a root-relative path | Two grants for one root merging into the widest |
 | Manifest fingerprint | An update silently widening permissions |
@@ -461,10 +516,392 @@ drifted plugin is **disabled** and flagged `needsReapproval`; the toggle refuses
 to re-enable it, because the toggle is not where permissions are shown.
 
 Examples live in `examples/plugins/` and are **validated by two Rust tests**:
-one parses every manifest, the other builds each installer's real sandbox and
+one parses every manifest, the other builds each installer's real jail and
 resolves every step path through it. The second is the one with teeth — parsing
 only proves the JSON is well-formed, while a manifest whose grants and step
 paths disagree is the mistake an author copying the example would inherit.
+
+### App plugins: the rules for one game
+
+Distinct from the bundles above, and deliberately:
+
+| | Registry plugin | App plugin |
+| --- | --- | --- |
+| Where | `plugins/<id>/plugin.json` | `plugins/app/<slug>/*.json\|yaml` |
+| Identified by | a reverse-DNS id the author picks | the GAME it handles |
+| Answers | "what can this plugin do?" | "where do this game's mods go, and how do its sandboxes work?" |
+
+A bundle is something a user installed; an app plugin is a *rule for a game*,
+the app ships one per supported game, and there are dozens of tiny ones. The
+directory name is the game's **URL slug**, lower-cased. `disabled/` is skipped
+at any depth, which is the whole mechanism for turning a rule off without
+deleting it.
+
+| File | Declares |
+| --- | --- |
+| `manage_mod.json` / `manage_asset.yaml` | Install and uninstall steps for one content kind |
+| `launch.json` | How to start the game |
+| `sandbox.json` | Deployment strategies, presets, the game's own options, and detection hints |
+
+**The safety model is unchanged.** Each file compiles to a synthetic `Manifest`
+and runs through the same jail and the same executor, so it can express nothing
+a registry plugin cannot. What it adds is only the *selection* — which rule
+applies to which game, kind and file.
+
+## The library
+
+The device's answer to the account's subscriptions: which of them this machine
+holds, which are on disk, and how they got there.
+
+**SQLite, not a JSON file** (`library/db.rs`). Everything else the app persists
+— settings, the plugin registry — is a small file rewritten whole, and that is
+right for those: read at launch, written on a click, never contended. The
+library is not like that. The sync loop writes it on a timer while the UI reads
+it on every render and the installer writes single rows mid-install, and a
+whole-file rewrite under that pattern loses one writer to another exactly when
+somebody is watching a progress bar.
+
+Schema changes are **stepwise** — each migration takes the database from `n-1`
+to `n` and runs only if it has not. Re-running one batch happens to be safe
+today because every statement is `IF NOT EXISTS`, and stops being safe the first
+time a step needs an `ALTER TABLE`.
+
+**It polls** (`library/sync.rs`), because a subscription can be created in a
+BROWSER and there is no push channel to an installed desktop app that is
+reliable across three desktop platforms, two mobile ones, corporate firewalls
+and sleeping laptops. A watermark makes that cheap: each response carries a
+`revision`, the next request sends it back, and a device open for an hour has
+made sixty requests and transferred one row.
+
+**A full sync still happens** every `FULL_SYNC_EVERY` passes and always on
+launch, because a delta cannot express a DELETION — there is nothing left to
+poll. Anything the device holds that the server did not send has been
+unsubscribed elsewhere.
+
+**An upsert from the server never touches the device-local columns.** That is
+what stops a resync forgetting what is installed, which is the single easiest
+way to turn a working library into an endless reinstall loop.
+
+**The plan is executed in Rust, not returned to the webview.** A frontend that
+decided what to install is one an injected script can talk into installing
+something.
+
+## Sandboxes, and how mods reach the game
+
+A **sandbox** is what other managers call a profile (Mod Organizer, Vortex) or
+an instance (CurseForge, r2modman): a named set of mods with its own load
+order, its own deployment method and its own launch settings.
+
+> The word is why `plugins::jail` is called a jail. It used to be
+> `plugins::sandbox::Sandbox` — the path jail — and two `Sandbox` types in one
+> crate, one of them a security boundary, is a mistake waiting for somebody to
+> reach for the wrong one.
+
+**On the wire a sandbox is an `AppInstall`.** The cloud model predates the word
+and `/api/app/v1/installs` is shipped, so renaming the endpoint would 400 every
+request from every installed copy of the app. The app says "sandbox"; the API
+says "install"; they are the same thing.
+
+### What lives where
+
+By the same test the settings use — *would this be wrong to apply on a
+different machine?*
+
+| Fact | Where | Because |
+| --- | --- | --- |
+| name, mods, order, options, launch flags | the account (`AppInstall`) | signing in on a second machine should reproduce it |
+| which folder it deploys into | the device | that path exists on one machine |
+| which release of each mod is staged | the device | so does that |
+| the deployment ledger | the device | it describes files on one disk |
+
+The cloud half is **optional per sandbox**. `cloudSync` off means it is never
+sent anywhere and a reconcile cannot delete it — which is the whole answer to
+"I do not want my mod list on your server", and it has to be per-sandbox rather
+than global because the useful case is "sync my Minecraft profiles, not the one
+I use for testing".
+
+### Two steps, not one
+
+```text
+  stage   — run the game's install rule with the sandbox's own staging folder
+            standing in for the game directory
+  deploy  — mirror every staged file into the real game folder, by whichever
+            mechanism the sandbox is set to
+```
+
+Splitting them is what makes the whole feature work:
+
+  * **Every install rule written before sandboxes existed still works.** A rule
+    that copies to `mods/{fileName}` writes to
+    `<staging>/<sandbox>/<mod>/mods/foo.jar`, and deployment puts
+    `mods/foo.jar` in the game folder. The rule never learns which strategy is
+    in use, and it should not — "where does a Minecraft mod go" and "how do
+    files reach the game folder" are different questions.
+  * **Switching sandboxes is a link operation, not a download.** Staging
+    survives an undeploy.
+  * **Nothing half-downloaded is ever in the game folder.**
+
+`pluginData` is scoped per sandbox and per mod (`jail_for_scoped`). Two
+sandboxes staging the same mod run identical steps with an identical
+`{fileName}`; a shared scratch directory meant the second run's download landed
+on the first's, and a sandbox pinned to an older release quietly got the newer
+file.
+
+### The four strategies
+
+| Strategy | Game folder | Cost | Fails when |
+| --- | --- | --- | --- |
+| `direct` | modified | a full copy | never; it is the fallback |
+| `hardlink` | link pointers | nothing | staging is on another drive |
+| `symlink` | link pointers | nothing | Windows without Developer Mode |
+| `usvfs` | untouched | nothing | **not implemented — see below** |
+
+**USVFS is declared and refuses.** Mod Organizer's approach is a DLL injected
+into the game process that hooks `CreateFileW`/`FindFirstFileW`. Implementing it
+means shipping and injecting a native Windows component with its own signing
+story and its own anti-cheat exposure, and it has no meaning at all on the other
+four platforms. The variant exists so a sandbox can be *declared* to want it and
+so the plumbing — capability probe, strategy selection, ledger — is already
+shaped for it; asking for it today returns a refusal that says exactly this.
+
+**Capability is probed, not assumed.** `deploy::link::probe` creates one file
+and links it, twice, and reports what worked. Every rules table for this is
+wrong somewhere — a Linux box with staging on an exFAT USB drive, a macOS
+volume with links disabled, a Windows machine with Developer Mode on.
+
+**Falling back between the two LINK strategies is automatic and reported.
+Falling back to copying is not.** Copying is not a worse link, it is a different
+decision: it writes gigabytes, it modifies the game's own files, and its failure
+mode is a game folder that needs restoring rather than unlinking. A sandbox that
+asked for links and can have neither gets an error naming both fixes.
+
+### Three properties that hold across every strategy
+
+  * **Nothing is overwritten.** A file already in the game folder that the app
+    did not put there is MOVED to the backup store before its place is taken,
+    and a purge puts it back.
+  * **Nothing is removed unless it is still ours.** Every removal re-checks the
+    file against the ledger row that claims it — a symbolic link must still
+    point at its staging file, a hard link must still share its identity, a copy
+    must still have its recorded size and mtime. Anything else is left alone and
+    reported, so a config the user edited after deploying survives.
+  * **Staging is never modified.** Deployment only ever reads from it, which is
+    what lets two sandboxes share one downloaded copy of a mod.
+
+### The ledger
+
+`deploy::ledger` is the only record of which files in somebody's game folder
+belong to us, and undeploying by rescanning cannot replace it: a rescan can see
+that `Data/textures/sky.dds` exists, and cannot see whether the app put it there
+or whether it shipped with the game. Guessing wrong either strands a modded file
+forever or deletes a base-game asset.
+
+It is written even when a deploy reported errors — a partial deploy put files on
+disk, and losing the record of them creates exactly the orphans the ledger
+exists to prevent.
+
+### Conflicts
+
+The merge tree decides one winner per path before anything touches the disk, by
+priority, with ties broken on the mod key so the answer is stable across runs.
+Losers are **reported**, never merged: nothing here understands any game's file
+formats, and a manager that silently produces a file neither author wrote is how
+"it works for me" bug reports are made.
+
+Sorting happens inside `merge::build`, not in the caller. A tree built from an
+unsorted list is wrong in a way that looks right until somebody reorders their
+list and nothing changes.
+
+### `sandbox.json`
+
+The PDF blueprint's "strategy matrix", plus the two things it left implicit:
+
+```json
+{
+  "manifestVersion": 1,
+  "sandbox": {
+    "deploy": {
+      "defaultStrategy": "symlink",
+      "supportedStrategies": ["symlink", "hardlink", "direct"],
+      "antiCheat": "kernel",
+      "modTargets": [{ "type": "loader_mod", "relPath": "mods" }],
+      "notes": ["Shown verbatim in the sandbox's settings"]
+    },
+    "presets": [{ "id": "fabric", "label": "Fabric", "loader": "fabric" }],
+    "options": [{ "key": "memoryMb", "label": "Memory", "type": "int", "max": 65536 }],
+    "detect": { "steamAppIds": ["271590"], "markers": ["GTA5.exe"] }
+  }
+}
+```
+
+  * **`options`** is a *form description* and nothing more. It cannot express a
+    condition, a computation or a dependency between fields — a settings schema
+    that can do those is a program, and the plugin model rests on plugins not
+    being programs. A game needing one needs a second preset instead.
+  * **Values are clamped against the schema on every write**, and a key the
+    schema does not declare is dropped. The options reach the cloud and come
+    back, so "the server said 900 GB of heap" is answered here rather than by a
+    game that will not start.
+  * **`antiCheat: "kernel"`** is load-bearing. EAC, BattlEye and Vanguard all
+    watch for a game folder whose files are not where they should be, so a game
+    declaring it gets Direct as its default and a warning on every other option
+    — the cost of guessing wrong is somebody's account, not a failed install.
+
+Options reach a command line only through `optionArgs` in the game's own
+`launch.json`. `LaunchOptions` carries them in a flattened `extra` map; an
+object or an array contributes nothing, and there is still no shell.
+
+## Downloads
+
+Every file the app fetches goes through `download::DownloadManager` — a mod's
+release archive, a sandbox's staging, whatever a plugin's `download` step names.
+It is a subsystem rather than a function because a modpack is not one download,
+it is four hundred, over a home connection, on a laptop that will be closed
+halfway through.
+
+```text
+  enqueue ──▶ queued ──▶ running ──┬──▶ done
+                 ▲         │       ├──▶ failed ──▶ (retry) ──▶ queued
+                 └─────────┴───────┴──▶ paused ──▶ (resume) ──▶ queued
+```
+
+Two guarantees worth naming:
+
+  * **The destination filename only ever appears after the last byte and the
+    checksum.** Progress lives in a `.tmcpart` file beside the target, so
+    nothing downstream can pick up a partial file and treat it as complete.
+  * **A `200` in answer to a range request means the server ignored it**, so
+    the file restarts rather than being appended to. Appending produces a file
+    that is too long, passes every length check, and fails its checksum with an
+    error nobody can explain.
+
+**A plugin's `download` step goes through the queue** when the executor has a
+handle to one, with a deterministic id derived from the plugin and the
+destination — so re-running a failed install is the same row rather than a
+second writer for one file. The host allow-list, the size cap and the checksum
+are enforced on both paths; the queue moves where the bytes are read, not which
+checks run.
+
+**The queue gets its own HTTP client, not the API's.** The API client attaches a
+bearer to everything it sends, and a mod archive comes from a CDN that has no
+business seeing one — a redirect to a third-party mirror would hand out an
+access token.
+
+Bandwidth is a token bucket (`download::rate`), composed as global × per
+download, both live-adjustable. A request larger than the bucket can hold is
+served by taking the balance negative rather than refused, because a downloader
+whose chunk size it does not control would otherwise hang.
+
+The device reports a SNAPSHOT of its queue to `/api/app/v1/downloads` so the
+website can show it. That row never drives anything — there is deliberately no
+endpoint that tells a device to pause or cancel — and it carries no URLs and no
+filesystem paths.
+
+## Finding the games
+
+`detect::scan` reads what the launchers already wrote down rather than asking
+somebody to type a path.
+
+| Source | Reads |
+| --- | --- |
+| Steam | `libraryfolders.vdf`, then every `appmanifest_*.acf` |
+| Epic | `Data/Manifests/*.item`, plus Heroic/Legendary on Linux |
+| GOG | `galaxy-2.0.db`, and the plain `GOG Games` folder |
+| Xbox, Ubisoft, EA, Battle.net | their fixed folder layouts, one level deep |
+| a game's own hints | `sandbox.json`'s `detect.paths` |
+
+**Detection suggests; it never configures.** Applying a result goes through
+`anchor::validate_root` exactly as a hand-typed path does — a folder is not more
+trustworthy for having been found automatically, and a game directory is a jail
+anchor.
+
+**It reads no environment variable.** The platform directories arrive as
+`DetectRoots`, filled by the Tauri crate from its path resolver.
+
+Matching a folder to a TMC game, in descending order of confidence: the
+launcher's own id (exact, language-independent, survives a rename), then a
+marker file, then the normalised display name. A name match must also find the
+marker; an id match is not second-guessed.
+
+Two details that are easy to get wrong and are commented at the site: Steam's
+`installdir` is NOT the display name (`Grand Theft Auto V` lives in `GTAV`), and
+GOG's database is opened `mode=ro&immutable=1` so a running Galaxy neither
+blocks the read nor hands back a torn one.
+
+## RCON
+
+`rcon::` speaks two dialects: **Source** (which is also Minecraft's, Rust's,
+ARK's, Squad's and Palworld's) and **Frostbite** (Battlefield 3/4/Hardline/BC2).
+Both parse through `net::reader` and both have the truncation test every parser
+in this crate has.
+
+Three protocol details that are easy to get wrong:
+
+  * **A Source multi-packet reply has no end marker.** After the command, a
+    second empty packet with a different id is sent; the server answers in
+    order, so its echo is the end. Stopping at the first packet truncates
+    `status` on a full server; waiting for more hangs on every short reply.
+  * **A successful Source auth sends TWO packets**, in an order implementations
+    disagree about, so the handshake reads until it sees the auth reply rather
+    than counting.
+  * **Frostbite's `size` counts the two header fields it is part of.** Omitting
+    them leaves four bytes of each packet in the buffer, which presents as "the
+    second command always fails".
+
+### The one deliberate SSRF gap
+
+Everywhere else an address goes through `net::addr::resolve_public`. **RCON does
+not**, and the module header says so outright: `192.168.1.10` and `127.0.0.1`
+are the *normal* answers here, because the feature is "administer my server" and
+most people's server is on their own network. A guard that refused them would
+refuse the feature.
+
+Bounded instead by a per-host connection cooldown, a session cap, and a
+Security-level audit entry on every connect. It remains a widening and it is
+listed as one below.
+
+### The passwords
+
+Encrypted on the device with XChaCha20-Poly1305, key in the OS credential store
+(`crypto::LocalCipher`), and **never sent to the website**. A server password is
+not derived from a TMC account, losing it costs somebody their server rather
+than their profile, and no feature on the site needs it.
+
+What that buys is stated honestly in `crypto.rs`: it answers a **copied file** —
+a backup, a synced folder, a disk pulled out of a laptop. It does not answer
+code running as the user in this session, and nothing on any desktop platform
+does. What the design guarantees instead is that the webview is not such code:
+`rcon_secret` is `pub(crate)`, `rcon::exec_saved` is its only caller, and
+`RconServer` has no password field for a refactor to start returning.
+
+## Deep links
+
+`tmc://` is registered on desktop and declared in the mobile manifests. One rule
+governs all of it:
+
+> **A link can ask the app to SHOW something. It can never ask the app to DO
+> something.**
+
+Any program on the machine can claim a custom scheme and any web page can
+navigate to one without a click, so a link is an untrusted request from an
+unknown party and the most it achieves is a screen with a button on it.
+
+| Link | Does |
+| --- | --- |
+| `tmc://auth` | Polls the API now instead of waiting out the interval. Carries nothing |
+| `tmc://install/<kind>/<id>` | Opens that item's page with the install controls ringed |
+| `tmc://view/<kind>/<id>` | Opens that item's page |
+| `tmc://sandbox/<id>` | Opens one sandbox |
+
+`tmc://install/mod/1234` is the **guest** flow: a signed-in user gets a
+subscription, which follows them to their other devices and keeps the mod
+updated, but a guest has no account to hang one on.
+
+Everything else parses to nothing, and an unrecognised link does nothing at all
+— it does not fall through to the auth wake-up, because a default action is a
+default action an attacker gets to trigger. `deeplink.rs`'s test names the
+shapes that must never start working: `tmc://deploy/1`,
+`tmc://settings/gameDir?path=/`, `tmc://rcon/1/exec?command=quit`.
 
 ## Settings: the two halves
 
@@ -473,7 +910,7 @@ paths disagree is the mistake an author copying the example would inherit.
 | Stored | `settings.json`, this machine | `UserSettings` on the website |
 | Written by | `settings.rs` | `PATCH /api/app/v1/me` |
 | Read by | `useSettings().app` | `useSettings().user` |
-| Contains | Theme, scale, game directories, logging, latency, plugin prompts | Notifications, locale, timezone |
+| Contains | Theme, scale, game directories, logging, latency, download limits, plugin prompts | Notifications, locale, timezone |
 | Can fail | No | Yes — network, auth |
 
 The test for which side something belongs on: **would this be wrong to apply on
@@ -482,12 +919,12 @@ would not.
 
 ### Two of them are not settings at all
 
-`gameDirs` and `downloadDir` anchor the plugin jail — `plugins::sandbox`
+`gameDirs` and `downloadDir` anchor the plugin jail — `plugins::jail`
 resolves every `PathRef` beneath them, so an installer holding
 `{gameDir, "", write}` can write anywhere below. They are therefore the only
 fields with their own commands:
 
-- **`settings_patch` refuses them** (`SANDBOX_ROOT_FIELDS`), loudly rather than
+- **`settings_patch` refuses them** (`JAIL_ROOT_FIELDS`), loudly rather than
   by dropping the key. The refusal is in `SettingsStore::patch`, so it holds for
   every caller and not just the one command.
 - **`settings_set_game_dir` / `settings_set_download_dir`** run
@@ -497,7 +934,10 @@ fields with their own commands:
   and the plugin registry — a plugin that can rewrite the registry can grant
   itself permissions.
 - The **canonical** path is what gets stored and what gets audited, so the value
-  in `settings.json` is the one the sandbox will resolve to later.
+  in `settings.json` is the one the jail will resolve to later.
+- **A sandbox's own `gameDir` goes through the same validator**, on
+  `sandbox_patch`. It gets no more trust for having arrived on a different
+  command.
 - Both are audited at **Security** level, so turning logging off cannot hide a
   change to where plugins may write.
 
@@ -515,7 +955,7 @@ those and goes to stderr.
 - `Security` level entries are written **even when the user turns logging off**.
   A switch that lets a plugin ask the user to stop watching is not a control.
 - Clearing the log writes the "log cleared" entry **after** the truncation.
-- Every plugin step, every download URL, every sandbox refusal, every permission
+- Every plugin step, every download URL, every jail refusal, every permission
   grant lands here.
 
 Write with the `audit!` macro. Never put a token or a credential in `data`.
@@ -712,15 +1152,92 @@ Nothing else — the card and the view page are kind-agnostic by construction.
 Nothing above the protocol module changes — the card, the panel and the graph
 all read `ServerQueryResult`.
 
+### Adding a game
+
+1. `plugins/app/<slug>/manage_mod.json` — where its mods go. The slug is the
+   game's URL segment on the website, lower-cased.
+2. `plugins/app/<slug>/launch.json` — how to start it, if it can be started.
+3. `plugins/app/<slug>/sandbox.json` — which deployment strategies suit it, its
+   presets, its options, and how to FIND it (`detect`).
+4. Nothing in Rust. If something needs adding in Rust, the file format is
+   missing a field rather than the game being special.
+
+The shipped examples under `examples/plugins/app/` are validated by a test that
+builds each rule's real jail and resolves every step path through it — and, for
+`sandbox.json`, checks that no preset names a strategy the game excludes and
+that every option a preset sets survives its own schema.
+
+### Adding a deployment strategy
+
+1. A variant on `deploy::Strategy`, its `as_str`/`parse` arms, and its
+   `link_kind`.
+2. If it places files, a `LinkKind` and an arm in `link::place`. If it does not
+   — a second virtualising strategy — it needs its own path in
+   `engine::deploy`, and the ledger needs to describe what it did.
+3. An arm in `available_strategies`, so the picker can say why it is
+   unavailable rather than greying out a row with no explanation.
+4. `DeployStrategyVals` in website-city's contract, and the app's mirror.
+5. Tests: place, purge, and the "still ours" check that stops a purge deleting
+   a file the user edited.
+
 ### Adding a step type
 
 1. A variant on `Step` in `plugins/manifest.rs`.
 2. An arm in `Executor::run_step`, resolving every path through
-   `sandbox.resolve` and auditing the result.
+   `jail.resolve` and auditing the result.
 3. An arm in `step_label` and in `required_roots`.
 4. A test. **If the step can write, test that it cannot write outside the jail.**
 
 ## Gotchas
+
+- **A native `<select>`'s popup is drawn by the OS and cannot be styled.** The
+  closed control takes CSS; the open list takes none of it, so every settings
+  pane in a dark theme had one white rectangle in it. `components/select.tsx`
+  is a real listbox and every `<select>` in the app is gone. Adding one back
+  brings the white rectangle with it.
+- **`plugins::jail` is the path jail; a `sandbox` is a user's mod profile.**
+  They were both called `Sandbox` once. If a new type wants either name, it
+  wants the other one.
+- **A sandbox is an `AppInstall` on the wire.** The cloud model predates the
+  word and `/api/app/v1/installs` is shipped; renaming the endpoint would 400
+  every request from every installed copy of the app.
+- **Epic's `bIsIncompleteInstall` is the one field in its manifest that is not
+  PascalCase.** `rename_all = "PascalCase"` derives `BIsIncompleteInstall`,
+  which never matches, which reads as "no game is ever incomplete" and offers a
+  folder that is still being written into. It carries an explicit `rename`.
+- **Steam's `installdir` is not the display name.** `Grand Theft Auto V` lives
+  in `steamapps/common/GTAV`. Using the name is the single most common way to
+  look in the wrong place.
+- **A manifest whose folder is gone is not an installed game.** Steam leaves
+  them behind after a failed uninstall and after moving a game between
+  libraries; offering one produces a game directory that fails every check the
+  moment somebody accepts it.
+- **GOG Galaxy's database may be open.** It is read with `mode=ro&immutable=1`;
+  read-only alone still takes a shared lock and still reads the WAL, so a
+  Galaxy mid-write either blocks the read or hands back a torn one.
+- **A `200` in answer to a `Range` request means the server ignored it.**
+  Appending that to a `.tmcpart` produces a file that is too long, passes every
+  length check, and fails its checksum with an error nobody can explain. The
+  file restarts instead.
+- **A download's checksum is computed from the FILE, not incrementally.** An
+  incremental hash cannot survive a resume — the bytes from the first attempt
+  never pass through this process — and a checksum that silently stops being
+  checked on resumed downloads is worse than none.
+- **Frostbite's packet `size` counts the two header fields it is part of.**
+  Omitting them leaves four bytes of every packet in the buffer, which presents
+  as "the second command always fails".
+- **A merge tree built from an unsorted list is wrong in a way that looks
+  right.** `merge::build` sorts internally; the last mod added wins instead of
+  the highest priority, which nobody notices until they reorder their list and
+  nothing changes.
+- **`pluginData` is scoped per sandbox and per mod.** Two sandboxes staging the
+  same mod run identical steps with an identical `{fileName}`. With one shared
+  scratch directory the second run's download lands on the first's.
+- **`tokio::spawn` inside a function that the spawned task calls back into is
+  an infinitely large future type.** The download queue's `pump` → `run_one` →
+  `pump` cycle is broken with one `Box<dyn Future>`; without it the compiler
+  reports "cannot satisfy `impl Future: Send`", which does not obviously mean
+  "you wrote a recursive future".
 
 - **A query string carries no types, so `parseQuery` does not guess.** Values
   arrive as strings and the contract coerces per field (`z.coerce.number()`,
@@ -829,11 +1346,27 @@ Honest list, so nothing here reads as finished when it is not:
 
 - **Auto-updates.** `autoUpdateCheck` is a stored setting with no updater behind
   it. Needs `tauri-plugin-updater` and a signing key.
-- **Writes.** The app is read-only against the API — no commenting, rating,
-  favouriting or publishing. `api_send` exists and is wired; the screens are not.
+- **Writes.** The app is read-only against the API for CONTENT — no commenting,
+  rating, reviewing or publishing. Reviews are shown and cannot be written from
+  here: doing so needs the website's own rate limiting, edit window and
+  moderation hooks, and half of those living in a second place is how they
+  drift. Subscriptions, sandboxes and reports DO write.
+- **USVFS.** Declared as a strategy, refused at deploy, and documented above.
+  Needs a native Windows component the app does not ship — the plumbing is
+  shaped for it and nothing else is.
+- **A website page for device downloads.** The app reports its queue to
+  `/api/app/v1/downloads` and the endpoint reads back, but no page on the site
+  renders it yet.
+- **Mod dependencies and cross-mod conflicts.** The deployment engine reports
+  FILE conflicts — two mods providing one path — and resolves them by priority.
+  It does not know that mod A requires mod B, because
+  `ContentDetail.dependencies` is still always `[]` (below).
+- **Automatic updates for staged mods.** A sandbox re-stages when asked and the
+  library knows a newer release exists; nothing yet does it on a timer or on
+  launch.
 - **Plugin distribution.** Plugins install from a local folder. There is no
   registry, and `requireSignedPlugins` has no signature checking behind it yet.
-- **Proof that a human chose a sandbox root.** `anchor::validate_root` decides
+- **Proof that a human chose a jail anchor.** `anchor::validate_root` decides
   whether a *directory* is an acceptable jail anchor, which is the enforceable
   half. The other half — that the path came from a real click rather than from
   script — died with the native dialog and cannot be recovered while the picker
@@ -852,4 +1385,12 @@ Honest list, so nothing here reads as finished when it is not:
   nothing.
 - **No end-to-end test against a real game server.** The protocol parsers are
   covered by golden-reply and fuzz-shaped unit tests; the socket paths above
-  them have been exercised only against the bounds checks, not a live box.
+  them have been exercised only against the bounds checks, not a live box. The
+  same is true of RCON: the codecs are tested, the sockets are not.
+- **No end-to-end test of a real deploy against a real game.** The deployment
+  engine is tested against temporary directories — including the hard-link and
+  symlink paths where the platform supports them — but nothing has been linked
+  into an actual Steam folder and launched.
+- **The download queue's own network path IS tested**, against a loopback HTTP
+  server: resume, the ignored-range trap, checksum rejection, a dropped
+  connection retrying, cancel and pause. That is the exception, not the rule.
