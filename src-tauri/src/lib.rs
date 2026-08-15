@@ -105,10 +105,41 @@ pub fn run() {
 
                 let emitter = app.handle().clone();
 
-                app.deep_link().on_open_url(move |_event| {
+                app.deep_link().on_open_url(move |event| {
                     use tauri::Emitter;
+                    use tmc_core::deeplink::{parse, DeepLink};
 
-                    let _ = emitter.emit("tmc://auth-return", ());
+                    for url in event.urls() {
+                        /*
+                         * A link the app does not understand does NOTHING. It
+                         * does not fall through to the auth wake-up and it does
+                         * not reach the webview — anything on the machine can
+                         * claim a custom scheme, and a default action is a
+                         * default action an attacker gets to trigger.
+                         */
+                        let Some(link) = parse(url.as_str()) else {
+                            tracing::debug!("ignoring unrecognised deep link");
+
+                            continue;
+                        };
+
+                        match link {
+                            // Still a wake-up carrying nothing: it makes the
+                            // app poll now instead of waiting out its interval.
+                            DeepLink::Auth => {
+                                let _ = emitter.emit("tmc://auth-return", ());
+                            }
+                            /*
+                             * Everything else asks the app to SHOW a screen.
+                             * Never to act — see `tmc_core::deeplink`. The
+                             * webview navigates and the user presses the button
+                             * themselves, or does not.
+                             */
+                            other => {
+                                let _ = emitter.emit("tmc://open", &other);
+                            }
+                        }
+                    }
                 });
             }
 

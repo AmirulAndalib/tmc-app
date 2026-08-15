@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import {
     FiArrowLeft,
@@ -38,6 +38,16 @@ import Reviews from '~/components/reviews'
 export default function ViewRoute() {
     const params = useParams<{ kind: string; id: string }>()
     const navigate = useNavigate()
+    const [search] = useSearchParams()
+
+    /*
+     * Set by a `tmc://install/…` deep link — see `lib/hooks/use-deep-link`. All
+     * it does is draw a ring around the install controls, because somebody who
+     * pressed a button in their browser and landed here needs to be shown where
+     * the next button is. It does not install anything: a link that could would
+     * be a remote install primitive reachable from any web page.
+     */
+    const highlight = search.get('install') === '1'
 
     const parsed = ContentKindSchema.safeParse(params.kind)
     const kind = parsed.success ? parsed.data : null
@@ -144,7 +154,21 @@ export default function ViewRoute() {
                 </header>
 
                 {/* ------------------------------------------------ Actions */}
-                <div className="flex flex-wrap gap-2">
+                {highlight && (
+                    <p className="rounded-lg border border-accent/50 bg-accent/10 px-3 py-2 text-xs">
+                        You asked to install this from the website. Choose how below
+                        — subscribing keeps it updated and follows you to your other
+                        devices.
+                    </p>
+                )}
+
+                <div
+                    className={`flex flex-wrap gap-2 ${
+                        highlight
+                            ? 'rounded-xl ring-2 ring-accent ring-offset-2 ring-offset-background'
+                            : ''
+                    }`}
+                >
                     {summary.kind === 'server' && summary.server?.connectUrl && (
                         <Button
                             btnType="primary"

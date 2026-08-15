@@ -16,6 +16,7 @@ import type { IconType } from 'react-icons'
 
 import { useAuth } from '~/lib/auth/provider'
 import { useDownloads } from '~/lib/downloads/provider'
+import { useDeepLink } from '~/lib/hooks/use-deep-link'
 import { useIsCompact } from '~/lib/hooks/use-breakpoint'
 import { useIsDesktop } from '~/lib/hooks/use-platform'
 import Titlebar, { WindowResizeEdges } from './titlebar'
@@ -130,6 +131,13 @@ export default function Shell() {
     const { pathname } = useLocation()
     const { user, status } = useAuth()
     const downloads = useDownloads()
+
+    /*
+     * Inside the router, because a deep link's only power is to navigate — and
+     * `useNavigate` needs a router above it. Rust has already refused anything
+     * that is not one of a handful of bounded shapes.
+     */
+    useDeepLink()
 
     /*
      * On desktop the app draws its own frame — see components/titlebar. The
