@@ -50,10 +50,42 @@ fn account() -> String {
     }
 }
 
+/// A secret name that is safe as both a keychain account and a filename.
+///
+/// These names are ours, not a user's — but the fallback branch turns one into
+/// a path, and a function that can only ever be called with a constant is
+/// exactly the one that gets a variable passed to it later.
+fn safe_name(name: &str) -> AppResult<String> {
+    let ok = !name.is_empty()
+        && name.len() <= 64
+        && name
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_');
+
+    if !ok {
+        return Err(crate::error::AppError::invalid("Bad secret name."));
+    }
+
+    Ok(name.to_string())
+}
+
+/// A named secret's keychain account, split per API base like the token's is.
+#[cfg(feature = "os-keyring")]
+fn scoped(name: &str) -> String {
+    match crate::api::api_base_scope() {
+        Some(scope) => format!("{name}@{scope}"),
+        None => name.to_string(),
+    }
+}
+
 pub struct SecureStore {
     /// The whole store on mobile; the fallback on a desktop with no credential
     /// service running.
     fallback: PathBuf,
+    /// Where a named secret's fallback file goes, when the keychain is not
+    /// available. Its own directory so a listing of the data dir does not read
+    /// as a list of what the app holds.
+    secrets: PathBuf,
 }
 
 impl SecureStore {
@@ -67,7 +99,92 @@ impl SecureStore {
 
         Self {
             fallback: data_dir.join(file),
+            secrets: data_dir.join("secrets"),
         }
+    }
+
+    // ------------------------------------------------------- Named secrets
+    //
+    // The refresh token above has its own methods because it predates these and
+    // because its keychain entry name is load-bearing for existing installs.
+    // Everything else the app has to keep — currently the key that encrypts
+    // RCON passwords — goes through the pair below.
+
+    /// Store `value` under `name`, in the strongest place the platform offers.
+    pub fn save_named(&self, name: &str, value: &str) -> AppResult<()> {
+        let name = safe_name(name)?;
+
+        #[cfg(all(
+            feature = "os-keyring",
+            any(target_os = "windows", target_os = "macos", target_os = "linux")
+        ))]
+        {
+            if let Ok(entry) = keyring::Entry::new(SERVICE, &scoped(&name)) {
+                if entry.set_password(value).is_ok() {
+                    // Remove any fallback copy, so there is one answer rather
+                    // than two that can disagree.
+                    let _ = std::fs::remove_file(self.secrets.join(&name));
+
+                    return Ok(());
+                }
+            }
+
+            tracing::warn!("credential store unavailable for '{name}'; using data dir");
+        }
+
+        std::fs::create_dir_all(&self.secrets)?;
+
+        let path = self.secrets.join(&name);
+
+        std::fs::write(&path, value.as_bytes())?;
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+        }
+
+        Ok(())
+    }
+
+    pub fn load_named(&self, name: &str) -> Option<String> {
+        let name = safe_name(name).ok()?;
+
+        #[cfg(all(
+            feature = "os-keyring",
+            any(target_os = "windows", target_os = "macos", target_os = "linux")
+        ))]
+        {
+            if let Ok(entry) = keyring::Entry::new(SERVICE, &scoped(&name)) {
+                match entry.get_password() {
+                    Ok(value) => return Some(value),
+                    Err(keyring::Error::NoEntry) => {}
+                    Err(e) => tracing::warn!("credential store read '{name}': {e}"),
+                }
+            }
+        }
+
+        std::fs::read_to_string(self.secrets.join(&name))
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+    }
+
+    pub fn clear_named(&self, name: &str) {
+        let Ok(name) = safe_name(name) else { return };
+
+        #[cfg(all(
+            feature = "os-keyring",
+            any(target_os = "windows", target_os = "macos", target_os = "linux")
+        ))]
+        {
+            if let Ok(entry) = keyring::Entry::new(SERVICE, &scoped(&name)) {
+                let _ = entry.delete_credential();
+            }
+        }
+
+        let _ = std::fs::remove_file(self.secrets.join(&name));
     }
 
     pub fn save(&self, token: &str) -> AppResult<()> {

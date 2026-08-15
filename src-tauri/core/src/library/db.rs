@@ -41,7 +41,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::{AppError, AppResult};
 
 /// Schema version. Bumped whenever `migrate` gains a step.
-const SCHEMA_VERSION: i64 = 3;
+const SCHEMA_VERSION: i64 = 4;
 
 /// One subscribed item as this device knows it.
 ///
@@ -226,6 +226,7 @@ impl LibraryDb {
                     1 => conn.execute_batch(SCHEMA_V1)?,
                     2 => conn.execute_batch(SCHEMA_V2)?,
                     3 => conn.execute_batch(SCHEMA_V3)?,
+                    4 => conn.execute_batch(SCHEMA_V4)?,
                     _ => break,
                 }
 
@@ -317,6 +318,43 @@ const SCHEMA_V1: &str = r#"
 /// sandboxes the cloud has never heard of (see `cloud_sync`). Merging the two
 /// would mean a sync deleting a local-only sandbox because the server did not
 /// list it.
+/// Saved RCON servers and their console history.
+///
+/// The `password` column holds CIPHERTEXT, never a password — see
+/// `crate::rcon::store`. Nothing in here is ever sent to the website.
+const SCHEMA_V4: &str = r#"
+                CREATE TABLE IF NOT EXISTS rcon_server (
+                    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name         TEXT NOT NULL,
+                    host         TEXT NOT NULL,
+                    port         INTEGER NOT NULL,
+                    /* source | frostbite */
+                    protocol     TEXT NOT NULL DEFAULT 'source',
+                    /* base64(nonce || XChaCha20-Poly1305 ciphertext), or NULL. */
+                    password     TEXT,
+                    /* The TMC server row this was created from, when it was. */
+                    server_id    INTEGER,
+                    app_id       INTEGER,
+                    last_used_at TEXT,
+                    created_at   TEXT NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS rcon_server_ref_idx ON rcon_server (server_id);
+
+                CREATE TABLE IF NOT EXISTS rcon_history (
+                    id        INTEGER PRIMARY KEY AUTOINCREMENT,
+                    server_id INTEGER NOT NULL
+                              REFERENCES rcon_server (id) ON DELETE CASCADE,
+                    command   TEXT NOT NULL,
+                    output    TEXT NOT NULL,
+                    ok        INTEGER NOT NULL DEFAULT 1,
+                    at        TEXT NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS rcon_history_server_idx
+                    ON rcon_history (server_id, id DESC);
+"#;
+
 /// The download queue, so it survives the app closing.
 ///
 /// Kept in the same database as everything else device-local rather than in its

@@ -16,6 +16,7 @@
 pub mod anchor;
 pub mod api;
 pub mod auth;
+pub mod crypto;
 pub mod deploy;
 pub mod detect;
 pub mod download;
@@ -25,6 +26,7 @@ pub mod library;
 pub mod logging;
 pub mod net;
 pub mod plugins;
+pub mod rcon;
 pub mod secure;
 pub mod settings;
 
