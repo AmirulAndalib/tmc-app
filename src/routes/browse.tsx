@@ -15,6 +15,11 @@ import { useAuth } from '~/lib/auth/provider'
 import { useIsWide } from '~/lib/hooks/use-breakpoint'
 import { useLiveQuery } from '~/lib/hooks/use-live-query'
 import { useSettings } from '~/lib/settings/provider'
+import {
+    flag as readFlag,
+    idList as readIdList,
+    num as readNum,
+} from '~/lib/api/query-params'
 import BrowseFilters from '~/components/browse-filters'
 import Select from '~/components/select'
 import ContentCard from '~/components/content-card'
@@ -163,42 +168,11 @@ export default function BrowseRoute() {
      */
     const param = useCallback((key: string) => search.get(key), [search])
 
-    const flag = useCallback(
-        (key: string) => (search.get(key) === '1' ? true : undefined),
-        [search]
-    )
+    const flag = useCallback((key: string) => readFlag(search, key), [search])
 
-    const num = useCallback(
-        (key: string) => {
-            const raw = search.get(key)
+    const num = useCallback((key: string) => readNum(search, key), [search])
 
-            if (raw === null || raw === '') return undefined
-
-            const value = Number(raw)
-
-            // A non-numeric value in a hand-edited URL drops the filter rather
-            // than sending NaN, which the contract would reject and take the
-            // whole listing with it.
-            return Number.isFinite(value) && value >= 0 ? value : undefined
-        },
-        [search]
-    )
-
-    const idList = useCallback(
-        (key: string) => {
-            const raw = search.get(key)
-
-            if (!raw) return undefined
-
-            const out = raw
-                .split(',')
-                .map((v) => Number(v))
-                .filter((v) => Number.isFinite(v) && v > 0)
-
-            return out.length > 0 ? out : undefined
-        },
-        [search]
-    )
+    const idList = useCallback((key: string) => readIdList(search, key), [search])
 
     /*
      * Servers default to the TABLE, everything else to the grid.

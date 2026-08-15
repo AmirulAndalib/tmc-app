@@ -9,6 +9,25 @@ const host = process.env.TAURI_DEV_HOST
 export default defineConfig(() => ({
     plugins: [react(), tailwindcss()],
 
+    /*
+     * Tests run in the NODE environment, not jsdom.
+     *
+     * What is tested here is the pure logic the app's screens rest on — the URL
+     * encoding every browse filter round-trips through, the latency ladder
+     * three components read, the offline cache's allow-list. None of it needs a
+     * DOM, and the two things that touch `window` stub the handful of methods
+     * they use in four lines each. A DOM implementation would be a dependency
+     * carried for tests that do not ask for one.
+     *
+     * There are deliberately no COMPONENT tests. The Rust side holds what would
+     * most repay them and already has 460; a React render assertion mostly
+     * pins the markup in place, and this app's markup is still moving.
+     */
+    test: {
+        include: ['src/**/*.test.ts'],
+        environment: 'node',
+    },
+
     resolve: {
         alias: {
             '~': new URL('./src', import.meta.url).pathname,

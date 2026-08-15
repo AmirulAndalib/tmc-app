@@ -183,6 +183,7 @@ genuinely need a window belongs on that side of the line.
 | `lib/ipc/` | `call()` + schemas + `ipc.*` + `messageOf`. The only place `invoke` is imported |
 | `lib/api/contract.ts` | **Mirror** of website-city's contract. `npm run contract:sync` |
 | `lib/api/client.ts` | `api.*`, every response zod-parsed |
+| `lib/api/query-params.ts` | The ONLY place a browse URL's encoding is decoded, and its inverse |
 | `lib/api/labels.ts` | How a game is named on screen — always its full name |
 | `lib/api/offline-cache.ts` | What a cold launch shows before the network answers. Allow-listed, public data only |
 | `lib/api/env.ts` | Which site this build talks to, for display and for the site's own links |
@@ -1215,8 +1216,10 @@ npm run ios:init           # once, macOS only
 npm run ios                # tauri ios dev
 
 npm run check              # everything. Run before declaring done
-npm run check:web          # tsc + eslint
+npm run check:web          # tsc + eslint + vitest
 npm run check:rust         # clippy -D warnings, whole workspace
+npm run test               # both sides
+npm run test:web           # vitest
 npm run test:rust          # cargo test, whole workspace
 npm run test:core          # tmc-core only — no GTK stack needed, runs anywhere
 npm run fmt                # prettier + cargo fmt
@@ -1323,6 +1326,27 @@ runtime libraries still come from the system where it has them.
   command is a `Result<_, String>` the frontend cannot classify.
 - New privileged capability → new `#[tauri::command]` in `commands.rs`, with the
   policy check *in* the command, not in the caller.
+
+### Tests on the frontend side
+
+`vitest`, node environment, `src/**/*.test.ts`. It runs inside `check:web`, so
+a broken test fails the same command a type error does.
+
+**Pure logic only, and deliberately no component tests.** What is covered is the
+things several screens depend on agreeing about: the browse URL's encoding, the
+latency ladder, the offline cache's allow-list, the two contract edges the
+gotchas list names. A React render assertion mostly pins markup in place, and
+this app's markup is still moving — the Rust side holds what would most repay
+testing and has over four hundred.
+
+**Node, not jsdom.** Nothing under test needs a DOM; the two things that touch
+`window` stub the four methods they use. A DOM implementation would be a
+dependency carried for tests that never asked for one.
+
+The one test that is genuinely security-relevant is
+`lib/api/offline-cache.test.ts`. Its allow-list decides what gets written to
+disk in cleartext, and `me`, `log` and `plugins` are excluded by NOT being on a
+list — a property a comment cannot enforce.
 
 ### Adding a content kind
 
@@ -1633,11 +1657,9 @@ Honest list, so nothing here reads as finished when it is not:
   the server, which the section above explains cannot be done from a user's
   device. `commands/servers.rs`'s `UNIMPLEMENTED` test constant names one of
   them, so a native implementation fails two tests on purpose.
-- **No test runner on the frontend side.** `npm run check` is `tsc` plus
-  `eslint`, and there are no unit tests in `src/`. The Rust side carries the
-  logic that would most repay them — parsers, the jail, the deploy engine — but
-  `lib/api/offline-cache.ts`'s allow-list is security-relevant and is currently
-  held up by a code comment rather than by a test.
+- **No component or end-to-end tests on the frontend.** `vitest` covers the
+  pure logic (see above); nothing renders a component or drives the real app.
+  The webview has never been exercised by anything but a person.
 - **No end-to-end test against a real game server.** The protocol parsers are
   covered by golden-reply and fuzz-shaped unit tests; the socket paths above
   them have been exercised only against the bounds checks, not a live box. The
