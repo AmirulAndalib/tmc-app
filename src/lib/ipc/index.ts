@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core'
+import { listen } from '@tauri-apps/api/event'
 import { z } from 'zod'
 
 /**
@@ -111,8 +112,6 @@ export async function subscribe<S extends z.ZodTypeAny>(
     schema: S,
     onEvent: (payload: z.infer<S>) => void
 ): Promise<() => void> {
-    const { listen } = await import('@tauri-apps/api/event')
-
     return listen(event, (message) => {
         const parsed = schema.safeParse(message.payload)
 
