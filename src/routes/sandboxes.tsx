@@ -18,7 +18,7 @@ import {
 
 import { api } from '~/lib/api/client'
 import { ipc } from '~/lib/ipc/commands'
-import { isIpcError } from '~/lib/ipc'
+import { messageOf } from '~/lib/ipc'
 import { appLabel } from '~/lib/api/labels'
 import { GameIcon } from '~/components/game-icon'
 import { ItemThumb } from '~/components/item-thumb'
@@ -1651,10 +1651,4 @@ function reorder(keys: string[], from: number, to: number): string[] {
     if (moved !== undefined) next.splice(to, 0, moved)
 
     return next
-}
-
-function messageOf(err: unknown): string {
-    if (isIpcError(err)) return err.message
-
-    return err instanceof Error ? err.message : 'Something went wrong.'
 }

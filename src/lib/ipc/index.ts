@@ -92,6 +92,23 @@ export function isIpcError(err: unknown): err is IpcError {
 }
 
 /**
+ * Something to put on screen, from anything that was thrown.
+ *
+ * Rust's own message when there is one — `AppError`'s `message` half is written
+ * for a person and is the useful text — and a generic sentence otherwise,
+ * because a raw `TypeError` in a banner tells the user nothing they can act on.
+ *
+ * Here rather than in each screen: four routes had grown their own identical
+ * copy, and the moment one of them starts also showing `err.code` the app has
+ * two different ideas of what an error looks like.
+ */
+export function messageOf(err: unknown): string {
+    if (isIpcError(err)) return err.message
+
+    return err instanceof Error ? err.message : 'Something went wrong.'
+}
+
+/**
  * Subscribe to a Rust-emitted event, parsed the same way a command's reply is.
  *
  * The push half of the boundary. `call` covers everything the frontend asks

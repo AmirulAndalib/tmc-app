@@ -430,6 +430,16 @@ export const ipc = {
     downloadSetConcurrency: (n: number) =>
         call('download_set_concurrency', z.void(), { n }),
 
+    /**
+     * Queue one specific release of one item.
+     *
+     * Three ids and a kind — no URL and no destination. Rust looks the release
+     * up through the API and puts the file in the user's download folder, which
+     * is what keeps this inside the rule that no command here takes either.
+     */
+    downloadRelease: (kind: string, itemId: number, releaseId: number) =>
+        call('download_release', z.string(), { kind, itemId, releaseId }),
+
     downloadClearFinished: () => call('download_clear_finished', z.number()),
 
     // -------------------------------------------------------------- Detection

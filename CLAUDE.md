@@ -167,7 +167,7 @@ genuinely need a window belongs on that side of the line.
 | `commands/` | The whole IPC surface. Nothing privileged happens outside it |
 | `commands/fs.rs` | Directory listing for the app's folder picker. Names only, never contents |
 | `commands/sandbox.rs` | Sandboxes, staging, deploying. Never takes a directory |
-| `commands/downloads.rs` | The queue. No command here takes a URL or a destination |
+| `commands/downloads.rs` | The queue. No command here takes a URL or a destination — `download_release` takes ids |
 | `commands/detect.rs` | Scan, and separately apply. A scan configures nothing |
 | `commands/rcon.rs` | Consoles. No command returns a password |
 | `commands/library.rs` | Sync, install, uninstall, launch |
@@ -179,7 +179,7 @@ genuinely need a window belongs on that side of the line.
 
 | Path | Owns |
 | --- | --- |
-| `lib/ipc/` | `call()` + schemas + `ipc.*`. The only place `invoke` is imported |
+| `lib/ipc/` | `call()` + schemas + `ipc.*` + `messageOf`. The only place `invoke` is imported |
 | `lib/api/contract.ts` | **Mirror** of website-city's contract. `npm run contract:sync` |
 | `lib/api/client.ts` | `api.*`, every response zod-parsed |
 | `lib/api/labels.ts` | How a game is named on screen — always its full name |
@@ -904,6 +904,17 @@ Two guarantees worth naming:
     the file restarts rather than being appended to. Appending produces a file
     that is too long, passes every length check, and fails its checksum with an
     error nobody can explain.
+
+**Downloading one named release goes through the queue too.** An item's page
+lists its version history, and both its buttons — the header's "Download 1.4"
+and each row's — used to hand the URL to the system browser. That is a strange
+thing for an app whose whole download story is the queue being bypassed, and
+somebody fetching an older release because the newest one broke their save is
+exactly the person who wants it pausable. `download_release` takes a kind and
+two ids, **never a URL and never a path**: Rust re-fetches the detail, picks the
+file, and puts it in the user's download folder. So the rule at the top of
+`commands/downloads.rs` still holds — there is no `download_start(url, path)`,
+and nothing an injected script could point at a file of its choosing.
 
 **A plugin's `download` step goes through the queue** when the executor has a
 handle to one, with a deterministic id derived from the plugin and the

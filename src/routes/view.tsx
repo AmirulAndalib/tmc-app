@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { openUrl } from '@tauri-apps/plugin-opener'
@@ -16,8 +16,11 @@ import {
     ContentKindSchema,
     type ContentKindT,
     type ContentSummaryT,
+    type ReleaseT,
 } from '~/lib/api/contract'
 import { appLabel } from '~/lib/api/labels'
+import { ipc } from '~/lib/ipc/commands'
+import { messageOf } from '~/lib/ipc'
 import { GameIcon } from '~/components/game-icon'
 import { opensExternally } from '~/lib/external'
 import Markdown from '~/components/markdown'
@@ -37,10 +40,108 @@ import Reviews from '~/components/reviews'
  * this is one component with a few kind-specific blocks rather than eight
  * near-identical pages that drift.
  */
+/**
+ * One release in the version history.
+ *
+ * The download goes through the app's own QUEUE rather than to the system
+ * browser, which is what it used to do. Handing the URL to a browser is a
+ * strange thing for an app whose entire download story — pause, resume,
+ * priorities, bandwidth limits, resumable part files — is the queue that was
+ * being bypassed, and somebody fetching an older release because the newest one
+ * broke their save is exactly the person who wants it there.
+ *
+ * The command takes the ids, never the URL: Rust looks the release up again and
+ * decides where the bytes land. See `commands/downloads.rs`.
+ */
+/**
+ * Queue a release, shared by the header button and the version-history rows.
+ *
+ * A function rather than a hook because the two callers keep their own "added"
+ * state — the header button reflects the newest release, a row reflects its own
+ * — and a shared hook would have to be told which of them the last click was.
+ */
+async function queueRelease(
+    kind: string,
+    itemId: number,
+    releaseId: number,
+    onQueued: (ok: boolean) => void
+): Promise<string | null> {
+    try {
+        await ipc.downloadRelease(kind, itemId, releaseId)
+        onQueued(true)
+
+        return null
+    } catch (err) {
+        onQueued(false)
+
+        return messageOf(err)
+    }
+}
+
+function ReleaseRow({
+    kind,
+    itemId,
+    release,
+}: {
+    kind: string
+    itemId: number
+    release: ReleaseT
+}) {
+    const [state, setState] = useState<'idle' | 'queued' | 'failed'>('idle')
+    const [error, setError] = useState<string | null>(null)
+
+    const queue = async () => {
+        setState('queued')
+        setError(null)
+
+        const failed = await queueRelease(kind, itemId, release.id, (ok) => {
+            if (!ok) setState('failed')
+        })
+
+        setError(failed)
+    }
+
+    return (
+        <li className="flex items-center justify-between gap-2 rounded-lg border border-border bg-surface px-3 py-2 text-sm">
+            <span className="min-w-0">
+                <span className="truncate">
+                    {release.version ?? `#${release.id}`}
+                </span>
+                <span className="ml-2 text-xs text-muted">
+                    {new Date(release.createdAt).toLocaleDateString()}
+                </span>
+                {error && <span className="ml-2 text-xs text-danger">{error}</span>}
+            </span>
+
+            {release.files[0] && (
+                <button
+                    type="button"
+                    disabled={state === 'queued'}
+                    onClick={() => void queue()}
+                    className="flex shrink-0 items-center gap-1.5 text-xs text-accent disabled:text-muted"
+                    aria-label={`Download ${release.version ?? `release ${release.id}`}`}
+                >
+                    {state === 'queued' ? (
+                        <>Added to downloads</>
+                    ) : (
+                        <>
+                            <FiDownload className="size-4" />
+                            {state === 'failed' ? 'Try again' : 'Download'}
+                        </>
+                    )}
+                </button>
+            )}
+        </li>
+    )
+}
+
 export default function ViewRoute() {
     const params = useParams<{ kind: string; id: string }>()
     const navigate = useNavigate()
     const [search] = useSearchParams()
+
+    // Above the early returns below, because a hook cannot be conditional.
+    const [queued, setQueued] = useState(false)
 
     /*
      * Set by a `tmc://install/…` deep link — see `lib/hooks/use-deep-link`. All
@@ -203,15 +304,32 @@ export default function ViewRoute() {
                         <InstallButton summary={summary} releases={releases} />
                     )}
 
-                    {download && (
+                    {/*
+                     * Through the queue, like every other byte the app
+                     * fetches. This used to hand the URL to the system
+                     * browser, which meant the one download a user is most
+                     * likely to start was the one the app could not pause,
+                     * resume, throttle or show a speed for.
+                     */}
+                    {download && latest && (
                         <Button
                             btnType="secondary"
-                            onClick={() => void openUrl(download.url)}
+                            disabled={queued}
+                            onClick={() =>
+                                void queueRelease(
+                                    summary.kind,
+                                    Number(summary.id),
+                                    latest.id,
+                                    setQueued
+                                )
+                            }
                         >
                             <span className="flex items-center gap-2">
                                 <FiDownload className="size-4" />
-                                Download
-                                {latest?.version ? ` ${latest.version}` : ''}
+                                {queued ? 'Added to downloads' : 'Download'}
+                                {!queued && latest.version
+                                    ? ` ${latest.version}`
+                                    : ''}
                             </span>
                         </Button>
                     )}
@@ -288,32 +406,12 @@ export default function ViewRoute() {
                         <h2 className="mb-2 text-sm font-semibold">Releases</h2>
                         <ul className="flex flex-col gap-1.5">
                             {releases.map((release) => (
-                                <li
+                                <ReleaseRow
                                     key={release.id}
-                                    className="flex items-center justify-between rounded-lg border border-border bg-surface px-3 py-2 text-sm"
-                                >
-                                    <span>
-                                        {release.version ?? `#${release.id}`}
-                                        <span className="ml-2 text-xs text-muted">
-                                            {new Date(
-                                                release.createdAt
-                                            ).toLocaleDateString()}
-                                        </span>
-                                    </span>
-
-                                    {release.files[0] && (
-                                        <button
-                                            type="button"
-                                            onClick={() =>
-                                                void openUrl(release.files[0]!.url)
-                                            }
-                                            className="text-accent"
-                                            aria-label="Download this release"
-                                        >
-                                            <FiDownload className="size-4" />
-                                        </button>
-                                    )}
-                                </li>
+                                    kind={summary.kind}
+                                    itemId={Number(summary.id)}
+                                    release={release}
+                                />
                             ))}
                         </ul>
                     </section>

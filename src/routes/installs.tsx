@@ -13,7 +13,7 @@ import {
 
 import { api } from '~/lib/api/client'
 import { ipc } from '~/lib/ipc/commands'
-import { isIpcError } from '~/lib/ipc'
+import { messageOf } from '~/lib/ipc'
 import { useAuth } from '~/lib/auth/provider'
 import { useLibrary } from '~/lib/library/provider'
 import { InstallSchema, type InstallT } from '~/lib/api/contract'
@@ -38,12 +38,6 @@ import { useFolderPicker } from '~/components/folder-picker'
  * dialog shows them — which is the whole reason a declarative launcher is
  * acceptable at all.
  */
-
-function messageOf(err: unknown): string {
-    if (isIpcError(err)) return err.message
-
-    return err instanceof Error ? err.message : 'Something went wrong.'
-}
 
 function InstallCard({
     install,

@@ -10,7 +10,7 @@ import {
 } from 'react'
 
 import { ipc } from '~/lib/ipc/commands'
-import { isIpcError } from '~/lib/ipc'
+import { messageOf } from '~/lib/ipc'
 import { useAuth } from '~/lib/auth/provider'
 import type { AutoUpdateReportT, LibraryRowT, SyncReportT } from '~/lib/ipc/schemas'
 
@@ -75,12 +75,6 @@ export function useLibrary(): LibraryCtxT {
     if (!ctx) throw new Error('Library context is missing.')
 
     return ctx
-}
-
-function messageOf(err: unknown): string {
-    if (isIpcError(err)) return err.message
-
-    return err instanceof Error ? err.message : 'Something went wrong.'
 }
 
 export function LibraryProvider({ children }: { children: ReactNode }) {

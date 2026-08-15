@@ -241,6 +241,7 @@ pub fn run() {
             commands::downloads::download_set_global_limit,
             commands::downloads::download_set_concurrency,
             commands::downloads::download_clear_finished,
+            commands::downloads::download_release,
             commands::detect::detect_games,
             commands::detect::detect_apply,
             commands::rcon::rcon_list,

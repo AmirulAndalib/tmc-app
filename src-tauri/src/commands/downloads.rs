@@ -19,8 +19,9 @@ use std::sync::atomic::{AtomicI64, Ordering};
 use serde::Serialize;
 use tauri::{Emitter, Manager, State};
 
+use tmc_core::audit;
 use tmc_core::download::{DownloadEvent, DownloadState, Status};
-use tmc_core::error::AppResult;
+use tmc_core::error::{AppError, AppResult};
 
 use crate::state::AppState;
 
@@ -381,5 +382,289 @@ pub async fn restore(state: &AppState) {
         if paused {
             let _ = state.downloads.pause(&row.request.id).await;
         }
+    }
+}
+
+// ------------------------------------------------------------------ Releases
+
+/// Put one specific release of one item into the queue.
+///
+/// **This does not break the rule at the top of this module.** The webview
+/// names three integers and a kind; the URL comes from the API and the
+/// destination from the user's configured download folder. There is still no
+/// `download_start(url, path)`, and there is still nothing here an injected
+/// script could point at a file of its choosing.
+///
+/// Why it exists: an item's page lists every release, and the button beside
+/// each one used to hand the URL to the system browser. That is a strange thing
+/// for an app whose whole download story — pause, resume, priorities, bandwidth
+/// limits, a speed graph, resumable `.tmcpart` files — is the queue this
+/// bypasses. Somebody fetching an older release of a mod because the newest one
+/// broke their save is exactly the person who wants it in the queue.
+///
+/// The subscription flow is unchanged and is still what "install this" means.
+/// This is the other thing: get me *that* file.
+#[tauri::command]
+pub async fn download_release(
+    state: State<'_, AppState>,
+    kind: String,
+    item_id: i64,
+    release_id: i64,
+) -> AppResult<String> {
+    /*
+     * Re-fetched rather than taken from the caller. The frontend has this
+     * payload on screen already, so passing it would save a request — and would
+     * also mean the URL that gets downloaded is one the webview supplied, which
+     * is the entire thing this command is shaped to avoid.
+     */
+    let detail = state
+        .api
+        .request(
+            tmc_core::api::Method::GET,
+            &format!("/content/{}/{}", kind_segment(&kind)?, item_id),
+            None,
+            false,
+        )
+        .await?;
+
+    let release = detail
+        .get("releases")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .find(|r| r.get("id").and_then(serde_json::Value::as_i64) == Some(release_id))
+        .ok_or_else(|| AppError::invalid("That release is no longer available."))?;
+
+    let file = release
+        .get("files")
+        .and_then(serde_json::Value::as_array)
+        .and_then(|files| files.first())
+        .ok_or_else(|| AppError::invalid("That release has no file to download."))?;
+
+    let url = file
+        .get("url")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| AppError::invalid("That release has no file to download."))?;
+
+    let name = detail
+        .get("summary")
+        .and_then(|s| s.get("name"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("Download");
+
+    let version = release
+        .get("version")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string);
+
+    let file_name = safe_name(
+        file.get("name").and_then(serde_json::Value::as_str),
+        url,
+        &kind,
+        item_id,
+        release_id,
+    );
+
+    let dir = state.download_target_dir();
+
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| AppError::internal(format!("could not prepare the download folder: {e}")))?;
+
+    /*
+     * Deterministic, so pressing the button twice is one row rather than two
+     * writers for one file — the same reason a plugin's `download` step derives
+     * its id from the plugin and the destination.
+     */
+    let id = format!("release:{kind}:{item_id}:{release_id}");
+
+    let mut meta = std::collections::BTreeMap::from([
+        ("kind".to_string(), kind.clone()),
+        // `kind:itemId`, which is what the local library and a sandbox's mods
+        // are keyed by — so the queue row finds the item's own artwork without
+        // a request.
+        ("item".to_string(), format!("{kind}:{item_id}")),
+    ]);
+
+    if let Some(version) = &version {
+        meta.insert("version".to_string(), version.clone());
+    }
+
+    audit!(
+        state.audit,
+        Info,
+        Network,
+        "download.release",
+        format!(
+            "{name} {} → {}",
+            version.as_deref().unwrap_or(""),
+            file_name
+        )
+    );
+
+    state
+        .downloads
+        .enqueue(tmc_core::download::DownloadRequest {
+            id: id.clone(),
+            url: url.to_string(),
+            dest: dir.join(&file_name),
+            label: match &version {
+                Some(v) => format!("{name} {v}"),
+                None => name.to_string(),
+            },
+            sha256: file
+                .get("sha256")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string),
+            size_hint: file
+                .get("size")
+                .and_then(serde_json::Value::as_i64)
+                .and_then(|n| u64::try_from(n).ok()),
+            priority: 0,
+            limit_bps: None,
+            meta,
+        })
+        .await?;
+
+    Ok(id)
+}
+
+/// The kind, as a path segment.
+///
+/// A closed list rather than a sanitiser. This value reaches a URL path, and
+/// the difference between "escape it carefully" and "it is one of these six"
+/// is the difference between a check somebody can get subtly wrong later and
+/// one they cannot.
+fn kind_segment(kind: &str) -> AppResult<&'static str> {
+    match kind {
+        "mod" => Ok("mod"),
+        "asset" => Ok("asset"),
+        "collection" => Ok("collection"),
+        "article" => Ok("article"),
+        "server" => Ok("server"),
+        "community" => Ok("community"),
+        _ => Err(AppError::invalid("That is not a content kind.")),
+    }
+}
+
+/// A single, safe file name for a release file.
+///
+/// Every character outside a plain name alphabet becomes `-`, `..` cannot
+/// survive, and a name that sanitises to nothing falls back to the ids. The
+/// destination directory is the app's own, but a release file name is
+/// author-written text off the network and `Path::join` with a `../` in it
+/// would land outside.
+fn safe_name(
+    declared: Option<&str>,
+    url: &str,
+    kind: &str,
+    item_id: i64,
+    release_id: i64,
+) -> String {
+    let raw = declared
+        .filter(|n| !n.is_empty())
+        .or_else(|| url.rsplit('/').next().filter(|s| !s.is_empty()))
+        .unwrap_or_default();
+
+    // The last component only, and only up to a query string.
+    let base = raw
+        .split(['?', '#'])
+        .next()
+        .unwrap_or_default()
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or_default();
+
+    let mut out = String::with_capacity(base.len());
+    let mut last_dot = false;
+
+    for ch in base.chars() {
+        let keep = ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_' | '+' | '(' | ')');
+
+        if !keep {
+            last_dot = false;
+            out.push('-');
+
+            continue;
+        }
+
+        if ch == '.' && last_dot {
+            continue;
+        }
+
+        last_dot = ch == '.';
+        out.push(ch);
+    }
+
+    let trimmed = out.trim_matches(|c: char| c == '.' || c == '-').to_string();
+
+    if trimmed.is_empty() || trimmed.len() > 180 {
+        return format!("{kind}-{item_id}-{release_id}.bin");
+    }
+
+    trimmed
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_release_file_name_cannot_escape_the_download_folder() {
+        for hostile in [
+            "../../etc/passwd",
+            "..\\..\\windows\\system32\\evil.dll",
+            "/etc/shadow",
+            "....//....//x",
+            "a\0b",
+        ] {
+            let name = safe_name(Some(hostile), "https://x.test/f", "mod", 1, 2);
+
+            assert!(!name.contains('/'), "{hostile} → {name}");
+            assert!(!name.contains('\\'), "{hostile} → {name}");
+            assert!(!name.contains(".."), "{hostile} → {name}");
+            assert!(!name.contains('\0'), "{hostile} → {name}");
+        }
+    }
+
+    #[test]
+    fn an_ordinary_name_survives_intact() {
+        assert_eq!(
+            safe_name(Some("cool-mod_1.4.2.zip"), "https://x.test/f", "mod", 1, 2),
+            "cool-mod_1.4.2.zip"
+        );
+    }
+
+    /// No declared name: the URL's last component, without its query string.
+    #[test]
+    fn the_url_is_the_fallback_and_its_query_is_not_part_of_the_name() {
+        assert_eq!(
+            safe_name(
+                None,
+                "https://cdn.test/files/pack.zip?token=abc",
+                "mod",
+                1,
+                2
+            ),
+            "pack.zip"
+        );
+    }
+
+    #[test]
+    fn a_name_that_sanitises_to_nothing_falls_back_to_the_ids() {
+        assert_eq!(
+            safe_name(Some("..."), "https://x.test/", "mod", 7, 9),
+            "mod-7-9.bin"
+        );
+        assert_eq!(safe_name(None, "", "asset", 7, 9), "asset-7-9.bin");
+    }
+
+    /// The kind reaches a URL path, so it is a closed list rather than an
+    /// escaped string.
+    #[test]
+    fn only_known_kinds_reach_the_api_path() {
+        assert!(kind_segment("mod").is_ok());
+        assert!(kind_segment("../admin").is_err());
+        assert!(kind_segment("mod/../..").is_err());
+        assert!(kind_segment("").is_err());
     }
 }

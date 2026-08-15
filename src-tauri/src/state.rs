@@ -193,6 +193,25 @@ impl AppState {
         }
     }
 
+    /// Where a file the USER asked for by name goes.
+    ///
+    /// Their configured download folder when they have set one, and otherwise
+    /// the app's own cache — which is swept on launch, and is the right default
+    /// precisely because a file nobody chose a home for should not accumulate
+    /// somewhere they will never think to look.
+    ///
+    /// Not `settings.download_dir` read directly at the call site: that field
+    /// is a jail anchor with its own validating command, and having one place
+    /// answer "where does a download go" keeps the fallback from being
+    /// reinvented differently the second time somebody needs it.
+    pub fn download_target_dir(&self) -> std::path::PathBuf {
+        self.settings
+            .get()
+            .download_dir
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| self.paths.cache.join("downloads"))
+    }
+
     /// The platform directories game detection reads.
     ///
     /// From Tauri's resolver, never from an environment variable — the same

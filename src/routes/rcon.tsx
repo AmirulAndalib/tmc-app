@@ -11,7 +11,7 @@ import {
 } from 'react-icons/fi'
 
 import { ipc } from '~/lib/ipc/commands'
-import { isIpcError } from '~/lib/ipc'
+import { isIpcError, messageOf } from '~/lib/ipc'
 import type { RconHistoryT, RconServerT } from '~/lib/ipc/schemas'
 import Select from '~/components/select'
 
@@ -740,10 +740,4 @@ function AddServer({
 
 function isAuthError(err: unknown): boolean {
     return isIpcError(err) && err.code === 'auth_rejected'
-}
-
-function messageOf(err: unknown): string {
-    if (isIpcError(err)) return err.message
-
-    return err instanceof Error ? err.message : 'Something went wrong.'
 }
