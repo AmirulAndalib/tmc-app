@@ -389,9 +389,12 @@ mod tests {
     ///
     /// It has to be a variant `is_native` rejects, so implementing a protocol
     /// natively breaks these two tests — which is the intended signal, not a
-    /// nuisance: pick the next one still on the list. Frostbite used to sit
-    /// here and no longer qualifies.
-    const UNIMPLEMENTED: QueryProtocol = QueryProtocol::Teamspeak3;
+    /// nuisance: pick the next one still on the list. Frostbite and TeamSpeak 3
+    /// both used to sit here and neither qualifies any more.
+    ///
+    /// Still on the list: `Discord`, `HytaleNitrado`, `GtaNetwork`, `GtaRage`,
+    /// `Scum`.
+    const UNIMPLEMENTED: QueryProtocol = QueryProtocol::Scum;
 
     #[test]
     fn the_stand_in_is_still_unimplemented() {

@@ -19,6 +19,7 @@ pub mod gamespy;
 pub mod minecraft;
 pub mod quake3;
 pub mod samp;
+pub mod teamspeak3;
 
 use std::time::Duration;
 
@@ -70,10 +71,15 @@ pub enum QueryProtocol {
     Samp,
     /// FiveM / CitizenFX — HTTP JSON endpoints rather than a game protocol.
     Fivem,
+    /// TeamSpeak 3 ServerQuery — line-oriented text over TCP.
+    ///
+    /// The only protocol here whose query port fronts several virtual
+    /// servers, so the game port selects one rather than being connected
+    /// to. See `teamspeak3`'s module docs.
+    Teamspeak3,
 
     // ---- Recognised but not natively implemented; see `is_native`. ----
     Discord,
-    Teamspeak3,
     HytaleNitrado,
     Frostbite,
     GtaNetwork,
@@ -104,6 +110,7 @@ impl QueryProtocol {
                 | Self::Samp
                 | Self::Fivem
                 | Self::Frostbite
+                | Self::Teamspeak3
                 | Self::TcpOnly
         )
     }
@@ -112,7 +119,12 @@ impl QueryProtocol {
     pub fn is_tcp(self) -> bool {
         matches!(
             self,
-            Self::Minecraft | Self::MinecraftSlp | Self::Fivem | Self::Frostbite | Self::TcpOnly
+            Self::Minecraft
+                | Self::MinecraftSlp
+                | Self::Fivem
+                | Self::Frostbite
+                | Self::Teamspeak3
+                | Self::TcpOnly
         )
     }
 }
@@ -300,6 +312,14 @@ impl QueryTarget {
             QueryProtocol::Frostbite => {
                 self.game_port.checked_add(22_000).unwrap_or(self.game_port)
             }
+            /*
+             * `spy/internal/protocols/teamspeak3.go`: ServerQuery is on
+             * 10011, not the voice port. Unlike the two above, this is a
+             * fixed port rather than arithmetic on the game port -- one
+             * ServerQuery listener fronts every virtual server on the box,
+             * and the game port is what `use port=` selects between.
+             */
+            QueryProtocol::Teamspeak3 => teamspeak3::DEFAULT_QUERY_PORT,
             _ => self.game_port,
         })
     }
@@ -330,6 +350,9 @@ pub async fn query(target: &QueryTarget) -> AppResult<ServerQueryResult> {
         QueryProtocol::Samp => samp::query(addr, timeout).await,
         QueryProtocol::Fivem => fivem::query(addr, timeout, target.want_players).await,
         QueryProtocol::Frostbite => frostbite::query(addr, timeout, target.want_players).await,
+        QueryProtocol::Teamspeak3 => {
+            teamspeak3::query(addr, timeout, target.want_players, target.game_port).await
+        }
 
         // Everything else, including the recognised-but-unimplemented set.
         _ => tcp_only(addr, timeout, protocol).await,
