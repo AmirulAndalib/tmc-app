@@ -63,6 +63,25 @@ impl AppPaths {
         self.data.join("plugins.json")
     }
 
+    /// Where every sandbox stages its mods, before deployment links or copies
+    /// them into the game.
+    ///
+    /// In DATA, not cache: these are downloaded files a sandbox depends on, and
+    /// an OS that cleared them would silently empty somebody's modlist. The
+    /// download manager's own scratch space is the one that belongs in cache.
+    pub fn staging_dir(&self) -> PathBuf {
+        self.data.join("staging")
+    }
+
+    /// Where a deploy puts the game files it displaced, so a purge can put them
+    /// back.
+    ///
+    /// The single most important directory in the app to not lose: it is the
+    /// only copy of whatever a direct-strategy sandbox overwrote.
+    pub fn backup_dir(&self) -> PathBuf {
+        self.data.join("backups")
+    }
+
     /// The device's library database.
     ///
     /// In the DATA directory, not the cache: it records what is on disk in the

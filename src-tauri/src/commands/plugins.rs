@@ -219,6 +219,7 @@ pub async fn plugin_run(state: State<'_, AppState>, request: RunRequest) -> AppR
         jail: &jail,
         http: state.api.raw(),
         audit: &state.audit,
+        downloads: Some(&state.downloads),
     };
 
     let report = executor.run(steps, &RunContext(request.context)).await;

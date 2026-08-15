@@ -65,6 +65,18 @@ pub struct AppSettings {
     /// only; ignored on mobile, where the OS owns the decision.
     pub minimise_to_tray: bool,
 
+    // ------------------------------------------------------------- Downloads
+    /// Ceiling across every download, in bytes per second. `0` is unlimited.
+    ///
+    /// A setting rather than a session value because the reason somebody sets
+    /// one — a shared connection, a metered link, a housemate on a call — does
+    /// not end when the app closes.
+    pub download_limit_bps: u64,
+    /// How many transfers run at once. Clamped to `download::MAX_CONCURRENT`.
+    pub download_concurrency: u8,
+    /// Keep finished downloads in the list until they are cleared.
+    pub download_keep_history: bool,
+
     // --------------------------------------------------------------- Plugins
     /// Refuse to run any plugin that is not signed by an approved key. Off by
     /// default because nothing is signed yet; the manifest-hash approval in
@@ -91,6 +103,9 @@ impl Default for AppSettings {
             latency_interval_ms: 1_000,
             latency_concurrency: 8,
             minimise_to_tray: false,
+            download_limit_bps: 0,
+            download_concurrency: crate::download::DEFAULT_CONCURRENT as u8,
+            download_keep_history: true,
             require_signed_plugins: false,
             confirm_every_run: true,
         }
@@ -120,6 +135,9 @@ impl AppSettings {
     fn sanitise(&mut self) {
         self.ui_scale = self.ui_scale.clamp(0.85, 1.4);
         self.latency_concurrency = self.latency_concurrency.clamp(1, 32);
+        self.download_concurrency = self
+            .download_concurrency
+            .clamp(1, crate::download::MAX_CONCURRENT as u8);
         self.latency_interval_ms = self
             .latency_interval_ms
             .clamp(LATENCY_INTERVAL_MS_MIN, LATENCY_INTERVAL_MS_MAX);

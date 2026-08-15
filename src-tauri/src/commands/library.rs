@@ -179,6 +179,7 @@ impl CtxHolder {
             roots: &self.roots,
             settings: &self.settings,
             http: state.api.raw(),
+            downloads: Some(&state.downloads),
             audit: &state.audit,
             install_id: self.install_id,
             install_dir: self.install_dir.clone(),

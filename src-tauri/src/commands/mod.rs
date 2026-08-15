@@ -21,9 +21,13 @@
 
 pub mod api;
 pub mod auth;
+pub mod detect;
+pub mod downloads;
 pub mod fs;
 pub mod library;
 pub mod logs;
 pub mod plugins;
+pub mod rcon;
+pub mod sandbox;
 pub mod servers;
 pub mod settings;

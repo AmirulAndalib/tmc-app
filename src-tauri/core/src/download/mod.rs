@@ -245,6 +245,24 @@ pub struct DownloadManager {
     inner: Arc<Inner>,
 }
 
+/// An HTTP client for downloading FILES, distinct from the API's.
+///
+/// The API client attaches a bearer token to everything it sends, and a mod
+/// archive comes from a CDN that has no business seeing one — a redirect to a
+/// third-party mirror would hand somebody's access token to a host nobody here
+/// controls. So the queue gets a plain client with no credentials attached to
+/// anything, and the app crate does not need a `reqwest` dependency of its own
+/// to build one.
+pub fn default_client(version: &str) -> AppResult<reqwest::Client> {
+    reqwest::Client::builder()
+        .user_agent(format!("TMC/{version}"))
+        // Enough for a slow mirror to answer; the transfer itself is bounded by
+        // the stream, not by this.
+        .connect_timeout(Duration::from_secs(20))
+        .build()
+        .map_err(|e| AppError::internal(format!("http client: {e}")))
+}
+
 impl DownloadManager {
     pub fn new(http: reqwest::Client, audit: Arc<Audit>) -> Self {
         let (events, _) = broadcast::channel(512);
@@ -368,6 +386,64 @@ impl DownloadManager {
         self.pump().await;
 
         Ok(state)
+    }
+
+    /// Queue one download and wait for it to finish.
+    ///
+    /// What the plugin executor's `download` step calls, so a mod install shows
+    /// up in the same queue — with the same progress bar, the same bandwidth
+    /// limit and the same pause button — as anything else. A step that streamed
+    /// its own bytes would be invisible to all three.
+    ///
+    /// A PAUSE resolves as an error rather than blocking. The install that is
+    /// waiting cannot proceed, and leaving its task parked on a download the
+    /// user may not resume for a week is worse than telling it so.
+    pub async fn run_to_completion(&self, request: DownloadRequest) -> AppResult<()> {
+        let id = request.id.clone();
+
+        // Subscribed BEFORE enqueuing: a small file can finish before the first
+        // `recv`, and a subscriber created afterwards would wait for an event
+        // that has already been sent.
+        let mut events = self.subscribe();
+
+        let state = self.enqueue(request).await?;
+
+        if let Some(outcome) = terminal(&state) {
+            return outcome;
+        }
+
+        loop {
+            let event = tokio::time::timeout(Duration::from_secs(2), events.recv()).await;
+
+            match event {
+                Ok(Ok(DownloadEvent::Progress { download })) if download.id == id => {
+                    if let Some(outcome) = terminal(&download) {
+                        return outcome;
+                    }
+                }
+                Ok(Ok(_)) => continue,
+                /*
+                 * Either the channel lagged (a busy queue outran this
+                 * subscriber) or the timeout fired. Both are answered the same
+                 * way: ask for the current state directly. Progress events are
+                 * a convenience, not the source of truth.
+                 */
+                Ok(Err(broadcast::error::RecvError::Lagged(_))) | Err(_) => {
+                    if let Some(state) = self.get(&id).await {
+                        if let Some(outcome) = terminal(&state) {
+                            return outcome;
+                        }
+                    } else {
+                        return Err(AppError::internal(
+                            "the download disappeared from the queue",
+                        ));
+                    }
+                }
+                Ok(Err(broadcast::error::RecvError::Closed)) => {
+                    return Err(AppError::internal("the download queue stopped"))
+                }
+            }
+        }
     }
 
     pub async fn list(&self) -> Vec<DownloadState> {
@@ -952,6 +1028,24 @@ impl DownloadManager {
         };
 
         self.publish(&published);
+    }
+}
+
+/// Has this download finished, and how?
+fn terminal(state: &DownloadState) -> Option<AppResult<()>> {
+    match state.status {
+        Status::Done => Some(Ok(())),
+        Status::Failed => Some(Err(AppError::Network(
+            state
+                .error
+                .clone()
+                .unwrap_or_else(|| "The download failed.".into()),
+        ))),
+        Status::Cancelled => Some(Err(AppError::invalid("The download was cancelled."))),
+        Status::Paused => Some(Err(AppError::invalid(
+            "The download is paused. Resume it to continue installing.",
+        ))),
+        Status::Queued | Status::Running => None,
     }
 }
 

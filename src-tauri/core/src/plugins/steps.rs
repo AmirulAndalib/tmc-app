@@ -83,6 +83,19 @@ pub struct Executor<'a> {
     pub jail: &'a Jail,
     pub http: &'a reqwest::Client,
     pub audit: &'a Audit,
+
+    /// The download queue, when there is one.
+    ///
+    /// With it, a `download` step becomes a row in the same queue as everything
+    /// else: the same progress bar, the same bandwidth limit, the same pause
+    /// button, and a resume that survives the app closing. A step that streams
+    /// its own bytes is invisible to all four.
+    ///
+    /// `None` falls back to streaming inline, which is what the tests use and
+    /// what a caller with no queue to hand gets. The host allow-list, the size
+    /// cap and the checksum are enforced on both paths — the queue does not
+    /// replace any check, it only moves where the bytes are read.
+    pub downloads: Option<&'a crate::download::DownloadManager>,
 }
 
 impl Executor<'_> {
@@ -308,6 +321,39 @@ impl Executor<'_> {
             format!("{url} → {}", display(target)),
             plugin = self.manifest.id
         );
+
+        if let Some(queue) = self.downloads {
+            ensure_parent(target)?;
+
+            /*
+             * A DETERMINISTIC id, from the plugin and the destination. Two runs
+             * of the same step are then the same queue row rather than two
+             * writers for one file — which is what re-running a failed install
+             * does, and what two sandboxes staging the same mod would do if the
+             * destination were shared.
+             */
+            let id = format!("plugin:{}:{}", self.manifest.id, display(target));
+
+            return queue
+                .run_to_completion(crate::download::DownloadRequest {
+                    id,
+                    url: url.to_string(),
+                    dest: target.to_path_buf(),
+                    label: target
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| self.manifest.name.clone()),
+                    sha256: expect_sha.map(str::to_string),
+                    size_hint: None,
+                    priority: 0,
+                    limit_bps: None,
+                    meta: std::collections::BTreeMap::from([(
+                        "plugin".to_string(),
+                        self.manifest.id.clone(),
+                    )]),
+                })
+                .await;
+        }
 
         let response = self.http.get(parsed).send().await?;
 

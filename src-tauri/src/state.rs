@@ -5,6 +5,8 @@ use tauri::AppHandle;
 
 use tmc_core::api::ApiClient;
 use tmc_core::auth::AuthState;
+use tmc_core::crypto::LocalCipher;
+use tmc_core::download::DownloadManager;
 use tmc_core::error::{AppError, AppResult};
 use tmc_core::launch::{plan as build_launch_plan, LaunchContext, LaunchOptions, LaunchPlan};
 use tmc_core::library::LibraryDb;
@@ -13,6 +15,7 @@ use tmc_core::net::LatencyStore;
 use tmc_core::plugins::apps::AppPlugins;
 use tmc_core::plugins::registry::Registry;
 use tmc_core::plugins::{jail_for, JailRoots};
+use tmc_core::rcon::RconPool;
 use tmc_core::secure::SecureStore;
 use tmc_core::settings::{AppSettings, SettingsStore};
 
@@ -36,8 +39,25 @@ pub struct AppState {
     pub latency: LatencyStore,
     pub version: String,
 
-    /// The device's library: which subscriptions are here, and what is on disk.
-    pub library: LibraryDb,
+    /// The device's library: which subscriptions are here, what is on disk,
+    /// every sandbox, the deployment ledger and the download queue.
+    pub library: Arc<LibraryDb>,
+
+    /// The download queue. One per process — a second would mean two schedulers
+    /// racing for the same concurrency budget and two writers per `.part` file.
+    pub downloads: DownloadManager,
+
+    /// Open RCON sessions, pooled so a console is a conversation rather than a
+    /// reconnect per line.
+    pub rcon: RconPool,
+
+    /// The key that encrypts RCON passwords.
+    ///
+    /// Created LAZILY, on first use. A user who never adds a server never has a
+    /// key — so there is nothing to steal, nothing to back up and nothing to
+    /// migrate — and the credential-store round trip does not happen on a
+    /// launch that will not need it.
+    cipher: std::sync::OnceLock<LocalCipher>,
 
     /// App-scoped install and launch rules (`plugins/app/<slug>/…`).
     ///
@@ -65,9 +85,18 @@ impl AppState {
 
         let api = ApiClient::new(Arc::clone(&auth), Arc::clone(&secure), &version)?;
 
+        /*
+         * The download manager gets its OWN http client rather than the API's.
+         * The API client attaches a bearer to everything it sends, and a mod
+         * file comes from a CDN that has no business seeing one — a redirect to
+         * a third-party mirror would hand somebody's access token to a host we
+         * do not control.
+         */
+        let file_http = tmc_core::download::default_client(&version)?;
+
         let plugins = Registry::load(paths.registry_file(), paths.plugins.clone());
 
-        let library = LibraryDb::open(paths.library_file())?;
+        let library = Arc::new(LibraryDb::open(paths.library_file())?);
 
         /*
          * Anything left mid-flight by a crash is reset here. A row stuck at
@@ -81,11 +110,26 @@ impl AppState {
             Err(e) => tracing::warn!("could not reset library states: {}", e.detail()),
         }
 
+        /*
+         * A download left `running` by a crash comes back `queued`. Same
+         * reasoning as the library's transient states: the process that owned
+         * it is gone, so nothing will ever move it and the UI would show a
+         * stalled bar forever.
+         */
+        match library.download_reset_running() {
+            Ok(0) => {}
+            Ok(n) => tracing::warn!("requeued {n} interrupted download(s)"),
+            Err(e) => tracing::warn!("could not requeue downloads: {}", e.detail()),
+        }
+
         let app_plugins = AppPlugins::load(&paths.plugins);
 
         for (source, error) in app_plugins.errors() {
             tracing::warn!("app plugin {source} did not load: {error}");
         }
+
+        let downloads = DownloadManager::new(file_http, Arc::clone(&audit));
+        let rcon = RconPool::new(Arc::clone(&audit));
 
         Ok(Self {
             paths,
@@ -97,9 +141,102 @@ impl AppState {
             plugins,
             latency: LatencyStore::new(),
             version,
+            downloads,
+            rcon,
+            cipher: std::sync::OnceLock::new(),
             library,
             app_plugins: RwLock::new(Arc::new(app_plugins)),
         })
+    }
+
+    /// The key that encrypts RCON passwords, created on first use.
+    ///
+    /// Every failure is the same one — the credential store is unreachable, or
+    /// the stored key is corrupt — and it is worth surfacing rather than
+    /// silently minting a replacement, which would turn "the entry is broken"
+    /// into "every saved password is wrong".
+    pub fn cipher(&self) -> AppResult<&LocalCipher> {
+        if let Some(cipher) = self.cipher.get() {
+            return Ok(cipher);
+        }
+
+        let created = LocalCipher::load_or_create(&self.secure)?;
+
+        // A race here means two keys were generated and one is discarded — but
+        // `load_or_create` writes before returning, so both loaded the SAME key
+        // and the loser is identical to the winner.
+        let _ = self.cipher.set(created);
+
+        self.cipher
+            .get()
+            .ok_or_else(|| AppError::internal("cipher was not initialised"))
+    }
+
+    /// Everything a sandbox operation needs, assembled from this state.
+    pub fn sandbox_ctx<'a>(
+        &'a self,
+        plugins: &'a tmc_core::plugins::apps::AppPlugins,
+        settings: &'a AppSettings,
+        roots: &'a tmc_core::plugins::JailRoots,
+        staging: &'a std::path::Path,
+        backups: &'a std::path::Path,
+    ) -> tmc_core::library::deploy::SandboxCtx<'a> {
+        tmc_core::library::deploy::SandboxCtx {
+            plugins,
+            roots,
+            settings,
+            http: self.api.raw(),
+            audit: &self.audit,
+            downloads: Some(&self.downloads),
+            staging_root: staging,
+            backup_root: backups,
+        }
+    }
+
+    /// The platform directories game detection reads.
+    ///
+    /// From Tauri's resolver, never from an environment variable — the same
+    /// rule every other path in this app follows, and the reason `tmc_core::
+    /// detect` takes them as an argument instead of finding them itself.
+    pub fn detect_roots(&self, app: &AppHandle) -> tmc_core::detect::DetectRoots {
+        use tauri::Manager;
+
+        let resolver = app.path();
+
+        #[allow(unused_mut)]
+        let mut program_files: Vec<PathBuf> = Vec::new();
+        #[allow(unused_mut)]
+        let mut drives: Vec<PathBuf> = Vec::new();
+
+        #[cfg(windows)]
+        {
+            for letter in b'A'..=b'Z' {
+                let root = PathBuf::from(format!("{}:\\", letter as char));
+
+                if !root.is_dir() {
+                    continue;
+                }
+
+                for rel in ["Program Files", "Program Files (x86)"] {
+                    let candidate = root.join(rel);
+
+                    if candidate.is_dir() {
+                        program_files.push(candidate);
+                    }
+                }
+
+                drives.push(root);
+            }
+        }
+
+        tmc_core::detect::DetectRoots {
+            home: resolver.home_dir().ok(),
+            config: resolver.config_dir().ok(),
+            local_data: resolver.local_data_dir().ok(),
+            program_data: program_data_dir(),
+            program_files,
+            drives,
+        }
     }
 
     /// The directories a plugin jail may be anchored to.
@@ -322,5 +459,32 @@ impl AppState {
         }
 
         Ok(plan)
+    }
+}
+
+/// `%ProgramData%`, which Tauri's resolver does not expose.
+///
+/// Derived from the system drive rather than read from the environment, for the
+/// same reason `api_base` is not read from one in a release build: the
+/// environment of the process that launched the app is not a trust boundary,
+/// and a shortcut's "Start in" can set anything. It is only ever used to LOOK
+/// for a launcher's manifests, never to write.
+fn program_data_dir() -> Option<PathBuf> {
+    #[cfg(windows)]
+    {
+        for letter in b'C'..=b'Z' {
+            let candidate = PathBuf::from(format!("{}:\\ProgramData", letter as char));
+
+            if candidate.is_dir() {
+                return Some(candidate);
+            }
+        }
+
+        None
+    }
+
+    #[cfg(not(windows))]
+    {
+        None
     }
 }

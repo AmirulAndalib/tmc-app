@@ -57,6 +57,8 @@ pub struct SandboxCtx<'a> {
     pub settings: &'a AppSettings,
     pub http: &'a reqwest::Client,
     pub audit: &'a Audit,
+    /// The download queue, so staging a mod is visible and pausable.
+    pub downloads: Option<&'a crate::download::DownloadManager>,
     /// Where every sandbox's staging folders live: `<staging>/<id>/<mod key>`.
     pub staging_root: &'a Path,
     /// Where displaced game files go: `<backups>/<id>/<relative path>`.
@@ -231,6 +233,7 @@ pub async fn stage_mod(
         jail: &jail,
         http: ctx.http,
         audit: ctx.audit,
+        downloads: ctx.downloads,
     };
 
     audit!(
@@ -663,6 +666,7 @@ mod tests {
             settings: &settings,
             http: &http,
             audit: &audit,
+            downloads: None,
             staging_root: &tmp.path().join("staging"),
             backup_root: &tmp.path().join("backups"),
         };

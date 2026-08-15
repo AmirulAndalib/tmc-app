@@ -77,6 +77,8 @@ pub struct InstallCtx<'a> {
     pub settings: &'a AppSettings,
     pub http: &'a reqwest::Client,
     pub audit: &'a Audit,
+    /// The download queue, so an install's fetches are visible and pausable.
+    pub downloads: Option<&'a crate::download::DownloadManager>,
     /// Which sandbox (cloud `install`) to materialise into. `None` = the app's main
     /// game directory.
     pub install_id: Option<i64>,
@@ -326,6 +328,7 @@ pub async fn install_one(
         jail: &jail,
         http: ctx.http,
         audit: ctx.audit,
+        downloads: ctx.downloads,
     };
 
     let run_ctx = context_for(entry, ctx);
@@ -399,6 +402,7 @@ async fn run_uninstall(
         jail,
         http: ctx.http,
         audit: ctx.audit,
+        downloads: ctx.downloads,
     };
 
     let steps = rule

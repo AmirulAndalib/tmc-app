@@ -114,6 +114,21 @@ pub fn run() {
 
             app.manage(state);
 
+            /*
+             * The download queue's bridge to the webview, and the queue itself
+             * restored from the last session. Both after `manage`, because both
+             * reach the state through the handle.
+             */
+            commands::downloads::spawn_bridge(app.handle().clone());
+
+            let restore_handle = app.handle().clone();
+
+            tauri::async_runtime::spawn(async move {
+                use tauri::Manager;
+
+                commands::downloads::restore(&restore_handle.state::<AppState>()).await;
+            });
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -162,6 +177,45 @@ pub fn run() {
             commands::library::launch_preview,
             commands::library::launch_install,
             commands::library::launch_available,
+            commands::sandbox::sandbox_list,
+            commands::sandbox::sandbox_get,
+            commands::sandbox::sandbox_create,
+            commands::sandbox::sandbox_patch,
+            commands::sandbox::sandbox_delete,
+            commands::sandbox::sandbox_set_default,
+            commands::sandbox::sandbox_add_mod,
+            commands::sandbox::sandbox_remove_mod,
+            commands::sandbox::sandbox_set_mod_enabled,
+            commands::sandbox::sandbox_reorder,
+            commands::sandbox::sandbox_stage,
+            commands::sandbox::sandbox_deploy,
+            commands::sandbox::sandbox_purge,
+            commands::sandbox::sandbox_verify,
+            commands::sandbox::sandbox_strategies,
+            commands::sandbox::sandbox_spec,
+            commands::downloads::download_list,
+            commands::downloads::download_pause,
+            commands::downloads::download_resume,
+            commands::downloads::download_cancel,
+            commands::downloads::download_set_priority,
+            commands::downloads::download_set_limit,
+            commands::downloads::download_set_global_limit,
+            commands::downloads::download_set_concurrency,
+            commands::downloads::download_clear_finished,
+            commands::detect::detect_games,
+            commands::detect::detect_apply,
+            commands::rcon::rcon_list,
+            commands::rcon::rcon_create,
+            commands::rcon::rcon_update,
+            commands::rcon::rcon_set_password,
+            commands::rcon::rcon_delete,
+            commands::rcon::rcon_connect,
+            commands::rcon::rcon_disconnect,
+            commands::rcon::rcon_is_connected,
+            commands::rcon::rcon_exec,
+            commands::rcon::rcon_history,
+            commands::rcon::rcon_clear_history,
+            commands::rcon::rcon_suggest_protocol,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
