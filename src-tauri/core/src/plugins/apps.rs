@@ -865,7 +865,7 @@ impl AppPluginFile {
             // where the game directory lookup happens.
             apps: vec![],
             permissions: Permissions {
-                fs: self.permissions.fs.clone(),
+                fs: self.launch_grants(),
                 net: self.permissions.net.clone(),
                 query: false,
             },
@@ -873,6 +873,37 @@ impl AppPluginFile {
             server_query: None,
             theme: None,
         }
+    }
+
+    /// The rule's own grants, plus the one a launch rule always needs.
+    ///
+    /// A launch spec's only paths are an executable and a working directory
+    /// inside the game folder, and `launch::plan` resolves both with
+    /// `write: false`. Making an author declare "I may READ the folder I am
+    /// launching out of" is a footgun with no security value: the grant is
+    /// read-only, the jail still refuses anything outside the root, and the
+    /// only thing the requirement actually achieves is that a launch rule with
+    /// an empty `permissions` block — which is what every example and every
+    /// obvious first draft has — fails to resolve its own executable.
+    ///
+    /// The write side is untouched. A launch rule cannot be given one here,
+    /// and one it declares for itself still has to be declared.
+    fn launch_grants(&self) -> Vec<FsGrant> {
+        let mut grants = self.permissions.fs.clone();
+
+        if self.kind == AppPluginKind::Launch
+            && !grants
+                .iter()
+                .any(|g| g.root == FsRoot::GameDir && g.path.is_empty() && !g.write)
+        {
+            grants.push(FsGrant {
+                root: FsRoot::GameDir,
+                path: String::new(),
+                write: false,
+            });
+        }
+
+        grants
     }
 
     /// A stable, path-safe id for this rule.
@@ -1314,6 +1345,110 @@ manage:
             .expect("matched");
 
         assert_eq!(gta.manage.as_ref().expect("manage").uninstall.len(), 1);
+    }
+
+    /// A launch rule can resolve its own executable with an empty permission
+    /// block.
+    ///
+    /// The regression: it could not. `launch::plan` resolves the executable
+    /// through the jail as `gameDir`, and a rule declaring no grants had no
+    /// `gameDir` — so every launch rule that did not think to ask for read
+    /// access to the folder it was launching out of failed with a jail error,
+    /// including the shipped example. The grant added for it is READ-ONLY,
+    /// which is the whole reason requiring it bought nothing.
+    #[test]
+    fn a_launch_rule_may_read_the_folder_it_launches_from() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let root = tmp.path();
+
+        write(
+            root,
+            "app/minecraft/launch.json",
+            r#"{
+                "manifestVersion": 1,
+                "permissions": {},
+                "launch": { "exec": "run.sh" }
+            }"#,
+        );
+
+        let plugins = AppPlugins::load(root);
+        let rule = plugins.launch_for("minecraft", None).expect("loaded");
+        let manifest = rule.as_manifest();
+
+        let grant = manifest
+            .permissions
+            .fs
+            .iter()
+            .find(|g| g.root == FsRoot::GameDir)
+            .expect("a launch rule gets a gameDir grant");
+
+        assert!(grant.path.is_empty());
+        assert!(!grant.write, "read-only, and that is the point");
+    }
+
+    /// The grant is for LAUNCH rules only. A manage rule that wants to write
+    /// into the game folder still has to say so.
+    #[test]
+    fn a_manage_rule_gets_no_free_grant() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let root = tmp.path();
+
+        write(
+            root,
+            "app/minecraft/manage_mod.json",
+            r#"{
+                "manifestVersion": 1,
+                "match": { "extensions": ["jar"] },
+                "permissions": {},
+                "manage": { "install": [], "uninstall": [] }
+            }"#,
+        );
+
+        let plugins = AppPlugins::load(root);
+
+        let rule = plugins
+            .choose("minecraft", AppPluginKind::ManageMod, "x.jar", None)
+            .expect("loaded");
+
+        assert!(
+            rule.as_manifest().permissions.fs.is_empty(),
+            "nothing is granted to a rule that asked for nothing"
+        );
+    }
+
+    /// A launch rule that DOES declare a write grant keeps it. The implicit
+    /// grant is an addition, not a replacement — a rule that legitimately
+    /// writes a config before starting the game must not silently lose the
+    /// permission it declared.
+    #[test]
+    fn an_explicit_grant_on_a_launch_rule_survives() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let root = tmp.path();
+
+        write(
+            root,
+            "app/minecraft/launch.json",
+            r#"{
+                "manifestVersion": 1,
+                "permissions": {
+                    "fs": [{ "root": "gameDir", "path": "config", "write": true }]
+                },
+                "launch": { "exec": "run.sh" }
+            }"#,
+        );
+
+        let plugins = AppPlugins::load(root);
+        let manifest = plugins
+            .launch_for("minecraft", None)
+            .expect("loaded")
+            .as_manifest();
+
+        assert_eq!(manifest.permissions.fs.len(), 2);
+        assert!(manifest
+            .permissions
+            .fs
+            .iter()
+            .any(|g| g.path == "config" && g.write));
     }
 
     #[test]

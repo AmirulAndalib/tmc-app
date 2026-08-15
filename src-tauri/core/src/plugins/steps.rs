@@ -14,7 +14,7 @@
 
 use std::collections::HashMap;
 use std::io::Read;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
@@ -155,6 +155,29 @@ impl Executor<'_> {
         }
     }
 
+    /// Resolve a step's path, with its placeholders filled.
+    ///
+    /// **Filled BEFORE the jail resolves it, never after.** Every lexical
+    /// rejection in `join_relative` — `../`, an absolute path, a drive prefix,
+    /// a NUL — then applies to the SUBSTITUTED value, so an item whose name is
+    /// `../../../etc` is refused by exactly the check that refuses a literal
+    /// one. Filling afterwards would mean checking a path and then building a
+    /// different one, which is the shape of every path-traversal bug there is.
+    ///
+    /// Paths need this as much as URLs do: a rule that writes
+    /// `mods/{fileName}` is how nearly every install rule names its output, and
+    /// without substitution it produces a file called `{fileName}` — one file
+    /// that every mod for that game then overwrites.
+    fn resolve(&self, path_ref: &PathRef, ctx: &RunContext, write: bool) -> AppResult<PathBuf> {
+        self.jail.resolve(
+            &PathRef {
+                root: path_ref.root,
+                path: ctx.fill(&path_ref.path),
+            },
+            write,
+        )
+    }
+
     async fn run_step(
         &self,
         step: &Step,
@@ -168,7 +191,7 @@ impl Executor<'_> {
                 sha256,
                 max_bytes,
             } => {
-                let target = self.jail.resolve(to, true)?;
+                let target = self.resolve(to, ctx, true)?;
                 let resolved = ctx.fill(url);
 
                 self.download(&resolved, &target, sha256.as_deref(), *max_bytes)
@@ -183,8 +206,8 @@ impl Executor<'_> {
                 strip,
                 include,
             } => {
-                let source = self.jail.resolve(from, false)?;
-                let dest = self.jail.resolve(to, true)?;
+                let source = self.resolve(from, ctx, false)?;
+                let dest = self.resolve(to, ctx, true)?;
 
                 let written = self.extract(&source, &dest, *strip, include)?;
 
@@ -201,8 +224,8 @@ impl Executor<'_> {
             }
 
             Step::Copy { from, to } => {
-                let source = self.jail.resolve(from, false)?;
-                let dest = self.jail.resolve(to, true)?;
+                let source = self.resolve(from, ctx, false)?;
+                let dest = self.resolve(to, ctx, true)?;
 
                 ensure_parent(&dest)?;
                 std::fs::copy(&source, &dest)?;
@@ -211,8 +234,8 @@ impl Executor<'_> {
             }
 
             Step::Move { from, to } => {
-                let source = self.jail.resolve(from, true)?;
-                let dest = self.jail.resolve(to, true)?;
+                let source = self.resolve(from, ctx, true)?;
+                let dest = self.resolve(to, ctx, true)?;
 
                 ensure_parent(&dest)?;
 
@@ -231,14 +254,14 @@ impl Executor<'_> {
             }
 
             Step::Mkdir { path } => {
-                let dir = self.jail.resolve(path, true)?;
+                let dir = self.resolve(path, ctx, true)?;
                 std::fs::create_dir_all(&dir)?;
 
                 applied.push(display(&dir));
             }
 
             Step::Remove { path } => {
-                let target = self.jail.resolve(path, true)?;
+                let target = self.resolve(path, ctx, true)?;
 
                 if target.is_dir() {
                     std::fs::remove_dir_all(&target)?;
@@ -250,7 +273,7 @@ impl Executor<'_> {
             }
 
             Step::WriteText { path, content } => {
-                let target = self.jail.resolve(path, true)?;
+                let target = self.resolve(path, ctx, true)?;
 
                 ensure_parent(&target)?;
                 std::fs::write(&target, ctx.fill(content))?;
@@ -263,7 +286,7 @@ impl Executor<'_> {
                 pointer,
                 value,
             } => {
-                let target = self.jail.resolve(path, true)?;
+                let target = self.resolve(path, ctx, true)?;
 
                 self.patch_json(&target, pointer, value)?;
 
@@ -748,6 +771,8 @@ pub fn required_roots(steps: &[Step]) -> Vec<&'static str> {
 mod tests {
     use super::*;
 
+    use std::path::PathBuf;
+
     #[test]
     fn strip_drops_leading_components() {
         let out = strip_and_filter(Path::new("pkg-1.0/mods/a.jar"), 1, &[]);
@@ -774,5 +799,144 @@ mod tests {
         assert_eq!(ctx.fill("https://x.test/{id}.zip"), "https://x.test/42.zip");
         // No expression evaluation, no recursion into the substituted value.
         assert_eq!(ctx.fill("{unknown}"), "{unknown}");
+    }
+
+    // ------------------------------------------------- Placeholders in paths
+
+    /// A manifest that may write anywhere under the game folder.
+    fn writable_manifest() -> Manifest {
+        Manifest {
+            manifest_version: 1,
+            id: "app.test".into(),
+            name: "t".into(),
+            version: "1".into(),
+            author: "t".into(),
+            description: None,
+            homepage: None,
+            apps: vec![],
+            permissions: crate::plugins::manifest::Permissions {
+                fs: vec![crate::plugins::manifest::FsGrant {
+                    root: crate::plugins::manifest::FsRoot::GameDir,
+                    path: String::new(),
+                    write: true,
+                }],
+                ..Default::default()
+            },
+            installer: None,
+            server_query: None,
+            theme: None,
+        }
+    }
+
+    fn jail_over(manifest: &Manifest, game: &Path) -> Jail {
+        let mut available: HashMap<&'static str, PathBuf> = HashMap::new();
+
+        available.insert("gameDir", game.to_path_buf());
+
+        Jail::build(manifest, &available).expect("jail")
+    }
+
+    /// Write one file through the executor, and say whether it worked.
+    async fn write_through(game: &Path, audit_at: &Path, template: &str, ctx: &RunContext) -> bool {
+        let manifest = writable_manifest();
+        let jail = jail_over(&manifest, game);
+        let audit = Audit::new(audit_at.to_path_buf());
+
+        let executor = Executor {
+            manifest: &manifest,
+            jail: &jail,
+            http: &reqwest::Client::new(),
+            audit: &audit,
+            downloads: None,
+        };
+
+        let steps = vec![Step::WriteText {
+            path: PathRef {
+                root: crate::plugins::manifest::FsRoot::GameDir,
+                path: template.into(),
+            },
+            content: "x".into(),
+        }];
+
+        executor.run(&steps, ctx).await.ok
+    }
+
+    /// A placeholder in a PATH is filled, exactly as one in a URL is.
+    ///
+    /// The regression: they were not. `mods/{fileName}` produced a file
+    /// literally called `{fileName}`, so every mod for a game wrote to the same
+    /// one — and the shipped example rules all use that spelling. It survived
+    /// because a path with braces in it is a perfectly valid path, so nothing
+    /// failed until a mod was actually installed.
+    #[tokio::test]
+    async fn a_placeholder_in_a_path_is_filled() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let game = tmp.path().join("game");
+
+        std::fs::create_dir_all(&game).expect("mkdir");
+
+        let ctx = RunContext(HashMap::from([("fileName".into(), "cool.jar".into())]));
+
+        assert!(
+            write_through(
+                &game,
+                &tmp.path().join("audit.jsonl"),
+                "mods/{fileName}",
+                &ctx
+            )
+            .await
+        );
+
+        assert!(game.join("mods/cool.jar").is_file(), "the filled name");
+        assert!(
+            !game.join("mods/{fileName}").exists(),
+            "and not the literal one"
+        );
+    }
+
+    /// Filling happens BEFORE the jail resolves, so a hostile value is refused
+    /// by the same check that refuses a hostile literal.
+    ///
+    /// Item names are author-written text off the network. Were substitution to
+    /// run after the containment check, this would be a plain traversal.
+    #[tokio::test]
+    async fn a_placeholder_cannot_carry_a_path_out_of_the_jail() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let game = tmp.path().join("game");
+
+        std::fs::create_dir_all(&game).expect("mkdir");
+
+        let cases = [
+            // Traversal out of the subdirectory the template names.
+            ("mods/{itemName}", "../../escaped.txt"),
+            ("mods/{itemName}", "../../../escaped.txt"),
+            // A template that is NOTHING but a placeholder, where an absolute
+            // value really is absolute — `Path::join` would discard the base.
+            ("{itemName}", "/etc/escaped"),
+            ("{itemName}", "C:\\Windows\\escaped"),
+            ("{itemName}", "../escaped.txt"),
+        ];
+
+        for (template, hostile) in cases {
+            let ctx = RunContext(HashMap::from([("itemName".into(), hostile.to_string())]));
+
+            assert!(
+                !write_through(&game, &tmp.path().join("audit.jsonl"), template, &ctx).await,
+                "{template} filled with {hostile} should be refused"
+            );
+        }
+
+        /*
+         * NOT in the list, and worth saying why: `mods/{itemName}` filled with
+         * `/etc/escaped` produces `mods//etc/escaped`, which is a RELATIVE path
+         * with an empty component in it and resolves inside the jail. It is
+         * allowed, and allowing it is correct — an absolute-looking value in
+         * the middle of a template is not absolute.
+         */
+
+        assert!(
+            !tmp.path().join("escaped.txt").exists(),
+            "nothing landed outside"
+        );
     }
 }
