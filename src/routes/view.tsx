@@ -12,13 +12,20 @@ import {
 import { Button } from '@modcommunity/shared'
 
 import { api } from '~/lib/api/client'
-import { ContentKindSchema } from '~/lib/api/contract'
+import {
+    ContentKindSchema,
+    type ContentKindT,
+    type ContentSummaryT,
+} from '~/lib/api/contract'
 import { appLabel } from '~/lib/api/labels'
 import { opensExternally } from '~/lib/external'
 import Markdown from '~/components/markdown'
 import ServerPanel from '~/components/server-panel'
 import InstallButton from '~/components/install-button'
 import SubscribeButton from '~/components/subscribe-button'
+import Gallery from '~/components/gallery'
+import ReportButton from '~/components/report-button'
+import Reviews from '~/components/reviews'
 
 /**
  * A content item's page — assets, mods, servers, maps, articles, communities,
@@ -217,22 +224,19 @@ export default function ViewRoute() {
                     </div>
                 )}
 
-                {/* ------------------------------------------------- Media */}
-                {media.length > 0 && (
-                    <div className="flex gap-2 overflow-x-auto pb-1">
-                        {media
-                            .filter((m) => m.url)
-                            .map((m) => (
-                                <img
-                                    key={m.id}
-                                    src={m.url!}
-                                    alt={m.title ?? ''}
-                                    loading="lazy"
-                                    className="h-32 shrink-0 rounded-lg object-cover"
-                                />
-                            ))}
-                    </div>
-                )}
+                {/* ------------------------------------------------- Stats */}
+                <Stats summary={summary} />
+
+                {/* --------------------------------------------- Screenshots */}
+                <Gallery
+                    items={media
+                        .filter((m) => m.url)
+                        .map((m) => ({
+                            id: m.id,
+                            url: m.url!,
+                            title: m.title,
+                        }))}
+                />
 
                 {external ? (
                     <ExternalBody summary={summary} />
@@ -287,6 +291,23 @@ export default function ViewRoute() {
                     </section>
                 )}
 
+                {/*
+                 * Reviews last, under everything the item itself says. They are
+                 * the longest section by far and putting them above the release
+                 * list would bury the thing most people came for.
+                 */}
+                {REVIEWABLE.has(summary.kind) && (
+                    <Reviews kind={summary.kind} id={Number(summary.id)} />
+                )}
+
+                <div className="flex justify-end">
+                    <ReportButton
+                        kind={summary.kind}
+                        id={summary.id}
+                        name={summary.name}
+                    />
+                </div>
+
                 {links.length > 0 && (
                     <section>
                         <h2 className="mb-2 text-sm font-semibold">Links</h2>
@@ -311,6 +332,71 @@ export default function ViewRoute() {
                 )}
             </div>
         </article>
+    )
+}
+
+/**
+ * Kinds that have reviews.
+ *
+ * Mirrors `REVIEW_FIELD` on the server, which is the authority: a `collection`
+ * is a list somebody made and the things in it carry the opinions, and a
+ * `user` is reviewed on the website through a different surface entirely.
+ * Asking for reviews of a kind the server has no column for would be a 400 on
+ * every one of those pages.
+ */
+const REVIEWABLE = new Set<ContentKindT>([
+    'mod',
+    'asset',
+    'server',
+    'serverMap',
+    'article',
+    'community',
+])
+
+/**
+ * The numbers under the title.
+ *
+ * The website shows these in a sidebar; an app window is too narrow for one, so
+ * they are a row. Zeroes are omitted rather than shown — a fresh mod reading
+ * "0 downloads · 0 favourites · 0 comments" is three facts nobody needed and
+ * one impression ("nobody uses this") that the numbers do not support.
+ */
+function Stats({ summary }: { summary: ContentSummaryT }) {
+    const entries: { label: string; value: string }[] = []
+
+    const add = (value: number, one: string, many: string) => {
+        if (value > 0)
+            entries.push({
+                label: value === 1 ? one : many,
+                value: value.toLocaleString(),
+            })
+    }
+
+    add(summary.stats.downloads, 'download', 'downloads')
+    add(summary.stats.views, 'view', 'views')
+    add(summary.stats.favorites, 'favourite', 'favourites')
+    add(summary.stats.comments, 'comment', 'comments')
+
+    if (summary.stats.rating !== null)
+        entries.push({
+            label: `from ${summary.stats.reviews} review${summary.stats.reviews === 1 ? '' : 's'}`,
+            value: `${summary.stats.rating.toFixed(1)}★`,
+        })
+
+    if (entries.length === 0) return null
+
+    return (
+        <dl className="flex flex-wrap gap-x-5 gap-y-1 text-xs">
+            {entries.map((entry) => (
+                <div key={entry.label} className="flex items-baseline gap-1.5">
+                    <dt className="sr-only">{entry.label}</dt>
+                    <dd className="font-medium">{entry.value}</dd>
+                    <span aria-hidden className="text-muted">
+                        {entry.label}
+                    </span>
+                </div>
+            ))}
+        </dl>
     )
 }
 

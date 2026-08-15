@@ -1,10 +1,4 @@
-import {
-    useCallback,
-    useEffect,
-    useLayoutEffect,
-    useRef,
-    useState,
-} from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import {
     FiKey,
@@ -121,16 +115,13 @@ export default function RconRoute() {
 
             {servers.length === 0 && !adding && (
                 <div className="rounded-xl border border-dashed border-border p-8 text-center">
-                    <FiServer
-                        aria-hidden
-                        className="mx-auto size-6 text-muted"
-                    />
+                    <FiServer aria-hidden className="mx-auto size-6 text-muted" />
                     <p className="mt-2 text-sm">No servers saved yet</p>
                     <p className="mx-auto mt-1 max-w-md text-xs text-muted">
-                        Add one with its RCON address and password. A server on
-                        your own network is fine — this is the one part of the
-                        app that reaches a local address, because that is where
-                        most people&rsquo;s servers are.
+                        Add one with its RCON address and password. A server on your
+                        own network is fine — this is the one part of the app that
+                        reaches a local address, because that is where most
+                        people&rsquo;s servers are.
                     </p>
                 </div>
             )}
@@ -352,18 +343,14 @@ function Console({
         if (next >= history.current.length) return
 
         cursor.current = next
-        setCommand(
-            history.current[history.current.length - 1 - next] ?? ''
-        )
+        setCommand(history.current[history.current.length - 1 - next] ?? '')
     }
 
     return (
         <div className="flex min-w-0 flex-col gap-3">
             <header className="flex flex-wrap items-center gap-2 rounded-xl border border-border bg-surface p-3">
                 <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-medium">
-                        {server.name}
-                    </p>
+                    <p className="truncate text-sm font-medium">{server.name}</p>
                     <p className="selectable truncate text-[0.7rem] text-muted">
                         {server.host}:{server.port} ·{' '}
                         {server.protocol === 'frostbite'
@@ -408,9 +395,7 @@ function Console({
                 <button
                     type="button"
                     aria-label="Delete this server"
-                    onClick={() =>
-                        void ipc.rconDelete(server.id).then(onDeleted)
-                    }
+                    onClick={() => void ipc.rconDelete(server.id).then(onDeleted)}
                     className="rounded-lg border border-border p-1.5 text-muted hover:border-danger hover:text-danger"
                 >
                     <FiTrash2 className="size-3" />
@@ -430,8 +415,8 @@ function Console({
 
             {!server.hasPassword && (
                 <p className="rounded-lg border border-warning/50 px-3 py-2 text-xs text-warning">
-                    Set the RCON password before connecting. It is encrypted on
-                    this device and never leaves it.
+                    Set the RCON password before connecting. It is encrypted on this
+                    device and never leaves it.
                 </p>
             )}
 
@@ -482,9 +467,7 @@ function Console({
                         void send()
                     }}
                 >
-                    <span className="pl-1 font-mono text-xs text-muted">
-                        &gt;
-                    </span>
+                    <span className="pl-1 font-mono text-xs text-muted">&gt;</span>
                     <input
                         value={command}
                         disabled={!server.hasPassword}
@@ -583,8 +566,8 @@ function PasswordForm({
 
             <p className="text-[0.7rem] text-muted">
                 Encrypted with a key held in your operating system&rsquo;s
-                credential store. It is never sent to The Modding Community and
-                no part of the app can read it back.
+                credential store. It is never sent to The Modding Community and no
+                part of the app can read it back.
             </p>
 
             {error && <p className="text-xs text-danger">{error}</p>}
@@ -687,9 +670,7 @@ function AddServer({
                         label="RCON protocol"
                         fullWidth
                         value={protocol}
-                        onChange={(next) =>
-                            setProtocol(next)
-                        }
+                        onChange={(next) => setProtocol(next)}
                         options={PROTOCOLS.map((p) => ({
                             value: p.value,
                             label: p.label,
@@ -732,8 +713,8 @@ function AddServer({
                     className="mt-1 w-full rounded-lg border border-border bg-background px-2 py-1.5 text-sm"
                 />
                 <span className="mt-1 block text-[0.7rem] text-muted">
-                    Stored encrypted on this device only. Leave it blank to add
-                    the server now and set one later.
+                    Stored encrypted on this device only. Leave it blank to add the
+                    server now and set one later.
                 </span>
             </label>
 

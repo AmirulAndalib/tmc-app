@@ -8,6 +8,26 @@ import { useSettings } from '~/lib/settings/provider'
 import { Row, Section, Select, Toggle } from '~/components/form'
 
 /**
+ * The speed-limit presets, in bytes per second.
+ *
+ * A dropdown rather than a number field: the useful answers are all round
+ * numbers and a field invites somebody to type `1000` meaning a megabyte and
+ * get a kilobyte. `0` is the "no limit" value the settings store uses, so the
+ * option and the stored value are the same thing.
+ */
+const DOWNLOAD_LIMITS = [
+    { value: '0', label: 'No limit' },
+    { value: String(256 * 1024), label: '256 KB/s' },
+    { value: String(512 * 1024), label: '512 KB/s' },
+    { value: String(1024 * 1024), label: '1 MB/s' },
+    { value: String(2 * 1024 * 1024), label: '2 MB/s' },
+    { value: String(5 * 1024 * 1024), label: '5 MB/s' },
+    { value: String(10 * 1024 * 1024), label: '10 MB/s' },
+    { value: String(25 * 1024 * 1024), label: '25 MB/s' },
+    { value: String(50 * 1024 * 1024), label: '50 MB/s' },
+]
+
+/**
  * App settings — local to this install, written to `settings.json` by Rust.
  *
  * Nothing here leaves the machine. That is the promise of the App/Account split
@@ -136,6 +156,60 @@ export default function AppSettingsRoute() {
                                 void setApp({
                                     latencyConcurrency: Number(e.target.value),
                                 })
+                            }
+                        />
+                    }
+                />
+            </Section>
+
+            <Section
+                title="Downloads"
+                hint="Applies to everything the app fetches — a mod's files, a sandbox's staging, a plugin's own downloads."
+            >
+                <Row
+                    label="Speed limit"
+                    hint="Keeps the rest of your connection usable while a large modpack downloads."
+                    control={
+                        <Select
+                            label="Download speed limit"
+                            value={String(app.downloadLimitBps)}
+                            onChange={(next) =>
+                                void ipc.downloadSetGlobalLimit(
+                                    Number(next) > 0 ? Number(next) : null
+                                )
+                            }
+                            options={DOWNLOAD_LIMITS}
+                        />
+                    }
+                />
+                <Row
+                    label="At the same time"
+                    hint={`${app.downloadConcurrency} file${app.downloadConcurrency === 1 ? '' : 's'} · more is not faster once the link is the bottleneck`}
+                    control={
+                        <input
+                            type="range"
+                            aria-label="Simultaneous downloads"
+                            min={1}
+                            max={8}
+                            step={1}
+                            value={app.downloadConcurrency}
+                            onChange={(e) =>
+                                void ipc.downloadSetConcurrency(
+                                    Number(e.target.value)
+                                )
+                            }
+                        />
+                    }
+                />
+                <Row
+                    label="Keep finished downloads"
+                    hint="Leaves them in the list until you clear them."
+                    control={
+                        <Toggle
+                            label="Keep finished downloads"
+                            checked={app.downloadKeepHistory}
+                            onChange={(downloadKeepHistory) =>
+                                void setApp({ downloadKeepHistory })
                             }
                         />
                     }

@@ -110,13 +110,17 @@ export function DownloadsProvider({ children }: { children: ReactNode }) {
         let stop: (() => void) | null = null
         let live = true
 
-        void subscribe('tmc://download', DownloadSchema.partial({ id: true }), (payload) => {
-            // The `idle` event has no id. Nothing to merge; the flush below
-            // still lets a consumer notice the queue emptied.
-            if (payload.id) rows.current.set(payload.id, payload as DownloadT)
+        void subscribe(
+            'tmc://download',
+            DownloadSchema.partial({ id: true }),
+            (payload) => {
+                // The `idle` event has no id. Nothing to merge; the flush below
+                // still lets a consumer notice the queue emptied.
+                if (payload.id) rows.current.set(payload.id, payload as DownloadT)
 
-            flush()
-        })
+                flush()
+            }
+        )
             .then((unlisten) => {
                 if (live) stop = unlisten
                 else unlisten()
@@ -166,9 +170,7 @@ export function DownloadsProvider({ children }: { children: ReactNode }) {
             version,
             byId: (id) => rows.current.get(id),
             forSandbox: (sandboxId) =>
-                downloads.filter(
-                    (d) => d.meta.sandboxId === String(sandboxId)
-                ),
+                downloads.filter((d) => d.meta.sandboxId === String(sandboxId)),
             active: downloads.filter(
                 (d) => d.status === 'running' || d.status === 'queued'
             ).length,

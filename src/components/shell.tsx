@@ -177,9 +177,7 @@ export default function Shell() {
                                     }`}
                                 >
                                     <tab.icon className="size-4 shrink-0" />
-                                    <span className="truncate">
-                                        {tab.label}
-                                    </span>
+                                    <span className="truncate">{tab.label}</span>
                                     {tab.badge === 'downloads' &&
                                         downloads.active > 0 && (
                                             <span className="ml-auto rounded-full bg-accent px-1.5 py-0.5 text-[0.6rem] font-medium text-accent-foreground">
@@ -230,28 +228,30 @@ export default function Shell() {
                             className="flex shrink-0 items-stretch border-t border-border bg-surface"
                             style={{ paddingBottom: 'var(--safe-bottom)' }}
                         >
-                            {TABS.filter((tab) => tab.compact !== false).map((tab) => (
-                                <NavLink
-                                    key={tab.to}
-                                    to={tab.to}
-                                    className={`flex flex-1 flex-col items-center gap-1 py-2 text-[0.65rem] transition-colors ${
-                                        isActive(tab, pathname)
-                                            ? 'text-accent'
-                                            : 'text-muted'
-                                    }`}
-                                >
-                                    <span className="relative">
-                                        <tab.icon className="size-5" />
-                                        {tab.badge === 'downloads' &&
-                                            downloads.active > 0 && (
-                                                <span className="absolute -right-2 -top-1 min-w-3.5 rounded-full bg-accent px-1 text-[0.55rem] font-medium leading-tight text-accent-foreground">
-                                                    {downloads.active}
-                                                </span>
-                                            )}
-                                    </span>
-                                    {tab.label}
-                                </NavLink>
-                            ))}
+                            {TABS.filter((tab) => tab.compact !== false).map(
+                                (tab) => (
+                                    <NavLink
+                                        key={tab.to}
+                                        to={tab.to}
+                                        className={`flex flex-1 flex-col items-center gap-1 py-2 text-[0.65rem] transition-colors ${
+                                            isActive(tab, pathname)
+                                                ? 'text-accent'
+                                                : 'text-muted'
+                                        }`}
+                                    >
+                                        <span className="relative">
+                                            <tab.icon className="size-5" />
+                                            {tab.badge === 'downloads' &&
+                                                downloads.active > 0 && (
+                                                    <span className="absolute -right-2 -top-1 min-w-3.5 rounded-full bg-accent px-1 text-[0.55rem] font-medium leading-tight text-accent-foreground">
+                                                        {downloads.active}
+                                                    </span>
+                                                )}
+                                        </span>
+                                        {tab.label}
+                                    </NavLink>
+                                )
+                            )}
                         </nav>
                     )}
                 </main>

@@ -53,8 +53,7 @@ export default function SpeedGraph({
     const width = 240
 
     const { area, line, peak, current } = useMemo(() => {
-        if (samples.length === 0)
-            return { area: '', line: '', peak: 0, current: 0 }
+        if (samples.length === 0) return { area: '', line: '', peak: 0, current: 0 }
 
         const peak = Math.max(...samples)
         const scale = Math.max(peak, FLOOR_BPS)

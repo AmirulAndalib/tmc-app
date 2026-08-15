@@ -110,7 +110,11 @@ export default function Select<T extends string>({
     const selected = options.find((option) => option.value === value)
 
     const indexOfValue = useCallback(
-        () => Math.max(0, options.findIndex((option) => option.value === value)),
+        () =>
+            Math.max(
+                0,
+                options.findIndex((option) => option.value === value)
+            ),
         [options, value]
     )
 
@@ -268,7 +272,11 @@ export default function Select<T extends string>({
             const index = (from + step) % options.length
             const option = options[index]
 
-            if (option && !option.disabled && option.label.toLowerCase().startsWith(query)) {
+            if (
+                option &&
+                !option.disabled &&
+                option.label.toLowerCase().startsWith(query)
+            ) {
                 setActive(index)
 
                 if (!open) commit(option)

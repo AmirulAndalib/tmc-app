@@ -60,10 +60,7 @@ export default function DownloadsRoute() {
         const finished: DownloadT[] = []
 
         for (const download of queue.downloads) {
-            if (
-                download.status === 'done' ||
-                download.status === 'cancelled'
-            )
+            if (download.status === 'done' || download.status === 'cancelled')
                 finished.push(download)
             else active.push(download)
         }
@@ -114,8 +111,8 @@ export default function DownloadsRoute() {
                     <p className="text-sm">Nothing has been downloaded yet.</p>
                     <p className="mt-1 text-xs text-muted">
                         Files queue up here when you install a mod or stage a
-                        sandbox. You can pause, reorder and throttle them
-                        without leaving this screen.
+                        sandbox. You can pause, reorder and throttle them without
+                        leaving this screen.
                     </p>
                 </div>
             )}
@@ -156,10 +153,7 @@ export default function DownloadsRoute() {
 
                     {showFinished &&
                         finished.map((download) => (
-                            <DownloadCard
-                                key={download.id}
-                                download={download}
-                            />
+                            <DownloadCard key={download.id} download={download} />
                         ))}
                 </section>
             )}
@@ -279,8 +273,7 @@ function DownloadCard({ download }: { download: DownloadT }) {
             {download.error && (
                 <p className="selectable mt-2 text-[0.7rem] text-danger">
                     {download.error}
-                    {download.attempts > 1 &&
-                        ` (attempt ${download.attempts})`}
+                    {download.attempts > 1 && ` (attempt ${download.attempts})`}
                 </p>
             )}
 
@@ -357,8 +350,9 @@ function StatusText({ download }: { download: DownloadT }) {
             return (
                 <>
                     {formatBytes(download.done)}
-                    {download.total ? ` / ${formatBytes(download.total)}` : ''} ·{' '}
-                    {formatSpeed(download.speedBps)}
+                    {download.total
+                        ? ` / ${formatBytes(download.total)}`
+                        : ''} · {formatSpeed(download.speedBps)}
                     {download.etaSecs
                         ? ` · ${formatEta(download.etaSecs)} left`
                         : ''}

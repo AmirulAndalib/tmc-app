@@ -55,14 +55,7 @@ export function ApiOk<S extends z.ZodTypeAny>(schema: S) {
 /** Self-reported client identity. Untrusted — a label for the approval screen. */
 export const ClientInfoSchema = z.object({
     name: z.string().min(1).max(64),
-    platform: z.enum([
-        'windows',
-        'macos',
-        'linux',
-        'android',
-        'ios',
-        'unknown',
-    ]),
+    platform: z.enum(['windows', 'macos', 'linux', 'android', 'ios', 'unknown']),
     version: z.string().min(1).max(32),
 })
 
@@ -568,9 +561,7 @@ export const FacetsResponseSchema = z.object({
      * nothing, and a filter that can only ever return an empty list is worse
      * than no filter.
      */
-    countries: z
-        .array(RefSchema.extend({ count: z.number().int() }))
-        .default([]),
+    countries: z.array(RefSchema.extend({ count: z.number().int() })).default([]),
 })
 
 export type FacetsResponseT = z.infer<typeof FacetsResponseSchema>
@@ -984,7 +975,10 @@ export const DeviceDownloadReportRequest = z.object({
      * a device list renders, and the items are for the one device somebody
      * opened.
      */
-    items: z.array(DeviceDownloadItemSchema).max(MAX_REPORTED_DOWNLOADS).default([]),
+    items: z
+        .array(DeviceDownloadItemSchema)
+        .max(MAX_REPORTED_DOWNLOADS)
+        .default([]),
 })
 
 export const DeviceDownloadSchema = z.object({

@@ -341,8 +341,7 @@ export const ipc = {
     sandboxDeploy: (id: number, dryRun = false) =>
         call('sandbox_deploy', DeployReportSchema, { id, dryRun }),
 
-    sandboxPurge: (id: number) =>
-        call('sandbox_purge', PurgeReportSchema, { id }),
+    sandboxPurge: (id: number) => call('sandbox_purge', PurgeReportSchema, { id }),
 
     sandboxVerify: (id: number) =>
         call('sandbox_verify', VerifyReportSchema, { id }),
@@ -423,8 +422,7 @@ export const ipc = {
     /** Opens a session, so a wrong password is reported before a command is. */
     rconConnect: (id: number) => call('rcon_connect', z.void(), { id }),
     rconDisconnect: (id: number) => call('rcon_disconnect', z.void(), { id }),
-    rconIsConnected: (id: number) =>
-        call('rcon_is_connected', z.boolean(), { id }),
+    rconIsConnected: (id: number) => call('rcon_is_connected', z.boolean(), { id }),
 
     rconExec: (id: number, command: string, timeoutMs?: number) =>
         call('rcon_exec', RconReplySchema, { id, command, timeoutMs }),
@@ -432,8 +430,7 @@ export const ipc = {
     rconHistory: (id: number, limit?: number) =>
         call('rcon_history', z.array(RconHistorySchema), { id, limit }),
 
-    rconClearHistory: (id: number) =>
-        call('rcon_clear_history', z.void(), { id }),
+    rconClearHistory: (id: number) => call('rcon_clear_history', z.void(), { id }),
 
     rconSuggestProtocol: (queryProtocol: string | null) =>
         call('rcon_suggest_protocol', RconProtocolSchema, { queryProtocol }),

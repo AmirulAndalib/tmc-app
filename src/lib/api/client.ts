@@ -9,6 +9,8 @@ import {
     InstallListResponse,
     InstallSchema,
     MeResponseSchema,
+    ReportCreateResponse,
+    ReviewListResponse,
     SubscriptionSyncResponse,
     UserSettingsSchema,
     type BrowseQueryT,
@@ -126,6 +128,38 @@ export const api = {
         ),
 
     facets: (kind: ContentKindT) => get('/facets', FacetsResponseSchema, { kind }),
+
+    /**
+     * What people said about one item.
+     *
+     * Public, so a signed-out app shows the same reviews a browser does. Read
+     * only: writing one needs the website's own rate limiting, edit window and
+     * moderation hooks, and half of those living in a second place is how they
+     * drift.
+     */
+    reviews: (
+        kind: ContentKindT,
+        id: number,
+        options?: {
+            sort?: 'recent' | 'helpful' | 'rating'
+            cursor?: string | null
+        }
+    ) =>
+        get('/reviews', ReviewListResponse, {
+            kind,
+            id,
+            sort: options?.sort ?? 'recent',
+            cursor: options?.cursor ?? undefined,
+        }),
+
+    /** Report an item. Lands in the same moderation queue as the website's form. */
+    report: (input: {
+        kind: ContentKindT
+        id: number
+        type?: 'SPAM' | 'OTHER'
+        title: string
+        content: string
+    }) => send('POST', '/report', ReportCreateResponse, input),
 
     // -------------------------------------------------------- Subscriptions
     /**

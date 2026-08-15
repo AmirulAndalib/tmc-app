@@ -114,9 +114,8 @@ export default function SandboxesRoute() {
                 <div>
                     <h1 className="text-lg font-bold">Sandboxes</h1>
                     <p className="text-xs text-muted">
-                        Each one is its own set of mods and its own launch
-                        settings. Switching between them never re-downloads
-                        anything.
+                        Each one is its own set of mods and its own launch settings.
+                        Switching between them never re-downloads anything.
                     </p>
                 </div>
 
@@ -157,9 +156,7 @@ export default function SandboxesRoute() {
                             <button
                                 key={sandbox.id}
                                 type="button"
-                                onClick={() =>
-                                    navigate(`/sandboxes/${sandbox.id}`)
-                                }
+                                onClick={() => navigate(`/sandboxes/${sandbox.id}`)}
                                 className={`rounded-xl border p-3 text-left transition-colors ${
                                     sandbox.id === selectedId
                                         ? 'border-accent bg-surface'
@@ -190,9 +187,7 @@ export default function SandboxesRoute() {
 
                                 <p className="mt-0.5 truncate text-[0.7rem] text-muted">
                                     {sandbox.appName ?? 'Unknown game'}
-                                    {sandbox.loader
-                                        ? ` · ${sandbox.loader}`
-                                        : ''}
+                                    {sandbox.loader ? ` · ${sandbox.loader}` : ''}
                                     {sandbox.gameVersion
                                         ? ` ${sandbox.gameVersion}`
                                         : ''}
@@ -259,7 +254,9 @@ function SandboxDetail({
 
         void (async () => {
             if (sandbox.appSlug) {
-                const found = await ipc.sandboxSpec(sandbox.appSlug).catch(() => null)
+                const found = await ipc
+                    .sandboxSpec(sandbox.appSlug)
+                    .catch(() => null)
 
                 if (live) setSpec(found)
             }
@@ -302,8 +299,7 @@ function SandboxDetail({
                     row.appId === sandbox.appId &&
                     !row.isContainer &&
                     !sandbox.mods.some(
-                        (m) =>
-                            m.kind === row.kind && m.itemId === row.itemId
+                        (m) => m.kind === row.kind && m.itemId === row.itemId
                     )
             ),
         [library.rows, sandbox.appId, sandbox.mods]
@@ -323,8 +319,8 @@ function SandboxDetail({
                     </h2>
                     <p className="mt-1 text-xs text-muted">
                         Choose the game&rsquo;s folder, or set one for{' '}
-                        {sandbox.appName ?? 'this game'} under Settings →
-                        Games. Nothing is written until you deploy.
+                        {sandbox.appName ?? 'this game'} under Settings → Games.
+                        Nothing is written until you deploy.
                     </p>
 
                     <button
@@ -491,9 +487,7 @@ function SandboxDetail({
                                 />
 
                                 <div className="min-w-0 flex-1">
-                                    <p className="truncate text-sm">
-                                        {mod.name}
-                                    </p>
+                                    <p className="truncate text-sm">{mod.name}</p>
                                     <p className="text-[0.7rem] text-muted">
                                         {mod.stagedAt
                                             ? `Downloaded${mod.version ? ` · ${mod.version}` : ''}`
@@ -531,9 +525,7 @@ function SandboxDetail({
 
                                     <MoveButton
                                         label="Move down"
-                                        disabled={
-                                            index === sandbox.mods.length - 1
-                                        }
+                                        disabled={index === sandbox.mods.length - 1}
                                         onClick={() =>
                                             void run('order', () =>
                                                 ipc.sandboxReorder(
@@ -631,9 +623,7 @@ function SandboxSettings({
     const [error, setError] = useState<string | null>(null)
     const [confirming, setConfirming] = useState(false)
 
-    const patch = async (
-        next: Parameters<typeof ipc.sandboxPatch>[1]
-    ) => {
+    const patch = async (next: Parameters<typeof ipc.sandboxPatch>[1]) => {
         try {
             await ipc.sandboxPatch(sandbox.id, next)
             await onChanged()
@@ -717,9 +707,7 @@ function SandboxSettings({
                     <TextField
                         value={sandbox.loader ?? ''}
                         placeholder="fabric"
-                        onCommit={(value) =>
-                            void patch({ loader: value || null })
-                        }
+                        onCommit={(value) => void patch({ loader: value || null })}
                     />
                 </Labelled>
             </div>
@@ -776,9 +764,7 @@ function SandboxSettings({
                     <button
                         type="button"
                         onClick={() =>
-                            void ipc
-                                .sandboxSetDefault(sandbox.id)
-                                .then(onChanged)
+                            void ipc.sandboxSetDefault(sandbox.id).then(onChanged)
                         }
                         className="rounded-lg border border-border px-3 py-1.5 text-xs hover:border-accent"
                     >
@@ -799,9 +785,9 @@ function SandboxSettings({
                 <div className="rounded-lg border border-danger/50 p-3">
                     <p className="text-sm">Delete “{sandbox.name}”?</p>
                     <p className="mt-1 text-xs text-muted">
-                        Its files come out of the game folder first, and
-                        anything it displaced is put back. Downloaded mods stay
-                        on disk so another sandbox can use them.
+                        Its files come out of the game folder first, and anything it
+                        displaced is put back. Downloaded mods stay on disk so
+                        another sandbox can use them.
                     </p>
 
                     <div className="mt-3 flex gap-2">
@@ -845,9 +831,7 @@ function GameOption({
                 <div className="min-w-0">
                     <p className="text-sm">{option.label}</p>
                     {option.description && (
-                        <p className="text-xs text-muted">
-                            {option.description}
-                        </p>
+                        <p className="text-xs text-muted">{option.description}</p>
                     )}
                 </div>
                 <Toggle
@@ -954,7 +938,10 @@ function CreateSandbox({
             return
         }
 
-        void ipc.sandboxSpec(chosen.slug).then(setSpec).catch(() => setSpec(null))
+        void ipc
+            .sandboxSpec(chosen.slug)
+            .then(setSpec)
+            .catch(() => setSpec(null))
     }, [chosen?.slug])
 
     const create = async () => {
@@ -1048,8 +1035,8 @@ function CreateSandbox({
                 <div className="min-w-0">
                     <p className="text-sm">Keep in the cloud</p>
                     <p className="text-xs text-muted">
-                        Reproduces this sandbox when you sign in elsewhere. Turn
-                        it off to keep it on this device only.
+                        Reproduces this sandbox when you sign in elsewhere. Turn it
+                        off to keep it on this device only.
                     </p>
                 </div>
                 <Toggle
@@ -1103,15 +1090,13 @@ function DeploySummary({ report }: { report: DeployReportT }) {
                 <details className="mt-2">
                     <summary className="cursor-pointer text-muted">
                         {report.conflicts.length} file
-                        {report.conflicts.length === 1 ? '' : 's'} provided by
-                        more than one mod
+                        {report.conflicts.length === 1 ? '' : 's'} provided by more
+                        than one mod
                     </summary>
                     <ul className="mt-1 flex flex-col gap-0.5">
                         {report.conflicts.slice(0, 40).map((conflict) => (
                             <li key={conflict.path} className="selectable">
-                                <span className="text-muted">
-                                    {conflict.path}
-                                </span>{' '}
+                                <span className="text-muted">{conflict.path}</span>{' '}
                                 → {conflict.winner}
                                 <span className="text-muted">
                                     {' '}
@@ -1255,9 +1240,7 @@ function Empty({ title, body }: { title: string; body: string }) {
         <div className="p-8 text-center">
             <p className="text-sm font-medium">{title}</p>
             {body && (
-                <p className="mx-auto mt-1 max-w-md text-xs text-muted">
-                    {body}
-                </p>
+                <p className="mx-auto mt-1 max-w-md text-xs text-muted">{body}</p>
             )}
         </div>
     )

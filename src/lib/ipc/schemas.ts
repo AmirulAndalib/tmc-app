@@ -80,6 +80,11 @@ export const AppSettingsSchema = z.object({
     latencyConcurrency: z.number(),
     minimiseToTray: z.boolean(),
 
+    /** Ceiling across every download, bytes per second. `0` is unlimited. */
+    downloadLimitBps: z.number(),
+    downloadConcurrency: z.number(),
+    downloadKeepHistory: z.boolean(),
+
     requireSignedPlugins: z.boolean(),
     confirmEveryRun: z.boolean(),
 })
