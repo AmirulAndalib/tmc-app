@@ -19,12 +19,12 @@
 //!
 //! **The safety model is unchanged.** Everything here compiles down to the same
 //! [`Step`] vocabulary, executed by the same [`Executor`] through the same
-//! [`Sandbox`]. An app plugin cannot express anything a registry plugin cannot:
+//! [`Jail`]. An app plugin cannot express anything a registry plugin cannot:
 //! no shell, no absolute path, no environment read. What it adds is only the
 //! *selection* — which rule applies to which game, kind and file.
 //!
 //! [`Executor`]: crate::plugins::steps::Executor
-//! [`Sandbox`]: crate::plugins::sandbox::Sandbox
+//! [`Jail`]: crate::plugins::jail::Jail
 //!
 //! # Layout
 //!
@@ -218,7 +218,7 @@ pub struct AppPluginPermissions {
 /// and it is bounded to the point of being almost inexpressive:
 ///
 ///   * `exec` is a path RELATIVE to the game directory. There is no variant for
-///     an absolute path, and the same [`crate::plugins::sandbox`] rules that
+///     an absolute path, and the same [`crate::plugins::jail`] rules that
 ///     stop an installer escaping the jail are applied to it.
 ///   * `uri` is the alternative for games that launch through a client
 ///     (`steam://rungameid/271590`). It is handed to the OS opener, never to a
@@ -393,7 +393,7 @@ impl AppPluginFile {
         self.r#match.applies(file_name, loader)
     }
 
-    /// Compile into a [`Manifest`], so the existing sandbox and executor can
+    /// Compile into a [`Manifest`], so the existing jail and executor can
     /// run it unchanged.
     ///
     /// The synthetic id is derived from the source path, which is what makes
@@ -413,7 +413,7 @@ impl AppPluginFile {
             homepage: None,
             // App plugins are selected by SLUG, not by numeric app id — the
             // slug is what the directory name is. Leaving this empty means
-            // `sandbox_for` still receives the app id from the caller, which is
+            // `jail_for` still receives the app id from the caller, which is
             // where the game directory lookup happens.
             apps: vec![],
             permissions: Permissions {
@@ -1007,7 +1007,7 @@ manage:
     /// renamed without updating them would ship a reference that does not load.
     ///
     /// The teeth are in the SECOND half: parsing only proves the JSON/YAML is
-    /// well-formed, while building each rule's real sandbox and resolving every
+    /// well-formed, while building each rule's real jail and resolving every
     /// step path through it is what catches a rule whose grants and step paths
     /// disagree — the exact mistake an author copying an example inherits.
     #[test]
@@ -1043,7 +1043,7 @@ manage:
         let game = tmp.path().join("game");
         std::fs::create_dir_all(&game).expect("game dir");
 
-        let roots = crate::plugins::SandboxRoots {
+        let roots = crate::plugins::JailRoots {
             data: tmp.path().join("data"),
             cache: tmp.path().join("cache"),
         };
@@ -1061,12 +1061,12 @@ manage:
 
                 let manifest = rule.as_manifest();
 
-                let sandbox = crate::plugins::sandbox_for(&manifest, &roots, &settings, Some(1))
-                    .unwrap_or_else(|e| panic!("{} sandbox: {e}", rule.source));
+                let jail = crate::plugins::jail_for(&manifest, &roots, &settings, Some(1))
+                    .unwrap_or_else(|e| panic!("{} jail: {e}", rule.source));
 
                 for step in manage.install.iter().chain(&manage.uninstall) {
                     for (path_ref, write) in step_paths(step) {
-                        sandbox.resolve(path_ref, write).unwrap_or_else(|e| {
+                        jail.resolve(path_ref, write).unwrap_or_else(|e| {
                             panic!("{} step path '{}': {e}", rule.source, path_ref.path)
                         });
                     }

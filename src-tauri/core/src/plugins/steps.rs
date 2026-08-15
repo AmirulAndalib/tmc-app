@@ -1,7 +1,7 @@
 //! Executes an installer plugin's plan.
 //!
 //! Every step is audited before and after, every path goes through the
-//! [`Sandbox`], and every network fetch is bounded and host-checked. There is
+//! [`Jail`], and every network fetch is bounded and host-checked. There is
 //! no step that runs a program, so the worst a hostile manifest can achieve is
 //! writing junk into the directories the user explicitly granted — which is
 //! bad, recoverable, and fully recorded.
@@ -24,13 +24,13 @@ use crate::audit;
 use crate::error::{AppError, AppResult};
 use crate::logging::Audit;
 use crate::plugins::manifest::{Manifest, PathRef, Step};
-use crate::plugins::sandbox::Sandbox;
+use crate::plugins::jail::Jail;
 
 /// Hard cap on a single download, when the manifest does not set a smaller one.
 const DEFAULT_MAX_DOWNLOAD: u64 = 2 * 1024 * 1024 * 1024;
 
 /// Cap on total extracted bytes, per extract step. A zip bomb is a 40 KB file
-/// that becomes 5 GB; without this the sandbox's path checks are irrelevant
+/// that becomes 5 GB; without this the jail's path checks are irrelevant
 /// because the disk fills before anything escapes.
 const MAX_EXTRACT_BYTES: u64 = 8 * 1024 * 1024 * 1024;
 
@@ -80,7 +80,7 @@ impl RunContext {
 
 pub struct Executor<'a> {
     pub manifest: &'a Manifest,
-    pub sandbox: &'a Sandbox,
+    pub jail: &'a Jail,
     pub http: &'a reqwest::Client,
     pub audit: &'a Audit,
 }
@@ -155,7 +155,7 @@ impl Executor<'_> {
                 sha256,
                 max_bytes,
             } => {
-                let target = self.sandbox.resolve(to, true)?;
+                let target = self.jail.resolve(to, true)?;
                 let resolved = ctx.fill(url);
 
                 self.download(&resolved, &target, sha256.as_deref(), *max_bytes)
@@ -170,8 +170,8 @@ impl Executor<'_> {
                 strip,
                 include,
             } => {
-                let source = self.sandbox.resolve(from, false)?;
-                let dest = self.sandbox.resolve(to, true)?;
+                let source = self.jail.resolve(from, false)?;
+                let dest = self.jail.resolve(to, true)?;
 
                 let written = self.extract(&source, &dest, *strip, include)?;
 
@@ -188,8 +188,8 @@ impl Executor<'_> {
             }
 
             Step::Copy { from, to } => {
-                let source = self.sandbox.resolve(from, false)?;
-                let dest = self.sandbox.resolve(to, true)?;
+                let source = self.jail.resolve(from, false)?;
+                let dest = self.jail.resolve(to, true)?;
 
                 ensure_parent(&dest)?;
                 std::fs::copy(&source, &dest)?;
@@ -198,8 +198,8 @@ impl Executor<'_> {
             }
 
             Step::Move { from, to } => {
-                let source = self.sandbox.resolve(from, true)?;
-                let dest = self.sandbox.resolve(to, true)?;
+                let source = self.jail.resolve(from, true)?;
+                let dest = self.jail.resolve(to, true)?;
 
                 ensure_parent(&dest)?;
 
@@ -218,14 +218,14 @@ impl Executor<'_> {
             }
 
             Step::Mkdir { path } => {
-                let dir = self.sandbox.resolve(path, true)?;
+                let dir = self.jail.resolve(path, true)?;
                 std::fs::create_dir_all(&dir)?;
 
                 applied.push(display(&dir));
             }
 
             Step::Remove { path } => {
-                let target = self.sandbox.resolve(path, true)?;
+                let target = self.jail.resolve(path, true)?;
 
                 if target.is_dir() {
                     std::fs::remove_dir_all(&target)?;
@@ -237,7 +237,7 @@ impl Executor<'_> {
             }
 
             Step::WriteText { path, content } => {
-                let target = self.sandbox.resolve(path, true)?;
+                let target = self.jail.resolve(path, true)?;
 
                 ensure_parent(&target)?;
                 std::fs::write(&target, ctx.fill(content))?;
@@ -250,7 +250,7 @@ impl Executor<'_> {
                 pointer,
                 value,
             } => {
-                let target = self.sandbox.resolve(path, true)?;
+                let target = self.jail.resolve(path, true)?;
 
                 self.patch_json(&target, pointer, value)?;
 
@@ -271,18 +271,18 @@ impl Executor<'_> {
         max_bytes: Option<u64>,
     ) -> AppResult<()> {
         let parsed = url::Url::parse(url)
-            .map_err(|_| AppError::sandbox(format!("'{url}' is not a valid URL.")))?;
+            .map_err(|_| AppError::jail(format!("'{url}' is not a valid URL.")))?;
 
         // Plaintext would let anyone on the path replace a mod jar with
         // anything they like, checksum or no checksum (they would rewrite that
         // too — it comes from the same manifest, over the same channel).
         if parsed.scheme() != "https" {
-            return Err(AppError::sandbox("Downloads must use https."));
+            return Err(AppError::jail("Downloads must use https."));
         }
 
         let host = parsed
             .host_str()
-            .ok_or_else(|| AppError::sandbox("Download URL has no host."))?;
+            .ok_or_else(|| AppError::jail("Download URL has no host."))?;
 
         /*
          * Re-checked AFTER placeholder substitution, which is the whole reason
@@ -291,7 +291,7 @@ impl Executor<'_> {
          * `{mirror}` is known.
          */
         if !self.manifest.allows_host(host) {
-            return Err(AppError::sandbox(format!(
+            return Err(AppError::jail(format!(
                 "'{host}' is not in this plugin's allowed download hosts."
             )));
         }
@@ -321,7 +321,7 @@ impl Executor<'_> {
         // Trust the header only to fail EARLY; the streaming counter below is
         // what actually enforces the cap, since a hostile server can lie.
         if response.content_length().is_some_and(|len| len > cap) {
-            return Err(AppError::sandbox("Download exceeds the allowed size."));
+            return Err(AppError::jail("Download exceeds the allowed size."));
         }
 
         ensure_parent(target)?;
@@ -341,7 +341,7 @@ impl Executor<'_> {
                 drop(file);
                 let _ = std::fs::remove_file(target);
 
-                return Err(AppError::sandbox("Download exceeds the allowed size."));
+                return Err(AppError::jail("Download exceeds the allowed size."));
             }
 
             hasher.update(&chunk);
@@ -367,7 +367,7 @@ impl Executor<'_> {
                     plugin = self.manifest.id
                 );
 
-                return Err(AppError::sandbox(
+                return Err(AppError::jail(
                     "Downloaded file did not match the expected checksum.",
                 ));
             }
@@ -422,7 +422,7 @@ impl Executor<'_> {
             .map_err(|e| AppError::invalid(format!("Not a readable zip: {e}")))?;
 
         if archive.len() > MAX_EXTRACT_ENTRIES {
-            return Err(AppError::sandbox("Archive has too many entries."));
+            return Err(AppError::jail("Archive has too many entries."));
         }
 
         let mut total: u64 = 0;
@@ -436,12 +436,12 @@ impl Executor<'_> {
             /*
              * `enclosed_name` is zip-rs's own zip-slip guard: it returns None
              * for absolute paths, `..` components and Windows drive prefixes.
-             * We use it AND re-check through the sandbox, because it protects
-             * against the archive's own claims while the sandbox additionally
+             * We use it AND re-check through the jail, because it protects
+             * against the archive's own claims while the jail additionally
              * protects against symlinks already on disk.
              */
             let Some(raw) = entry.enclosed_name() else {
-                return Err(AppError::sandbox("Archive contains an unsafe path."));
+                return Err(AppError::jail("Archive contains an unsafe path."));
             };
 
             if entry.is_dir() {
@@ -455,15 +455,15 @@ impl Executor<'_> {
             total += entry.size();
 
             if total > MAX_EXTRACT_BYTES {
-                return Err(AppError::sandbox(
+                return Err(AppError::jail(
                     "Archive expands to more than the allowed size.",
                 ));
             }
 
-            let target = crate::plugins::sandbox::join_relative(dest, &relative)?;
+            let target = crate::plugins::jail::join_relative(dest, &relative)?;
 
             if !target.starts_with(dest) {
-                return Err(AppError::sandbox("Archive entry escapes its destination."));
+                return Err(AppError::jail("Archive entry escapes its destination."));
             }
 
             ensure_parent(&target)?;
@@ -499,7 +499,7 @@ impl Executor<'_> {
             let kind = entry.header().entry_type();
 
             if !kind.is_file() && !kind.is_dir() {
-                return Err(AppError::sandbox(
+                return Err(AppError::jail(
                     "Archive contains a link or special file.",
                 ));
             }
@@ -517,7 +517,7 @@ impl Executor<'_> {
             total += entry.size();
 
             if total > MAX_EXTRACT_BYTES {
-                return Err(AppError::sandbox(
+                return Err(AppError::jail(
                     "Archive expands to more than the allowed size.",
                 ));
             }
@@ -525,13 +525,13 @@ impl Executor<'_> {
             written += 1;
 
             if written > MAX_EXTRACT_ENTRIES {
-                return Err(AppError::sandbox("Archive has too many entries."));
+                return Err(AppError::jail("Archive has too many entries."));
             }
 
-            let target = crate::plugins::sandbox::join_relative(dest, &relative)?;
+            let target = crate::plugins::jail::join_relative(dest, &relative)?;
 
             if !target.starts_with(dest) {
-                return Err(AppError::sandbox("Archive entry escapes its destination."));
+                return Err(AppError::jail("Archive entry escapes its destination."));
             }
 
             ensure_parent(&target)?;
@@ -556,7 +556,7 @@ impl Executor<'_> {
             let meta = std::fs::metadata(target)?;
 
             if meta.len() > MAX_JSON_BYTES {
-                return Err(AppError::sandbox("Config file is too large to patch."));
+                return Err(AppError::jail("Config file is too large to patch."));
             }
 
             serde_json::from_str(&std::fs::read_to_string(target)?)
@@ -666,7 +666,7 @@ fn step_label(step: &Step) -> String {
     }
 }
 
-/// Which sandbox roots a plan needs, so the UI can tell the user up front
+/// Which jail roots a plan needs, so the UI can tell the user up front
 /// rather than failing halfway through.
 pub fn required_roots(steps: &[Step]) -> Vec<&'static str> {
     let mut out: Vec<&'static str> = Vec::new();

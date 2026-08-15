@@ -81,7 +81,7 @@ pub struct LibraryEntry {
     /// Which release is currently on disk, or `None`.
     pub installed_release_id: Option<i64>,
     pub installed_version: Option<String>,
-    /// Which install (sandbox) it was materialised into. `None` = the default.
+    /// Which sandbox (cloud `install`) it was materialised into. `None` = the default.
     pub installed_install_id: Option<i64>,
     pub installed_at: Option<String>,
     /// Paths the installer wrote, so the uninstall knows what to remove.

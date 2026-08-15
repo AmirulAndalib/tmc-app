@@ -7,7 +7,7 @@ use crate::plugins::manifest::{FsRoot, Manifest, PathRef};
 /// The path jail.
 ///
 /// Every filesystem operation an installer plugin performs goes through
-/// [`Sandbox::resolve`], and there is no other way to obtain a `PathBuf` in the
+/// [`Jail::resolve`], and there is no other way to obtain a `PathBuf` in the
 /// executor. What that buys is a single place to be right about a problem that
 /// is famously easy to get wrong.
 ///
@@ -30,7 +30,7 @@ use crate::plugins::manifest::{FsRoot, Manifest, PathRef};
 /// itself usually does not yet: canonicalising a path that is about to be
 /// created fails on every platform, so the guarantee has to come from its
 /// parent chain instead.
-pub struct Sandbox {
+pub struct Jail {
     roots: HashMap<&'static str, RootGrant>,
 }
 
@@ -64,7 +64,7 @@ fn root_key(root: FsRoot) -> &'static str {
     }
 }
 
-impl Sandbox {
+impl Jail {
     /// Build the jail from the manifest's grants and the app's resolved paths.
     ///
     /// `available` maps a root name to where it actually lives on THIS machine
@@ -86,7 +86,7 @@ impl Sandbox {
             };
 
             std::fs::create_dir_all(root).map_err(|e| {
-                AppError::sandbox(format!("Could not prepare {}: {e}", root.display()))
+                AppError::jail(format!("Could not prepare {}: {e}", root.display()))
             })?;
 
             /*
@@ -105,7 +105,7 @@ impl Sandbox {
             };
 
             if !prefix.starts_with(&base) {
-                return Err(AppError::sandbox(format!(
+                return Err(AppError::jail(format!(
                     "'{}' escapes its root.",
                     grant.path
                 )));
@@ -142,7 +142,7 @@ impl Sandbox {
         let key = root_key(path_ref.root);
 
         let grant = self.roots.get(key).ok_or_else(|| {
-            AppError::sandbox(format!(
+            AppError::jail(format!(
                 "'{key}' is not available — the plugin did not request it, or it is not configured."
             ))
         })?;
@@ -151,7 +151,7 @@ impl Sandbox {
 
         // (2) Containment after lexical normalisation.
         if !joined.starts_with(&grant.base) {
-            return Err(AppError::sandbox(format!(
+            return Err(AppError::jail(format!(
                 "'{}' escapes its root.",
                 path_ref.path
             )));
@@ -171,7 +171,7 @@ impl Sandbox {
         if !covered {
             let readable = grant.allowed.iter().any(|a| joined.starts_with(&a.prefix));
 
-            return Err(AppError::sandbox(if readable {
+            return Err(AppError::jail(if readable {
                 format!("'{}' was granted read-only.", path_ref.path)
             } else {
                 format!(
@@ -193,7 +193,7 @@ impl Sandbox {
     }
 
     /// Is an ALREADY-RESOLVED absolute path inside a writable subtree of this
-    /// sandbox?
+    /// jail?
     ///
     /// The narrow companion to [`Self::resolve`], and the only other way a path
     /// is admitted. `resolve` takes a manifest-supplied *relative* path and
@@ -246,11 +246,11 @@ impl Sandbox {
 /// exist, so this never calls it with untrusted input.
 pub fn join_relative(base: &Path, relative: &str) -> AppResult<PathBuf> {
     if relative.contains('\0') {
-        return Err(AppError::sandbox("Path contains a NUL byte."));
+        return Err(AppError::jail("Path contains a NUL byte."));
     }
 
     if relative.len() > 1024 {
-        return Err(AppError::sandbox("Path is too long."));
+        return Err(AppError::jail("Path is too long."));
     }
 
     // Accept `/` from manifests on every platform; normalise to the native
@@ -272,22 +272,22 @@ pub fn join_relative(base: &Path, relative: &str) -> AppResult<PathBuf> {
                  * simpler than modelling the platform's rules.
                  */
                 if text.ends_with('.') || text.ends_with(' ') {
-                    return Err(AppError::sandbox(
+                    return Err(AppError::jail(
                         "Path components may not end with a dot or space.",
                     ));
                 }
 
                 // Windows alternate data streams: `file.txt:hidden`.
                 if text.contains(':') {
-                    return Err(AppError::sandbox("Path components may not contain ':'."));
+                    return Err(AppError::jail("Path components may not contain ':'."));
                 }
 
                 out.push(part);
             }
             Component::CurDir => {}
-            Component::ParentDir => return Err(AppError::sandbox("Path may not contain '..'.")),
+            Component::ParentDir => return Err(AppError::jail("Path may not contain '..'.")),
             Component::RootDir | Component::Prefix(_) => {
-                return Err(AppError::sandbox("Path must be relative."))
+                return Err(AppError::jail("Path must be relative."))
             }
         }
     }
@@ -303,11 +303,11 @@ fn assert_real_ancestor_inside(target: &Path, root: &Path) -> AppResult<()> {
     loop {
         if cursor.exists() {
             let real = cursor.canonicalize().map_err(|e| {
-                AppError::sandbox(format!("Could not resolve {}: {e}", cursor.display()))
+                AppError::jail(format!("Could not resolve {}: {e}", cursor.display()))
             })?;
 
             if !real.starts_with(root) {
-                return Err(AppError::sandbox(format!(
+                return Err(AppError::jail(format!(
                     "'{}' resolves outside its root (symlink?).",
                     target.display()
                 )));
@@ -383,7 +383,7 @@ mod tests {
 
     use crate::plugins::manifest::{FsGrant, Manifest, Permissions};
 
-    fn sandbox_with(grants: Vec<FsGrant>, root: &Path) -> Sandbox {
+    fn jail_with(grants: Vec<FsGrant>, root: &Path) -> Jail {
         let manifest = Manifest {
             manifest_version: 1,
             id: "com.test.plugin".into(),
@@ -405,7 +405,7 @@ mod tests {
         let mut available: HashMap<&'static str, PathBuf> = HashMap::new();
         available.insert("gameDir", root.to_path_buf());
 
-        Sandbox::build(&manifest, &available).expect("builds")
+        Jail::build(&manifest, &available).expect("builds")
     }
 
     fn grant(path: &str, write: bool) -> FsGrant {
@@ -430,21 +430,21 @@ mod tests {
         // wider than the consent dialog displayed.
         let dir = base();
 
-        let sandbox = sandbox_with(vec![grant("", false), grant("mods", true)], dir.path());
+        let jail = jail_with(vec![grant("", false), grant("mods", true)], dir.path());
 
-        assert!(sandbox.resolve(&path_ref("mods/a.jar"), true).is_ok());
-        assert!(sandbox.resolve(&path_ref("config/x.cfg"), false).is_ok());
+        assert!(jail.resolve(&path_ref("mods/a.jar"), true).is_ok());
+        assert!(jail.resolve(&path_ref("config/x.cfg"), false).is_ok());
 
         // Writable ONLY under `mods`, whichever order the grants came in.
-        assert!(sandbox.resolve(&path_ref("config/x.cfg"), true).is_err());
-        assert!(sandbox.resolve(&path_ref("evil.exe"), true).is_err());
+        assert!(jail.resolve(&path_ref("config/x.cfg"), true).is_err());
+        assert!(jail.resolve(&path_ref("evil.exe"), true).is_err());
     }
 
     #[test]
     fn grant_order_does_not_change_what_is_allowed() {
         let dir = base();
 
-        let reversed = sandbox_with(vec![grant("mods", true), grant("", false)], dir.path());
+        let reversed = jail_with(vec![grant("mods", true), grant("", false)], dir.path());
 
         assert!(reversed.resolve(&path_ref("mods/a.jar"), true).is_ok());
         assert!(reversed.resolve(&path_ref("config/x.cfg"), true).is_err());
@@ -454,20 +454,20 @@ mod tests {
     fn several_narrow_grants_under_one_root_all_work() {
         let dir = base();
 
-        let sandbox = sandbox_with(vec![grant("mods", true), grant("config", true)], dir.path());
+        let jail = jail_with(vec![grant("mods", true), grant("config", true)], dir.path());
 
-        assert!(sandbox.resolve(&path_ref("mods/a.jar"), true).is_ok());
-        assert!(sandbox.resolve(&path_ref("config/a.cfg"), true).is_ok());
-        assert!(sandbox.resolve(&path_ref("saves/a.dat"), true).is_err());
+        assert!(jail.resolve(&path_ref("mods/a.jar"), true).is_ok());
+        assert!(jail.resolve(&path_ref("config/a.cfg"), true).is_ok());
+        assert!(jail.resolve(&path_ref("saves/a.dat"), true).is_err());
     }
 
     #[test]
     fn a_path_outside_every_grant_is_refused_even_for_reads() {
         let dir = base();
 
-        let sandbox = sandbox_with(vec![grant("mods", true)], dir.path());
+        let jail = jail_with(vec![grant("mods", true)], dir.path());
 
-        assert!(sandbox
+        assert!(jail
             .resolve(&path_ref("saves/world.dat"), false)
             .is_err());
     }
@@ -479,9 +479,9 @@ mod tests {
         // hold — a string prefix check would let it through.
         let dir = base();
 
-        let sandbox = sandbox_with(vec![grant("mods", true)], dir.path());
+        let jail = jail_with(vec![grant("mods", true)], dir.path());
 
-        assert!(sandbox
+        assert!(jail
             .resolve(&path_ref("mods-backup/a.jar"), true)
             .is_err());
     }

@@ -9,7 +9,7 @@ use tmc_core::settings::AppSettings;
 
 use crate::state::AppState;
 
-/// The directories a sandbox root must not BE, or CONTAIN.
+/// The directories a jail root must not BE, or CONTAIN.
 ///
 /// Assembled here rather than in `tmc-core` because every one of them comes
 /// from Tauri's path resolver, which is the whole reason `paths.rs` exists. The
@@ -40,7 +40,7 @@ pub fn settings_get(state: State<'_, AppState>) -> AppSettings {
     state.settings.get()
 }
 
-/// Every setting EXCEPT the two sandbox roots.
+/// Every setting EXCEPT the two jail roots.
 ///
 /// `gameDirs` and `downloadDir` are refused by `SettingsStore::patch` itself,
 /// not filtered here, so the gate holds for any caller rather than only for

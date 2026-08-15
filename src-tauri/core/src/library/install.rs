@@ -5,7 +5,7 @@
 //!
 //!   * a **subscription** — the account's statement that it wants this item;
 //!   * an **app plugin** — the rule that says where this game's mods go;
-//!   * the **sandbox and executor** — the only code that touches the disk.
+//!   * the **jail and executor** — the only code that touches the disk.
 //!
 //! Nothing here resolves a path, opens a socket or writes a byte. It selects a
 //! rule, builds the placeholder table, and hands both to
@@ -14,7 +14,7 @@
 //!
 //! THE INSTALL DIRECTORY QUESTION
 //! ------------------------------
-//! An install (a sandbox/profile) can point at its own directory on this
+//! An install — what the app calls a **sandbox** — can point at its own directory on this
 //! machine. When it does, that directory is the `gameDir` root for the run —
 //! which is what makes two profiles for one game able to hold different mods
 //! without either being aware of the other. When it does not, the app's
@@ -27,7 +27,7 @@
 //! and they are run first. But the authoritative record of what an install
 //! ACTUALLY wrote is the executor's own journal, stored on the row — so
 //! anything left behind is removed from that list afterwards, bounded to paths
-//! inside the same sandbox. A rule that was edited between install and
+//! inside the same jail. A rule that was edited between install and
 //! uninstall would otherwise strand files forever.
 
 use std::collections::HashMap;
@@ -39,9 +39,9 @@ use crate::audit;
 use crate::error::{AppError, AppResult};
 use crate::logging::Audit;
 use crate::plugins::apps::{AppPluginFile, AppPluginKind, AppPlugins};
-use crate::plugins::sandbox::Sandbox;
+use crate::plugins::jail::Jail;
 use crate::plugins::steps::{Executor, RunContext, RunReport};
-use crate::plugins::{sandbox_for, SandboxRoots};
+use crate::plugins::{jail_for, JailRoots};
 use crate::settings::AppSettings;
 
 use super::db::{LibraryDb, LibraryEntry};
@@ -73,11 +73,11 @@ impl InstallOutcome {
 /// Everything a run needs that is not the subscription itself.
 pub struct InstallCtx<'a> {
     pub plugins: &'a AppPlugins,
-    pub roots: &'a SandboxRoots,
+    pub roots: &'a JailRoots,
     pub settings: &'a AppSettings,
     pub http: &'a reqwest::Client,
     pub audit: &'a Audit,
-    /// Which install (sandbox) to materialise into. `None` = the app's main
+    /// Which sandbox (cloud `install`) to materialise into. `None` = the app's main
     /// game directory.
     pub install_id: Option<i64>,
     /// That install's own directory on this machine, when it has one.
@@ -112,7 +112,7 @@ fn context_for(entry: &LibraryEntry, ctx: &InstallCtx<'_>) -> RunContext {
     /*
      * `fileName` is what a step writes into `mods/{fileName}`, so it has to be
      * a SAFE single component. The name comes from an uploader, so it is
-     * sanitised here rather than trusted — the sandbox would refuse a traversal
+     * sanitised here rather than trusted — the jail would refuse a traversal
      * anyway, but refusing it at run time means "install failed" rather than
      * "install produced a sensible name".
      */
@@ -223,18 +223,18 @@ pub fn rule_for<'a>(
     plugins.choose(slug, kind, &safe_file_name(entry), loader)
 }
 
-/// Build the sandbox for one run.
+/// Build the jail for one run.
 ///
 /// The install's own directory, when it has one, is injected by OVERRIDING the
 /// app's configured `game_dirs` entry for this app id. That is deliberately the
-/// same mechanism rather than a second one: `sandbox_for` already refuses a
+/// same mechanism rather than a second one: `jail_for` already refuses a
 /// directory that does not exist, and routing profiles through the same code
 /// path means a profile cannot end up with laxer checks than the main install.
-fn sandbox_for_run(
+fn jail_for_run(
     rule: &AppPluginFile,
     entry: &LibraryEntry,
     ctx: &InstallCtx<'_>,
-) -> AppResult<Sandbox> {
+) -> AppResult<Jail> {
     let manifest = rule.as_manifest();
 
     let mut settings = ctx.settings.clone();
@@ -245,7 +245,7 @@ fn sandbox_for_run(
             .insert(app_id.to_string(), dir.display().to_string());
     }
 
-    sandbox_for(&manifest, ctx.roots, &settings, entry.app_id)
+    jail_for(&manifest, ctx.roots, &settings, entry.app_id)
 }
 
 /// Install (or update) one subscription.
@@ -298,8 +298,8 @@ pub async fn install_one(
 
     let _ = db.set_state(&entry.id, "installing", None);
 
-    let sandbox = match sandbox_for_run(rule, entry, ctx) {
-        Ok(sandbox) => sandbox,
+    let jail = match jail_for_run(rule, entry, ctx) {
+        Ok(jail) => jail,
         Err(err) => {
             let _ = db.set_state(&entry.id, "failed", Some(&err.to_string()));
 
@@ -316,14 +316,14 @@ pub async fn install_one(
      * a user already deleted by hand is not a reason to refuse the update.
      */
     if entry.installed_release_id.is_some() {
-        let _ = run_uninstall(entry, ctx, rule, &sandbox).await;
+        let _ = run_uninstall(entry, ctx, rule, &jail).await;
     }
 
     let manifest = rule.as_manifest();
 
     let executor = Executor {
         manifest: &manifest,
-        sandbox: &sandbox,
+        jail: &jail,
         http: ctx.http,
         audit: ctx.audit,
     };
@@ -390,13 +390,13 @@ async fn run_uninstall(
     entry: &LibraryEntry,
     ctx: &InstallCtx<'_>,
     rule: &AppPluginFile,
-    sandbox: &Sandbox,
+    jail: &Jail,
 ) -> RunReport {
     let manifest = rule.as_manifest();
 
     let executor = Executor {
         manifest: &manifest,
-        sandbox,
+        jail,
         http: ctx.http,
         audit: ctx.audit,
     };
@@ -418,7 +418,7 @@ async fn run_uninstall(
      * edited between install and uninstall, a step whose target moved — this is
      * what stops a file being stranded forever.
      *
-     * Bounded to paths INSIDE the sandbox's roots. The list is our own record,
+     * Bounded to paths INSIDE the jail's roots. The list is our own record,
      * but it is on disk in a user-writable database, so it is re-checked rather
      * than trusted: an edited row must not become a delete-anything primitive.
      */
@@ -431,7 +431,7 @@ async fn run_uninstall(
 
         let path = PathBuf::from(recorded);
 
-        if !sandbox.contains(&path) {
+        if !jail.contains(&path) {
             continue;
         }
 
@@ -462,10 +462,10 @@ pub async fn uninstall_one(
         /*
          * No rule any more — the game lost support, or the file was moved into
          * `disabled/`. The journal sweep is still possible and is still the
-         * right thing to do, so a bare sandbox is built from the recorded
+         * right thing to do, so a bare jail is built from the recorded
          * paths' own roots rather than refusing.
          *
-         * Without a rule there is no manifest and therefore no sandbox, so the
+         * Without a rule there is no manifest and therefore no jail, so the
          * only honest answer is to leave the files and say so. Deleting paths
          * off a database row with no jail to check them against is exactly the
          * primitive this whole module exists to not have.
@@ -484,8 +484,8 @@ pub async fn uninstall_one(
 
     let _ = db.set_state(&entry.id, "removing", None);
 
-    let sandbox = match sandbox_for_run(rule, entry, ctx) {
-        Ok(sandbox) => sandbox,
+    let jail = match jail_for_run(rule, entry, ctx) {
+        Ok(jail) => jail,
         Err(err) => {
             let _ = db.set_state(&entry.id, "failed", Some(&err.to_string()));
 
@@ -502,7 +502,7 @@ pub async fn uninstall_one(
         plugin = rule.source
     );
 
-    let report = run_uninstall(entry, ctx, rule, &sandbox).await;
+    let report = run_uninstall(entry, ctx, rule, &jail).await;
 
     if forget {
         let _ = db.delete(&entry.id);
@@ -555,7 +555,7 @@ pub fn preflight(entry: &LibraryEntry, ctx: &InstallCtx<'_>) -> AppResult<()> {
         ));
     };
 
-    sandbox_for_run(rule, entry, ctx)?;
+    jail_for_run(rule, entry, ctx)?;
 
     Ok(())
 }

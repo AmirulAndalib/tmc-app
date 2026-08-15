@@ -43,7 +43,7 @@ type SettingsContextT = {
     resetApp: () => Promise<void>
 
     /**
-     * The two sandbox roots, which are NOT part of `setApp`.
+     * The two jail-anchor roots, which are NOT part of `setApp`.
      *
      * They anchor the plugin jail rather than describing a preference, so Rust
      * refuses them in a settings patch and validates them here instead. Kept on

@@ -31,7 +31,7 @@ pub async fn resolve_public(host: &str, port: u16) -> AppResult<SocketAddr> {
 
     addrs
         .find(|a| is_public(&a.ip()))
-        .ok_or_else(|| AppError::sandbox(format!("{host} does not resolve to a public address.")))
+        .ok_or_else(|| AppError::jail(format!("{host} does not resolve to a public address.")))
 }
 
 pub fn is_public(ip: &IpAddr) -> bool {

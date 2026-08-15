@@ -7,7 +7,7 @@
 //! | --- | --- | --- |
 //! | [`db`] | The SQLite store | Only its own database file |
 //! | [`sync`] | Reconciling against the account | No |
-//! | [`install`] | Turning a subscription into files | Through the sandbox only |
+//! | [`install`] | Turning a subscription into files | Through the jail only |
 //!
 //! The split is what lets the interesting half be tested with no game
 //! directory, no network and no display stack: `sync` produces a PLAN and

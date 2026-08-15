@@ -1,7 +1,7 @@
 //! Latency, measured from the device.
 //!
 //! ICMP is the obvious tool and the wrong one: a raw socket needs root on Linux
-//! and macOS and is simply unavailable to a sandboxed iOS or Android app, so an
+//! and macOS and is simply unavailable to a jailed iOS or Android app, so an
 //! ICMP ping would work for exactly the developer testing it. A TCP handshake
 //! to the port the user would actually connect on needs no privilege anywhere,
 //! and measures the path that matters — including any middlebox between the

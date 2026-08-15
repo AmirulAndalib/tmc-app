@@ -1,8 +1,8 @@
 pub mod apps;
+pub mod jail;
 pub mod manifest;
 pub mod query;
 pub mod registry;
-pub mod sandbox;
 pub mod steps;
 pub mod theme;
 
@@ -11,23 +11,23 @@ use std::path::PathBuf;
 
 use crate::error::{AppError, AppResult};
 use crate::plugins::manifest::Manifest;
-use crate::plugins::sandbox::Sandbox;
+use crate::plugins::jail::Jail;
 use crate::settings::AppSettings;
 
-/// The directories a sandbox can be anchored to on this machine.
+/// The directories a jail can be anchored to on this machine.
 ///
 /// Supplied by the caller rather than resolved here, because resolving them
 /// needs the platform's path rules — which is the Tauri crate's job. Keeping
-/// the *decision* here and the *lookup* there is what lets the whole sandbox be
+/// the *decision* here and the *lookup* there is what lets the whole jail be
 /// tested with a `tempfile::TempDir`.
-pub struct SandboxRoots {
+pub struct JailRoots {
     /// The app's private data directory.
     pub data: PathBuf,
     /// Scratch space, cleared on launch.
     pub cache: PathBuf,
 }
 
-/// Build the sandbox for one run of one plugin.
+/// Build the jail for one run of one plugin.
 ///
 /// Every root here comes from the app's own state — the user's configured game
 /// directory, the app's data dir, the user's download dir. Nothing the plugin
@@ -37,12 +37,12 @@ pub struct SandboxRoots {
 /// A missing `gameDir` for the app being handled is an ERROR, not an omission:
 /// falling back to a plausible default is how an installer quietly writes a
 /// mod into the wrong game.
-pub fn sandbox_for(
+pub fn jail_for(
     manifest: &Manifest,
-    roots: &SandboxRoots,
+    roots: &JailRoots,
     settings: &AppSettings,
     app_id: Option<i64>,
-) -> AppResult<Sandbox> {
+) -> AppResult<Jail> {
     let mut available: HashMap<&'static str, PathBuf> = HashMap::new();
 
     available.insert(
@@ -79,7 +79,7 @@ pub fn sandbox_for(
         }
     }
 
-    Sandbox::build(manifest, &available)
+    Jail::build(manifest, &available)
 }
 
 #[cfg(test)]
@@ -110,7 +110,7 @@ mod tests {
     fn a_missing_game_dir_is_an_error_not_a_silent_fallback() {
         let tmp = tempfile::tempdir().expect("tempdir");
 
-        let roots = SandboxRoots {
+        let roots = JailRoots {
             data: tmp.path().join("data"),
             cache: tmp.path().join("cache"),
         };
@@ -126,10 +126,10 @@ mod tests {
             write: true,
         }]);
 
-        assert!(sandbox_for(&manifest, &roots, &settings, Some(7)).is_err());
+        assert!(jail_for(&manifest, &roots, &settings, Some(7)).is_err());
     }
 
-    /// Every path in every shipped example must resolve inside the sandbox its
+    /// Every path in every shipped example must resolve inside the jail its
     /// own manifest declares.
     ///
     /// Parsing the examples is not enough — that only proves the JSON is
@@ -144,7 +144,7 @@ mod tests {
         let game = tmp.path().join("game");
         std::fs::create_dir_all(&game).expect("game dir");
 
-        let roots = SandboxRoots {
+        let roots = JailRoots {
             data: tmp.path().join("data"),
             cache: tmp.path().join("cache"),
         };
@@ -175,12 +175,12 @@ mod tests {
                     .insert(id.to_string(), game.display().to_string());
             }
 
-            let sandbox = sandbox_for(&parsed, &roots, &settings, app_id)
-                .unwrap_or_else(|e| panic!("{} sandbox: {e}", parsed.id));
+            let jail = jail_for(&parsed, &roots, &settings, app_id)
+                .unwrap_or_else(|e| panic!("{} jail: {e}", parsed.id));
 
             for step in installer.install.iter().chain(&installer.uninstall) {
                 for (path_ref, write) in step_paths(step) {
-                    sandbox.resolve(path_ref, write).unwrap_or_else(|e| {
+                    jail.resolve(path_ref, write).unwrap_or_else(|e| {
                         panic!("{} step path '{}': {e}", parsed.id, path_ref.path)
                     });
                 }
@@ -212,7 +212,7 @@ mod tests {
     fn plugin_data_is_scoped_to_the_plugin_id() {
         let tmp = tempfile::tempdir().expect("tempdir");
 
-        let roots = SandboxRoots {
+        let roots = JailRoots {
             data: tmp.path().join("data"),
             cache: tmp.path().join("cache"),
         };
@@ -223,10 +223,10 @@ mod tests {
             write: true,
         }]);
 
-        let sandbox =
-            sandbox_for(&manifest, &roots, &AppSettings::default(), None).expect("builds");
+        let jail =
+            jail_for(&manifest, &roots, &AppSettings::default(), None).expect("builds");
 
-        let root = sandbox
+        let root = jail
             .root_path(manifest::FsRoot::PluginData)
             .expect("granted");
 

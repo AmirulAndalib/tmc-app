@@ -19,7 +19,7 @@ export const IpcErrorSchema = z.object({
         'network',
         'api',
         'invalid',
-        'sandbox',
+        'jail',
         'internal',
     ]),
     message: z.string(),

@@ -76,7 +76,7 @@ export const ipc = {
     // -------------------------------------------------------------- Settings
     settingsGet: () => call('settings_get', AppSettingsSchema),
     /**
-     * Every setting except the two sandbox roots.
+     * Every setting except the two jail-anchor roots.
      *
      * `gameDirs` and `downloadDir` are REFUSED by Rust if they appear here —
      * they anchor the plugin jail rather than describing a preference, so they
@@ -93,7 +93,7 @@ export const ipc = {
      * Rust validates the path before storing it and rejects anything that would
      * make a bad jail anchor — a drive root, a system directory, or any folder
      * containing the app's own data. It stores the CANONICAL path, so the
-     * settings this resolves with are the ones the sandbox will resolve with.
+     * settings this resolves with are the ones the file jail will resolve with.
      */
     settingsSetGameDir: (appId: number | string, dir: string | null) =>
         call('settings_set_game_dir', AppSettingsSchema, {

@@ -5,7 +5,7 @@
 //! the webview. The one exception is `library_set_install_dir`, which takes the
 //! path the user picked in a NATIVE folder dialog; it is stored, never
 //! executed, and everything that later resolves against it goes through the
-//! sandbox.
+//! jail.
 //!
 //! A third rule is specific to this file: **nothing here decides on its own to
 //! write to a game folder.** Every install runs because a subscription said so
@@ -26,7 +26,7 @@ use tmc_core::library::db::LibraryEntry;
 use tmc_core::library::install::{install_one, preflight, rule_for, uninstall_one, InstallCtx};
 use tmc_core::library::{sync_installs, sync_once, InstallOutcome, SyncReport, FULL_SYNC_EVERY};
 use tmc_core::plugins::apps::{AppPluginKind, AppPlugins};
-use tmc_core::plugins::SandboxRoots;
+use tmc_core::plugins::JailRoots;
 use tmc_core::settings::AppSettings;
 
 use crate::state::AppState;
@@ -163,7 +163,7 @@ pub async fn library_sync(
 /// two-step (`resolve` then `ctx`) is what makes the borrow checker agree.
 struct CtxHolder {
     plugins: Arc<AppPlugins>,
-    roots: SandboxRoots,
+    roots: JailRoots,
     settings: AppSettings,
     install_id: Option<i64>,
     install_dir: Option<PathBuf>,
@@ -189,7 +189,7 @@ impl CtxHolder {
     }
 }
 
-/// Resolve which sandbox (profile) an entry belongs to, and that profile's
+/// Resolve which sandbox an entry belongs to, and that sandbox's
 /// local directory.
 ///
 /// An entry with no profile assignment falls back to the app's DEFAULT install
@@ -209,7 +209,7 @@ fn resolve_ctx(state: &AppState, entry: &LibraryEntry) -> CtxHolder {
 
     CtxHolder {
         plugins: state.app_plugins(),
-        roots: state.sandbox_roots(),
+        roots: state.jail_roots(),
         settings: state.settings_snapshot(),
         install_id: profile,
         install_dir,
@@ -289,7 +289,7 @@ pub fn library_set_install_dir(
         let path = PathBuf::from(dir);
 
         // Stored, never executed — but a directory that does not exist would
-        // make every later install fail with a message about the sandbox
+        // make every later install fail with a message about the jail
         // rather than about the setting the user just changed.
         if !path.is_dir() {
             return Err(AppError::invalid("That folder does not exist."));

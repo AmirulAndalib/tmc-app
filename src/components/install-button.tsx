@@ -81,7 +81,7 @@ export default function InstallButton({
                  * Context values are substituted literally into the plan's
                  * `{name}` placeholders. Only facts about the item go in here —
                  * never a path, never anything from settings, since the plan's
-                 * paths are resolved by the sandbox and must not be
+                 * paths are resolved by the plugin file jail and must not be
                  * influenceable from this side.
                  */
                 context: {

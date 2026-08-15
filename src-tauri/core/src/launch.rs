@@ -11,7 +11,7 @@
 //! answer is bounded to exactly this:
 //!
 //!   * **The executable is a path relative to the game directory**, resolved
-//!     through the same [`crate::plugins::sandbox`] that installers use. The
+//!     through the same [`crate::plugins::jail`] that installers use. The
 //!     type cannot express an absolute path, so a launch file cannot name
 //!     `/bin/sh` — the worst it can do is run a binary that is already inside a
 //!     folder the user pointed us at and chose to install a game into.
@@ -39,7 +39,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::{AppError, AppResult};
 use crate::plugins::apps::{AppPluginFile, LaunchSpec};
 use crate::plugins::manifest::{FsRoot, PathRef};
-use crate::plugins::sandbox::Sandbox;
+use crate::plugins::jail::Jail;
 
 /// The declarative options an install carries, as the launcher sees them.
 ///
@@ -214,13 +214,13 @@ fn exec_for_platform(spec: &LaunchSpec) -> Option<&String> {
 
 /// Build the plan.
 ///
-/// `sandbox` must be one built for this rule with the game directory as
+/// `jail` must be one built for this rule with the game directory as
 /// `gameDir` — the executable and the working directory are both resolved
 /// through it, which is what stops a launch file naming a path outside the
 /// folder the user chose.
 pub fn plan(
     rule: &AppPluginFile,
-    sandbox: &Sandbox,
+    jail: &Jail,
     options: &LaunchOptions,
     ctx: &LaunchContext,
 ) -> AppResult<LaunchPlan> {
@@ -262,12 +262,12 @@ pub fn plan(
         }
         (None, Some(exec)) => {
             /*
-             * Through the sandbox, with `write: false`. A launch spec needs no
+             * Through the jail, with `write: false`. A launch spec needs no
              * write grant, and asking for one would be the difference between
              * "run something in the game folder" and "put something there
              * first".
              */
-            let resolved = sandbox.resolve(
+            let resolved = jail.resolve(
                 &PathRef {
                     root: FsRoot::GameDir,
                     path: fill(exec, &table),
@@ -340,7 +340,7 @@ pub fn plan(
     // anything that later logs and replays this.
     for arg in &args {
         if arg.contains('\0') || arg.contains('\n') || arg.contains('\r') {
-            return Err(AppError::sandbox(
+            return Err(AppError::jail(
                 "A launch argument contains a control character.",
             ));
         }
@@ -348,7 +348,7 @@ pub fn plan(
 
     // ----------------------------------------------------------------- Cwd
     let cwd = match &spec.cwd {
-        Some(rel) => Some(sandbox.resolve(
+        Some(rel) => Some(jail.resolve(
             &PathRef {
                 root: FsRoot::GameDir,
                 path: fill(rel, &table),
@@ -358,7 +358,7 @@ pub fn plan(
         // Default to the game directory itself, which is what nearly every
         // game expects and what a relative asset path inside one resolves
         // against.
-        None => sandbox.root_path(FsRoot::GameDir).map(Path::to_path_buf),
+        None => jail.root_path(FsRoot::GameDir).map(Path::to_path_buf),
     };
 
     // ----------------------------------------------------------------- Env
@@ -372,7 +372,7 @@ pub fn plan(
         }
 
         if key.contains('\0') || value.contains('\0') {
-            return Err(AppError::sandbox(
+            return Err(AppError::jail(
                 "A launch environment value contains a NUL byte.",
             ));
         }
@@ -426,7 +426,7 @@ mod tests {
     use crate::plugins::manifest::{FsGrant, Manifest, Permissions};
     use std::collections::HashMap;
 
-    fn sandbox_over(game: &Path) -> Sandbox {
+    fn jail_over(game: &Path) -> Jail {
         let manifest = Manifest {
             manifest_version: 1,
             id: "app.test".into(),
@@ -452,7 +452,7 @@ mod tests {
         let mut available: HashMap<&'static str, PathBuf> = HashMap::new();
         available.insert("gameDir", game.to_path_buf());
 
-        Sandbox::build(&manifest, &available).expect("sandbox")
+        Jail::build(&manifest, &available).expect("jail")
     }
 
     fn rule_from(body: &str) -> AppPluginFile {
@@ -491,13 +491,13 @@ mod tests {
 
         std::fs::write(game.join("run.sh"), "#!/bin/sh\n").expect("exe");
 
-        let sandbox = sandbox_over(game);
+        let jail = jail_over(game);
         let rule = rule_from(EXEC_RULE);
 
         // No width configured, and no install name.
         let plan = plan(
             &rule,
-            &sandbox,
+            &jail,
             &LaunchOptions::default(),
             &LaunchContext::default(),
         )
@@ -518,7 +518,7 @@ mod tests {
 
         std::fs::write(game.join("run.sh"), "#!/bin/sh\n").expect("exe");
 
-        let sandbox = sandbox_over(game);
+        let jail = jail_over(game);
         let rule = rule_from(EXEC_RULE);
 
         let options = LaunchOptions {
@@ -533,7 +533,7 @@ mod tests {
             ..Default::default()
         };
 
-        let plan = plan(&rule, &sandbox, &options, &ctx).expect("plan");
+        let plan = plan(&rule, &jail, &options, &ctx).expect("plan");
 
         assert!(plan.args.contains(&"Kitchen sink".to_string()));
         assert!(plan.args.contains(&"1920".to_string()));
@@ -551,7 +551,7 @@ mod tests {
         let game = tmp.path().join("game");
         std::fs::create_dir_all(&game).expect("mkdir");
 
-        let sandbox = sandbox_over(&game);
+        let jail = jail_over(&game);
 
         for escape in ["../evil.sh", "/bin/sh", "sub/../../evil.sh"] {
             let rule = rule_from(&format!(
@@ -561,7 +561,7 @@ mod tests {
             assert!(
                 plan(
                     &rule,
-                    &sandbox,
+                    &jail,
                     &LaunchOptions::default(),
                     &LaunchContext::default()
                 )
@@ -574,13 +574,13 @@ mod tests {
     #[test]
     fn a_missing_executable_is_an_error_not_a_spawn_failure() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        let sandbox = sandbox_over(tmp.path());
+        let jail = jail_over(tmp.path());
 
         let rule = rule_from(r#"{ "manifestVersion": 1, "launch": { "exec": "run.sh" } }"#);
 
         assert!(plan(
             &rule,
-            &sandbox,
+            &jail,
             &LaunchOptions::default(),
             &LaunchContext::default()
         )
@@ -594,7 +594,7 @@ mod tests {
 
         std::fs::write(game.join("run.sh"), "#!/bin/sh\n").expect("exe");
 
-        let sandbox = sandbox_over(game);
+        let jail = jail_over(game);
         let rule = rule_from(EXEC_RULE);
 
         let ctx = LaunchContext {
@@ -604,7 +604,7 @@ mod tests {
             ..Default::default()
         };
 
-        let plan = plan(&rule, &sandbox, &LaunchOptions::default(), &ctx).expect("plan");
+        let plan = plan(&rule, &jail, &LaunchOptions::default(), &ctx).expect("plan");
 
         // One argument, carrying the whole string. There is no shell to split
         // it, so it reaches the game as a single argv entry and nothing else.
@@ -621,7 +621,7 @@ mod tests {
 
         std::fs::write(game.join("run.sh"), "#!/bin/sh\n").expect("exe");
 
-        let sandbox = sandbox_over(game);
+        let jail = jail_over(game);
         let rule = rule_from(EXEC_RULE);
 
         let ctx = LaunchContext {
@@ -629,13 +629,13 @@ mod tests {
             ..Default::default()
         };
 
-        assert!(plan(&rule, &sandbox, &LaunchOptions::default(), &ctx).is_err());
+        assert!(plan(&rule, &jail, &LaunchOptions::default(), &ctx).is_err());
     }
 
     #[test]
     fn a_uri_rule_produces_no_program() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        let sandbox = sandbox_over(tmp.path());
+        let jail = jail_over(tmp.path());
 
         let rule = rule_from(
             r#"{ "manifestVersion": 1, "launch": { "uri": "steam://rungameid/271590" } }"#,
@@ -643,7 +643,7 @@ mod tests {
 
         let plan = plan(
             &rule,
-            &sandbox,
+            &jail,
             &LaunchOptions::default(),
             &LaunchContext::default(),
         )

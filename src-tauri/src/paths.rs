@@ -8,7 +8,7 @@ use tmc_core::error::{AppError, AppResult};
 ///
 /// All of it comes from Tauri's path resolver rather than from `dirs` or a
 /// hand-rolled `$HOME` join, because the answer differs per platform in ways
-/// that matter: on Android and iOS these resolve inside the app's sandboxed
+/// that matter: on Android and iOS these resolve inside the app's jailed
 /// container, which is the only writable location and the only one the OS
 /// isolates from other apps. A hardcoded `~/.tmc` would be both wrong and
 /// world-readable there.

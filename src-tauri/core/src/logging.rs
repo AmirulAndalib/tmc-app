@@ -28,7 +28,7 @@ pub enum LogLevel {
     Debug,
     Info,
     /// A security-relevant decision: a permission granted, a plugin approved, a
-    /// sandbox refusal. Never suppressed.
+    /// jail refusal. Never suppressed.
     Security,
     Warn,
     Error,

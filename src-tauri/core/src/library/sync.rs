@@ -25,7 +25,7 @@
 //! WHAT THIS MODULE DOES *NOT* DO
 //! ------------------------------
 //! Write to disk. It reconciles the DATABASE and returns a plan; the installer
-//! ([`super::install`]) is what touches the filesystem, behind the sandbox. The
+//! ([`super::install`]) is what touches the filesystem, behind the jail. The
 //! split is what lets the whole of this be tested without a game directory.
 
 use serde::{Deserialize, Serialize};

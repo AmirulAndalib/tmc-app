@@ -21,7 +21,7 @@
 //!     IPC reply.
 //!   * **It is not a capability escalation.** `settings_patch` already accepts
 //!     an arbitrary string for `gameDirs` and `downloadDir`, so a webview that
-//!     wanted to point the plugin sandbox somewhere unwelcome never needed a
+//!     wanted to point the plugin jail somewhere unwelcome never needed a
 //!     directory listing to do it. This makes the tree readable; it does not
 //!     make anything writable that was not already.
 //!
@@ -174,8 +174,8 @@ pub fn fs_list_dirs(
      * Canonicalised before anything else, so the path that goes into the reply
      * — and therefore the one that comes back on the next call and eventually
      * lands in `gameDirs` — is the real one rather than a chain of `..` and
-     * symlinks. The plugin sandbox canonicalises its own roots too; agreeing
-     * with it here means the picker cannot show a path the sandbox would then
+     * symlinks. The plugin jail canonicalises its own roots too; agreeing
+     * with it here means the picker cannot show a path the jail would then
      * resolve somewhere else.
      */
     let dir = start

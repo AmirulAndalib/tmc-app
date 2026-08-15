@@ -1,7 +1,7 @@
-//! What a sandbox root is allowed to be.
+//! What a jail root is allowed to be.
 //!
 //! A game directory and the download directory are not ordinary preferences.
-//! They are the **anchors of the plugin jail**: `plugins::sandbox` resolves
+//! They are the **anchors of the plugin jail**: `plugins::jail` resolves
 //! every `PathRef { root: gameDir, .. }` beneath whatever is stored here, and an
 //! installer plugin holding `{gameDir, "", write}` can write anywhere under it.
 //! So the value decides how much a plugin's permissions are actually worth.
@@ -79,7 +79,7 @@ const SYSTEM_DIRS: &[&str] = &[
     r"C:\Users",
 ];
 
-/// Check a candidate sandbox root and return it canonicalised.
+/// Check a candidate jail root and return it canonicalised.
 ///
 /// `protected` is every directory the app itself owns — its data, logs, cache
 /// and plugin folders, plus the user's home. The candidate is refused when it
@@ -89,7 +89,7 @@ const SYSTEM_DIRS: &[&str] = &[
 /// rewrite the registry is a plugin able to grant itself permissions.
 ///
 /// The canonical path is what gets stored. Resolving here means the value in
-/// `settings.json` is the same one `plugins::sandbox` will resolve to later —
+/// `settings.json` is the same one `plugins::jail` will resolve to later —
 /// a stored path full of `..` and symlinks could pass this check and then
 /// canonicalise somewhere else when the jail is built.
 pub fn validate_root(candidate: &str, protected: &[PathBuf]) -> AppResult<PathBuf> {
@@ -114,7 +114,7 @@ pub fn validate_root(candidate: &str, protected: &[PathBuf]) -> AppResult<PathBu
      * that is itself a root.
      */
     if dir.parent().is_none() {
-        return Err(AppError::sandbox(
+        return Err(AppError::jail(
             "A whole drive cannot be used as a game folder. Choose the game's own directory."
                 .to_string(),
         ));
@@ -128,7 +128,7 @@ pub fn validate_root(candidate: &str, protected: &[PathBuf]) -> AppResult<PathBu
         };
 
         if dir == resolved {
-            return Err(AppError::sandbox(format!(
+            return Err(AppError::jail(format!(
                 "{} is a system folder. Choose the game's own directory inside it.",
                 dir.display()
             )));
@@ -148,7 +148,7 @@ pub fn validate_root(candidate: &str, protected: &[PathBuf]) -> AppResult<PathBu
          * the same test.
          */
         if resolved.starts_with(&dir) {
-            return Err(AppError::sandbox(format!(
+            return Err(AppError::jail(format!(
                 "{} contains the app's own files. Choose the game's own directory.",
                 dir.display()
             )));

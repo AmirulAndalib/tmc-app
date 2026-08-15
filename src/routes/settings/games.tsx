@@ -12,7 +12,7 @@ import { useFolderPicker } from '~/components/folder-picker'
 /**
  * Where each game is installed.
  *
- * These paths are the anchor of the plugin sandbox: an installer plugin's
+ * These paths are the anchor of the plugin file jail: an installer plugin's
  * `gameDir` root is whatever is set here, and it can never write outside it. So
  * the path is always chosen by BROWSING, never typed — a text field is one a
  * compromised page could pre-fill, and it would then be the jail's own boundary

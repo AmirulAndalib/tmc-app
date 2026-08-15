@@ -136,7 +136,7 @@ impl AppSettings {
     }
 }
 
-/// The settings that are sandbox roots rather than preferences.
+/// The settings that are jail roots rather than preferences.
 ///
 /// Everything else in [`AppSettings`] describes how the app looks or behaves,
 /// and the worst a wrong value does is annoy someone. These two decide where an
@@ -145,7 +145,7 @@ impl AppSettings {
 ///
 /// Named with the wire (camelCase) spelling because that is what arrives in a
 /// patch from the webview.
-pub const SANDBOX_ROOT_FIELDS: &[&str] = &["gameDirs", "downloadDir"];
+pub const JAIL_ROOT_FIELDS: &[&str] = &["gameDirs", "downloadDir"];
 
 pub struct SettingsStore {
     path: PathBuf,
@@ -190,7 +190,7 @@ impl SettingsStore {
     /// changed: two settings screens open at once must not have one clobber the
     /// other's field with a stale full object.
     ///
-    /// [`SANDBOX_ROOT_FIELDS`] are REFUSED here rather than merged. They are the
+    /// [`JAIL_ROOT_FIELDS`] are REFUSED here rather than merged. They are the
     /// anchors of the plugin jail, not preferences, and they go through
     /// [`Self::set_game_dir`] / [`Self::set_download_dir`], which run
     /// [`crate::anchor::validate_root`]. Refusing loudly rather than dropping
@@ -201,10 +201,10 @@ impl SettingsStore {
         let mut merged = serde_json::to_value(self.get())?;
 
         if let Some(over) = patch.as_object() {
-            for field in SANDBOX_ROOT_FIELDS {
+            for field in JAIL_ROOT_FIELDS {
                 if over.contains_key(*field) {
                     return Err(AppError::invalid(format!(
-                        "`{field}` is a sandbox root and cannot be set through a settings patch."
+                        "`{field}` is a jail root and cannot be set through a settings patch."
                     )));
                 }
             }
@@ -228,11 +228,11 @@ impl SettingsStore {
         Ok(next)
     }
 
-    /// Point a game's sandbox root at `dir`, or clear it with `None`.
+    /// Point a game's jail root at `dir`, or clear it with `None`.
     ///
     /// The path is validated and canonicalised by [`crate::anchor::validate_root`]
     /// before it is stored, so what lands in `settings.json` is the same path
-    /// `plugins::sandbox` will resolve when it builds the jail.
+    /// `plugins::jail` will resolve when it builds the jail.
     ///
     /// Returns the stored (canonical) path alongside the new settings, because
     /// the caller has to audit the value that was actually written rather than
@@ -269,7 +269,7 @@ impl SettingsStore {
     }
 
     /// Where installers put downloads before unpacking them, or `None` for the
-    /// app's own cache. Same validation as a game root: it is a sandbox root
+    /// app's own cache. Same validation as a game root: it is a jail root
     /// too, and a plugin's `downloads` grant resolves beneath it.
     pub fn set_download_dir(
         &self,
@@ -356,13 +356,13 @@ mod tests {
         }
     }
 
-    /// The whole point of `SANDBOX_ROOT_FIELDS`. A patch is the surface the
+    /// The whole point of `JAIL_ROOT_FIELDS`. A patch is the surface the
     /// webview reaches directly, so this is the gate that has to hold.
     #[test]
-    fn a_patch_cannot_set_a_sandbox_root() {
+    fn a_patch_cannot_set_a_jail_root() {
         let store = TempStore::new("roots");
 
-        for field in SANDBOX_ROOT_FIELDS {
+        for field in JAIL_ROOT_FIELDS {
             let patch = serde_json::json!({ *field: "/tmp" });
 
             assert!(

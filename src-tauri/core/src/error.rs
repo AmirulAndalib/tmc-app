@@ -25,11 +25,16 @@ pub enum AppError {
     #[error("{0}")]
     Invalid(String),
 
-    /// A plugin asked for something its manifest does not permit. Always
-    /// surfaced verbatim: the user needs to know which plugin and which
+    /// A plugin asked for a file its manifest does not permit it to touch.
+    /// Always surfaced verbatim: the user needs to know which plugin and which
     /// permission, otherwise "install failed" is unactionable.
-    #[error("Blocked by the plugin sandbox: {0}")]
-    Sandbox(String),
+    ///
+    /// Named for [`crate::plugins::jail`] rather than for a "sandbox", because
+    /// in this app a **sandbox** is the user's mod profile and this error has
+    /// nothing to do with one — a message reading "blocked by the sandbox"
+    /// would send somebody to look at their profile settings.
+    #[error("Blocked by the plugin file jail: {0}")]
+    Jail(String),
 
     /// Carries its detail privately — `Display` is the generic sentence, and
     /// [`AppError::detail`] is what the audit log writes.
@@ -46,8 +51,8 @@ impl AppError {
         Self::Invalid(msg.into())
     }
 
-    pub fn sandbox(msg: impl Into<String>) -> Self {
-        Self::Sandbox(msg.into())
+    pub fn jail(msg: impl Into<String>) -> Self {
+        Self::Jail(msg.into())
     }
 
     /// The stable discriminant the frontend switches on. The message may be
@@ -59,7 +64,7 @@ impl AppError {
             Self::Network(_) => "network",
             Self::Api(_) => "api",
             Self::Invalid(_) => "invalid",
-            Self::Sandbox(_) => "sandbox",
+            Self::Jail(_) => "jail",
             Self::Internal(_) => "internal",
         }
     }

@@ -12,7 +12,7 @@ use tmc_core::logging::Audit;
 use tmc_core::net::LatencyStore;
 use tmc_core::plugins::apps::AppPlugins;
 use tmc_core::plugins::registry::Registry;
-use tmc_core::plugins::{sandbox_for, SandboxRoots};
+use tmc_core::plugins::{jail_for, JailRoots};
 use tmc_core::secure::SecureStore;
 use tmc_core::settings::{AppSettings, SettingsStore};
 
@@ -102,13 +102,13 @@ impl AppState {
         })
     }
 
-    /// The directories a plugin sandbox may be anchored to.
+    /// The directories a plugin jail may be anchored to.
     ///
     /// Resolved here rather than in `tmc-core` because the answer is
     /// platform-specific and Tauri's resolver is the only thing that knows it.
     /// The core decides what a plugin may *do* with them.
-    pub fn sandbox_roots(&self) -> SandboxRoots {
-        SandboxRoots {
+    pub fn jail_roots(&self) -> JailRoots {
+        JailRoots {
             data: self.paths.data.clone(),
             cache: self.paths.cache.clone(),
         }
@@ -248,9 +248,9 @@ impl AppState {
         }
 
         let manifest = rule.as_manifest();
-        let roots = self.sandbox_roots();
+        let roots = self.jail_roots();
 
-        let sandbox = sandbox_for(&manifest, &roots, &settings, Some(app_id))?;
+        let jail = jail_for(&manifest, &roots, &settings, Some(app_id))?;
 
         let options: LaunchOptions = payload
             .get("options")
@@ -263,12 +263,12 @@ impl AppState {
             game_version,
             loader,
             install_dir: dir,
-            game_dir: sandbox
+            game_dir: jail
                 .root_path(tmc_core::plugins::manifest::FsRoot::GameDir)
                 .map(std::path::Path::to_path_buf),
         };
 
-        let mut plan = build_launch_plan(rule, &sandbox, &options, &ctx)?;
+        let mut plan = build_launch_plan(rule, &jail, &options, &ctx)?;
 
         /*
          * The install's own `launchArgs` and `launchEnv` are appended AFTER the
@@ -287,7 +287,7 @@ impl AppState {
                 // Same refusal the rule's own arguments get. A user-typed
                 // argument is not more trusted than a plugin-supplied one.
                 if arg.contains('\0') || arg.contains('\n') || arg.contains('\r') {
-                    return Err(AppError::sandbox(
+                    return Err(AppError::jail(
                         "A launch argument contains a control character.",
                     ));
                 }
@@ -306,7 +306,7 @@ impl AppState {
                 };
 
                 if key.contains('\0') || value.contains('\0') {
-                    return Err(AppError::sandbox(
+                    return Err(AppError::jail(
                         "A launch environment value contains a NUL byte.",
                     ));
                 }

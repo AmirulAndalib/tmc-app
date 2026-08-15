@@ -10,7 +10,7 @@
 //! That is a real limitation — a plugin cannot do anything we did not think of
 //! — and it is the point. The alternative is running third-party code with the
 //! user's full filesystem access on the same machine as their games, their save
-//! files and their credentials, and no amount of sandboxing bolted on
+//! files and their credentials, and no amount of isolation bolted on
 //! afterwards recovers from that starting position.
 
 use std::collections::BTreeMap;
@@ -145,7 +145,7 @@ pub struct Installer {
     deny_unknown_fields
 )]
 pub enum Step {
-    /// Fetch a file into the sandbox.
+    /// Fetch a file into the jail.
     ///
     /// `url` may contain `{}`-placeholders filled from the install context
     /// (the release file's URL, the item id). It is re-checked against the
@@ -161,7 +161,7 @@ pub enum Step {
         max_bytes: Option<u64>,
     },
 
-    /// Unpack a `.zip`, `.tar`, `.tar.gz` inside the sandbox.
+    /// Unpack a `.zip`, `.tar`, `.tar.gz` inside the jail.
     Extract {
         from: PathRef,
         to: PathRef,
@@ -222,7 +222,7 @@ pub struct PathRef {
     /// Relative to the ROOT — not to any one `FsGrant` — and `/`-separated.
     /// So a plugin granted `{gameDir, "mods"}` writes to
     /// `{ root: gameDir, path: "mods/foo.jar" }`. Validated by
-    /// [`crate::plugins::sandbox::Sandbox::resolve`].
+    /// [`crate::plugins::jail::Jail::resolve`].
     pub path: String,
 }
 

@@ -1,7 +1,7 @@
 //! Everything the TMC app does that is not "being a window".
 //!
 //! This crate deliberately has **no Tauri dependency**. The split is not
-//! cosmetic: the code that matters most here is the plugin sandbox, the query
+//! cosmetic: the code that matters most here is the plugin jail, the query
 //! parsers and the auth token lifecycle, and all three are exactly the code you
 //! want to be able to compile and fuzz on a CI runner with no display stack,
 //! no WebKit and no dbus. Keeping Tauri on the other side of the boundary is

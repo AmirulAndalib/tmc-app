@@ -164,7 +164,7 @@ pub struct RunRequest {
 /// Run an installer plugin's plan.
 ///
 /// The gate order matters and is: registry says the plugin is approved and
-/// enabled → the sandbox is built from the USER's configured directories → the
+/// enabled → the jail is built from the USER's configured directories → the
 /// executor runs, auditing each step. There is no path to the executor that
 /// skips the first two.
 #[tauri::command]
@@ -191,20 +191,20 @@ pub async fn plugin_run(state: State<'_, AppState>, request: RunRequest) -> AppR
     /*
      * A plugin that declares `apps` may only be pointed at one of them.
      * Otherwise a Minecraft installer could be handed the Rust game directory
-     * and would happily write its jars into it — inside the sandbox, and still
+     * and would happily write its jars into it — inside the jail, and still
      * wrong.
      */
     if let Some(app_id) = request.app_id {
         if !manifest.apps.is_empty() && !manifest.apps.contains(&app_id) {
-            return Err(AppError::sandbox("This plugin does not handle that game."));
+            return Err(AppError::jail("This plugin does not handle that game."));
         }
     }
 
     let settings = state.settings.get();
 
-    let sandbox = tmc_core::plugins::sandbox_for(
+    let jail = tmc_core::plugins::jail_for(
         &manifest,
-        &state.sandbox_roots(),
+        &state.jail_roots(),
         &settings,
         request.app_id,
     )?;
@@ -220,7 +220,7 @@ pub async fn plugin_run(state: State<'_, AppState>, request: RunRequest) -> AppR
 
     let executor = tmc_core::plugins::steps::Executor {
         manifest: &manifest,
-        sandbox: &sandbox,
+        jail: &jail,
         http: state.api.raw(),
         audit: &state.audit,
     };

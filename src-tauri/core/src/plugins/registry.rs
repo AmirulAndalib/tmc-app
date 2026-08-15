@@ -168,7 +168,7 @@ impl Registry {
             .ok_or_else(|| AppError::invalid("That plugin is not installed."))?;
 
         if record.needs_reapproval {
-            return Err(AppError::sandbox(
+            return Err(AppError::jail(
                 "This plugin changed since you approved it. Review it again in Settings → Plugins.",
             ));
         }
@@ -188,7 +188,7 @@ impl Registry {
         // gate in front of arbitrary filesystem writes, so it re-checks rather
         // than trusting state written by another code path.
         if manifest.fingerprint() != record.approved_fingerprint {
-            return Err(AppError::sandbox(
+            return Err(AppError::jail(
                 "This plugin's manifest does not match what you approved.",
             ));
         }
@@ -223,7 +223,7 @@ impl Registry {
         let fingerprint = manifest.fingerprint();
 
         if fingerprint != expected_fingerprint {
-            return Err(AppError::sandbox(
+            return Err(AppError::jail(
                 "The plugin changed while you were reviewing it. Nothing was installed.",
             ));
         }
@@ -293,7 +293,7 @@ impl Registry {
             // Enabling a drifted plugin has to go through approval, not a
             // toggle — the toggle is not where the permissions are shown.
             if enabled && record.needs_reapproval {
-                return Err(AppError::sandbox(
+                return Err(AppError::jail(
                     "Review this plugin's permissions again before enabling it.",
                 ));
             }
@@ -359,7 +359,7 @@ const MAX_BUNDLE_FILES: usize = 256;
 ///
 /// Symlinks are skipped rather than followed: a bundle containing
 /// `data -> /home/user` would otherwise be copied wholesale into the app's
-/// data directory, or — worse — leave a live link behind that later sandbox
+/// data directory, or — worse — leave a live link behind that later jail
 /// resolution has to catch.
 fn copy_bundle(from: &Path, to: &Path) -> AppResult<()> {
     let mut budget = MAX_BUNDLE_BYTES;
