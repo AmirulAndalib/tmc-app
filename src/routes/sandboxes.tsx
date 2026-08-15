@@ -23,6 +23,7 @@ import { useAuth } from '~/lib/auth/provider'
 import { useLibrary } from '~/lib/library/provider'
 import type {
     DependencyReportT,
+    OutdatedT,
     DeployReportT,
     OptionSpecT,
     SandboxRowT,
@@ -454,6 +455,8 @@ function SandboxDetail({
 
             {report && <DeploySummary report={report} />}
 
+            <UpdatesBanner sandbox={sandbox} onChanged={onChanged} />
+
             {deps && (
                 <DependencyPanel
                     sandboxId={sandbox.id}
@@ -623,6 +626,79 @@ function SandboxDetail({
                 onDeleted={onDeleted}
             />
         </div>
+    )
+}
+
+/**
+ * "N items have a newer release."
+ *
+ * Shown whether or not this sandbox updates automatically — a pinned sandbox is
+ * one somebody chose to pin, and being told what they are pinned away from is
+ * the point of pinning rather than unsubscribing.
+ */
+function UpdatesBanner({
+    sandbox,
+    onChanged,
+}: {
+    sandbox: SandboxRowT
+    onChanged: () => Promise<void>
+}) {
+    const [outdated, setOutdated] = useState<OutdatedT[]>([])
+    const [busy, setBusy] = useState(false)
+
+    useEffect(() => {
+        let live = true
+
+        void ipc
+            .sandboxUpdates()
+            .then((all) => {
+                if (live)
+                    setOutdated(all.filter((row) => row.sandboxId === sandbox.id))
+            })
+            .catch(() => setOutdated([]))
+
+        return () => {
+            live = false
+        }
+    }, [sandbox.id, sandbox.mods])
+
+    if (outdated.length === 0) return null
+
+    return (
+        <section className="flex flex-wrap items-center gap-3 rounded-xl border border-accent/50 bg-surface p-3">
+            <div className="min-w-0 flex-1">
+                <p className="text-sm">
+                    {outdated.length} item
+                    {outdated.length === 1 ? ' has' : 's have'} a newer release
+                </p>
+                <p className="truncate text-xs text-muted">
+                    {outdated
+                        .map(
+                            (row) =>
+                                `${row.name}${
+                                    row.toVersion ? ` → ${row.toVersion}` : ''
+                                }`
+                        )
+                        .join(', ')}
+                </p>
+            </div>
+
+            <button
+                type="button"
+                disabled={busy}
+                onClick={() => {
+                    setBusy(true)
+
+                    void ipc
+                        .sandboxStage(sandbox.id, true)
+                        .then(onChanged)
+                        .finally(() => setBusy(false))
+                }}
+                className="shrink-0 rounded-lg bg-accent px-3 py-1.5 text-xs text-accent-foreground disabled:opacity-50"
+            >
+                {busy ? 'Downloading…' : 'Update now'}
+            </button>
+        </section>
     )
 }
 
@@ -934,6 +1010,23 @@ function SandboxSettings({
                     label="Keep this sandbox in the cloud"
                     checked={sandbox.cloudSync}
                     onChange={(next) => void patch({ cloudSync: next })}
+                />
+            </div>
+
+            <div className="flex items-center justify-between gap-3 border-t border-border pt-3">
+                <div className="min-w-0">
+                    <p className="text-sm">Keep its mods up to date</p>
+                    <p className="text-xs text-muted">
+                        {sandbox.autoUpdate
+                            ? 'New releases are downloaded automatically, and applied if this sandbox is already deployed.'
+                            : 'Pinned. You will still be told when an update exists.'}
+                    </p>
+                </div>
+
+                <Toggle
+                    label="Keep this sandbox's mods up to date"
+                    checked={sandbox.autoUpdate}
+                    onChange={(next) => void patch({ autoUpdate: next })}
                 />
             </div>
 

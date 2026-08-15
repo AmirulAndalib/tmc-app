@@ -227,6 +227,8 @@ pub fn run() {
             commands::sandbox::sandbox_check,
             commands::sandbox::sandbox_refresh_dependencies,
             commands::sandbox::sandbox_add_missing,
+            commands::sandbox::sandbox_updates,
+            commands::sandbox::sandbox_auto_update,
             commands::downloads::download_list,
             commands::downloads::download_pause,
             commands::downloads::download_resume,

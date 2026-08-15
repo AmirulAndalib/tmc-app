@@ -515,6 +515,8 @@ export const SandboxRowSchema = z.object({
     preset: z.string().nullable(),
     isDefault: z.boolean(),
     cloudSync: z.boolean(),
+    /** Keep this sandbox's mods at the newest release its subscriptions offer. */
+    autoUpdate: z.boolean(),
     gameDir: z.string().nullable(),
     options: z.record(z.string(), z.unknown()),
     launchArgs: z.array(z.string()),
@@ -817,3 +819,30 @@ export const DependencyReportSchema = z.object({
 })
 
 export type DependencyReportT = z.infer<typeof DependencyReportSchema>
+
+// ------------------------------------------------------------- Auto-updates
+
+export const OutdatedSchema = z.object({
+    sandboxId: z.number(),
+    sandboxName: z.string(),
+    modKey: z.string(),
+    name: z.string(),
+    /** Null when the staged release predates version strings being recorded. */
+    fromVersion: z.string().nullable(),
+    toVersion: z.string().nullable(),
+    releaseId: z.number().nullable(),
+})
+
+export type OutdatedT = z.infer<typeof OutdatedSchema>
+
+export const AutoUpdateReportSchema = z.object({
+    checked: z.number(),
+    updated: z.array(z.string()),
+    redeployed: z.array(z.string()),
+    /** `[item, reason]` for anything that did not make it. */
+    failed: z.array(z.tuple([z.string(), z.string()])),
+    /** Had an update, left alone, and why. */
+    skipped: z.array(z.string()),
+})
+
+export type AutoUpdateReportT = z.infer<typeof AutoUpdateReportSchema>

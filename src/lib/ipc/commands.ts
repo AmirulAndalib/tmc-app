@@ -3,7 +3,9 @@ import { z } from 'zod'
 import { call } from './index'
 import {
     ApiEnvSchema,
+    AutoUpdateReportSchema,
     DependencyReportSchema,
+    OutdatedSchema,
     DetectedGameSchema,
     DeployReportSchema,
     PurgeReportSchema,
@@ -293,6 +295,7 @@ export const ipc = {
             gameDir?: string | null
             options?: Record<string, unknown>
             cloudSync?: boolean
+            autoUpdate?: boolean
         },
         preset?: string
     ) => call('sandbox_create', SandboxRowSchema, { new: sandbox, preset }),
@@ -311,6 +314,7 @@ export const ipc = {
             launchArgs?: string[]
             launchEnv?: Record<string, string>
             cloudSync?: boolean
+            autoUpdate?: boolean
             isDefault?: boolean
         }
     ) => call('sandbox_patch', SandboxRowSchema, { id, patch }),
@@ -363,6 +367,24 @@ export const ipc = {
      */
     sandboxCheck: (id: number) =>
         call('sandbox_check', DependencyReportSchema, { id }),
+
+    /**
+     * Everything with a newer release than the one staged.
+     *
+     * Ignores the auto-update switches: somebody who turned them off still
+     * wants to be told, and being told is the point of turning them off rather
+     * than unsubscribing.
+     */
+    sandboxUpdates: () => call('sandbox_updates', z.array(OutdatedSchema)),
+
+    /**
+     * Bring every eligible sandbox forward.
+     *
+     * Redeploys only the sandboxes that were ALREADY deployed — staging is
+     * invisible, deploying writes into somebody's game folder, and an automatic
+     * pass may not do the second on its own initiative.
+     */
+    sandboxAutoUpdate: () => call('sandbox_auto_update', AutoUpdateReportSchema),
 
     /** Re-fetch every member's edges. What "check again" calls. */
     sandboxRefreshDependencies: (id: number) =>

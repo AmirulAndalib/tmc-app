@@ -41,7 +41,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::{AppError, AppResult};
 
 /// Schema version. Bumped whenever `migrate` gains a step.
-const SCHEMA_VERSION: i64 = 5;
+const SCHEMA_VERSION: i64 = 6;
 
 /// One subscribed item as this device knows it.
 ///
@@ -228,6 +228,7 @@ impl LibraryDb {
                     3 => conn.execute_batch(SCHEMA_V3)?,
                     4 => conn.execute_batch(SCHEMA_V4)?,
                     5 => conn.execute_batch(SCHEMA_V5)?,
+                    6 => conn.execute_batch(SCHEMA_V6)?,
                     _ => break,
                 }
 
@@ -319,6 +320,17 @@ const SCHEMA_V1: &str = r#"
 /// sandboxes the cloud has never heard of (see `cloud_sync`). Merging the two
 /// would mean a sync deleting a local-only sandbox because the server did not
 /// list it.
+/// Whether a sandbox keeps its own mods up to date.
+///
+/// The first migration that is an `ALTER TABLE` rather than a `CREATE ... IF
+/// NOT EXISTS`, which is exactly the case the stepwise migration runner exists
+/// for: re-running this batch on a database that already has the column is an
+/// error, not a no-op.
+const SCHEMA_V6: &str = r#"
+                ALTER TABLE sandbox
+                    ADD COLUMN auto_update INTEGER NOT NULL DEFAULT 1;
+"#;
+
 /// Dependency edges, cached per item.
 ///
 /// WHY THEY ARE CACHED AT ALL

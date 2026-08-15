@@ -13,6 +13,7 @@
 //! directory, no network and no display stack: `sync` produces a PLAN and
 //! `install` executes it, and only the second one needs a filesystem.
 
+pub mod autoupdate;
 pub mod db;
 pub mod dependency;
 pub mod deploy;

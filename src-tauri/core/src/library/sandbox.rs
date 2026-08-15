@@ -150,6 +150,13 @@ pub struct Sandbox {
     pub is_default: bool,
     pub cloud_sync: bool,
 
+    /// Keep this sandbox's mods at the newest release its subscriptions offer.
+    ///
+    /// Per sandbox rather than global because the useful case is exactly the
+    /// split: a "current" profile that tracks the latest, and a pinned one for
+    /// the modpack somebody's friends are all running.
+    pub auto_update: bool,
+
     /// The game folder on THIS machine. `None` means the app's configured
     /// directory for this game.
     pub game_dir: Option<String>,
@@ -243,6 +250,10 @@ pub struct NewSandbox {
     /// machine, and the switch is one click away on every sandbox.
     #[serde(default = "yes")]
     pub cloud_sync: bool,
+    /// Default ON. Somebody who has not thought about it is better served by a
+    /// mod that stays current than by one that silently rots.
+    #[serde(default = "yes")]
+    pub auto_update: bool,
 }
 
 fn yes() -> bool {
@@ -271,6 +282,7 @@ pub struct SandboxPatch {
     pub launch_env: Option<BTreeMap<String, String>>,
     pub cloud_sync: Option<bool>,
     pub is_default: Option<bool>,
+    pub auto_update: Option<bool>,
 }
 
 /// Deserialise a nullable field into `Some(_)` whenever the key was PRESENT,
@@ -321,10 +333,10 @@ impl LibraryDb {
                 INSERT INTO sandbox (
                     app_id, app_slug, app_name, name, description,
                     environment, strategy, game_version, loader, preset,
-                    is_default, cloud_sync, game_dir, options,
+                    is_default, cloud_sync, auto_update, game_dir, options,
                     created_at, updated_at
                 ) VALUES (
-                    ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?15
+                    ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?16
                 )
                 "#,
                 params![
@@ -343,6 +355,7 @@ impl LibraryDb {
                     // none selected.
                     first as i64,
                     new.cloud_sync as i64,
+                    new.auto_update as i64,
                     new.game_dir,
                     serde_json::to_string(&new.options).unwrap_or_else(|_| "{}".into()),
                     now,
@@ -467,6 +480,7 @@ impl LibraryDb {
                     launch_args  = CASE WHEN ?18 THEN ?19 ELSE launch_args  END,
                     launch_env   = CASE WHEN ?20 THEN ?21 ELSE launch_env   END,
                     cloud_sync   = CASE WHEN ?22 THEN ?23 ELSE cloud_sync   END,
+                    auto_update  = CASE WHEN ?25 THEN ?26 ELSE auto_update  END,
                     updated_at   = ?24
                 WHERE id = ?1
                 "#,
@@ -504,6 +518,8 @@ impl LibraryDb {
                     patch.cloud_sync.is_some(),
                     patch.cloud_sync,
                     now,
+                    patch.auto_update.is_some(),
+                    patch.auto_update,
                 ],
             )?;
 
@@ -1079,7 +1095,7 @@ const SANDBOX_SELECT: &str = "SELECT
     id, remote_id, app_id, app_slug, app_name, name, description,
     environment, strategy, game_version, loader, preset, is_default,
     cloud_sync, game_dir, options, launch_args, launch_env,
-    deployed_at, last_deploy, created_at, updated_at
+    deployed_at, last_deploy, created_at, updated_at, auto_update
  FROM sandbox";
 
 fn row_to_sandbox(row: &rusqlite::Row<'_>) -> rusqlite::Result<Sandbox> {
@@ -1115,6 +1131,7 @@ fn row_to_sandbox(row: &rusqlite::Row<'_>) -> rusqlite::Result<Sandbox> {
         last_deploy: last_deploy.and_then(|raw| serde_json::from_str(&raw).ok()),
         created_at: row.get(20)?,
         updated_at: row.get(21)?,
+        auto_update: row.get::<_, i64>(22)? != 0,
         mods: Vec::new(),
     })
 }
@@ -1142,6 +1159,7 @@ mod tests {
             game_dir: None,
             options: BTreeMap::from([("memoryMb".into(), serde_json::json!(4096))]),
             cloud_sync: true,
+            auto_update: true,
         }
     }
 

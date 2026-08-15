@@ -581,6 +581,7 @@ mod tests {
             game_dir: None,
             options: BTreeMap::new(),
             cloud_sync: false,
+            auto_update: true,
         }
     }
 

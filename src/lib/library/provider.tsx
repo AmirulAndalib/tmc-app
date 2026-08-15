@@ -12,7 +12,7 @@ import {
 import { ipc } from '~/lib/ipc/commands'
 import { isIpcError } from '~/lib/ipc'
 import { useAuth } from '~/lib/auth/provider'
-import type { LibraryRowT, SyncReportT } from '~/lib/ipc/schemas'
+import type { AutoUpdateReportT, LibraryRowT, SyncReportT } from '~/lib/ipc/schemas'
 
 /**
  * The library, and the loop that keeps it in step with the account.
@@ -46,6 +46,14 @@ const SYNC_INTERVAL_MS = 60_000
 type LibraryCtxT = {
     rows: LibraryRowT[]
     loading: boolean
+    /**
+     * The last automatic update pass that actually moved something.
+     *
+     * Only the ones that DID something: a pass that found nothing is the
+     * overwhelmingly common case and reporting it would be a notification every
+     * minute saying nothing happened.
+     */
+    lastUpdate: { at: number; report: AutoUpdateReportT } | null
     /** The last sync's summary, for the "synced N seconds ago" line. */
     lastSync: { at: number; report: SyncReportT } | null
     error: string | null
@@ -83,6 +91,7 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
     const [loading, setLoading] = useState(false)
     const [error, setError] = useState<string | null>(null)
     const [lastSync, setLastSync] = useState<LibraryCtxT['lastSync']>(null)
+    const [lastUpdate, setLastUpdate] = useState<LibraryCtxT['lastUpdate']>(null)
     const [busy, setBusy] = useState<Set<string>>(new Set())
 
     /*
@@ -115,6 +124,22 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
 
                 setLastSync({ at: Date.now(), report })
                 setError(null)
+
+                /*
+                 * Sandboxes come forward AFTER the sync, not before: the sync
+                 * is what learns there is a newer release at all, so running
+                 * this first would always be one pass behind.
+                 *
+                 * Its failure is swallowed on purpose. An update that could not
+                 * download leaves the previous version staged and deployed —
+                 * exactly what the user had a minute ago — and turning that
+                 * into a red banner over the library would report a
+                 * non-problem. The sandbox screen shows what is outstanding.
+                 */
+                const updates = await ipc.sandboxAutoUpdate().catch(() => null)
+
+                if (updates && updates.updated.length > 0)
+                    setLastUpdate({ at: Date.now(), report: updates })
             } catch (err) {
                 setError(messageOf(err))
             } finally {
@@ -224,13 +249,25 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
             loading,
             lastSync,
             error,
+            lastUpdate,
             sync,
             refresh,
             install,
             uninstall,
             busy,
         }),
-        [rows, loading, lastSync, error, sync, refresh, install, uninstall, busy]
+        [
+            rows,
+            loading,
+            lastSync,
+            lastUpdate,
+            error,
+            sync,
+            refresh,
+            install,
+            uninstall,
+            busy,
+        ]
     )
 
     return <LibraryCtx.Provider value={value}>{children}</LibraryCtx.Provider>

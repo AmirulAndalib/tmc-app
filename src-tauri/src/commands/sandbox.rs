@@ -19,6 +19,7 @@ use tauri::State;
 
 use tmc_core::deploy::{PurgeReport, StrategyReport, VerifyReport};
 use tmc_core::error::{AppError, AppResult};
+use tmc_core::library::autoupdate::{self, AutoUpdateReport, Outdated};
 use tmc_core::library::dependency::{DependencyReport, Edge, Relation};
 use tmc_core::library::deploy::{
     deploy_sandbox, purge_sandbox, stage_mod, strategies_for, verify_sandbox, StageOutcome,
@@ -687,6 +688,35 @@ pub fn sandbox_strategies(state: State<'_, AppState>, id: i64) -> AppResult<Vec<
     let ctx = state.sandbox_ctx(&plugins, &settings, &roots, &staging, &backups);
 
     strategies_for(&sandbox, &ctx)
+}
+
+/// Everything with a newer release than the one staged.
+///
+/// Ignores the auto-update switches on purpose: somebody who turned automatic
+/// updates off still wants to be TOLD there is one, and being told is the whole
+/// point of turning it off rather than unsubscribing.
+#[tauri::command]
+pub fn sandbox_updates(state: State<'_, AppState>) -> AppResult<Vec<Outdated>> {
+    autoupdate::outdated(&state.library)
+}
+
+/// Bring every eligible sandbox forward.
+///
+/// Called after each library sync and on launch. Redeploys only the sandboxes
+/// that were ALREADY deployed — staging is invisible, deploying writes into
+/// somebody's game folder, and an automatic pass may not do the second on its
+/// own initiative.
+#[tauri::command]
+pub async fn sandbox_auto_update(state: State<'_, AppState>) -> AppResult<AutoUpdateReport> {
+    let plugins = state.app_plugins();
+    let settings = state.settings.get();
+    let roots = state.jail_roots();
+    let staging = state.paths.staging_dir();
+    let backups = state.paths.backup_dir();
+
+    let ctx = state.sandbox_ctx(&plugins, &settings, &roots, &staging, &backups);
+
+    autoupdate::run(&state.library, &ctx).await
 }
 
 /// A game's presets, option schema and deployment rules.
