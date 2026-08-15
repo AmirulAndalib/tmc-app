@@ -24,6 +24,14 @@
 //!   * **The environment is a whitelist of what the file sets**, layered on the
 //!     inherited environment. It cannot READ one.
 //!
+//! VIRTUAL FILESYSTEM
+//! ------------------
+//! A plan can carry a [`VfsHandoff`]: the sandbox deployed virtually, so the
+//! game is started with the injector rather than with `Command::spawn` and is
+//! told where to find its tree. That is a launch-time decision because it is
+//! the only moment the mapping exists — a virtual deploy writes nothing, so a
+//! game started any other way sees a stock folder.
+//!
 //! WHAT THE USER STILL DECIDES
 //! --------------------------
 //! [`LaunchPlan`] is produced and returned WITHOUT running anything, so the app
@@ -211,6 +219,24 @@ pub struct LaunchContext {
     pub install_dir: Option<PathBuf>,
     /// The game directory itself, as `{gameDir}`.
     pub game_dir: Option<PathBuf>,
+    /// A published virtual tree to carry into the game, when the sandbox being
+    /// launched deployed that way.
+    pub vfs: Option<VfsHandoff>,
+}
+
+/// Where a virtually-deployed sandbox published its tree.
+///
+/// Both paths are the app's own — the blob is inside the sandbox's staging
+/// folder and the root is the game directory that was already validated as a
+/// jail anchor. Neither comes from a launch rule, which is what keeps a plugin
+/// from pointing the injector at a tree it wrote.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VfsHandoff {
+    /// The published blob.
+    pub blob: String,
+    /// The game directory the tree's virtual paths are relative to.
+    pub root: String,
 }
 
 /// What is about to run. Produced without side effects, shown to the user,
@@ -230,6 +256,15 @@ pub struct LaunchPlan {
     pub env: BTreeMap<String, String>,
     /// Hide the app's window while the game runs, from the install's options.
     pub hide_window: bool,
+
+    /// Set when this launch has to carry a virtual filesystem into the game.
+    ///
+    /// `None` for every other strategy, and for a URI hand-off — a game started
+    /// through `steam://` is started by Steam, and there is no process of ours
+    /// to inject into. A sandbox deployed virtually and launched through a URI
+    /// therefore runs unmodded, which is why [`plan`] refuses that combination
+    /// rather than letting it look like it worked.
+    pub vfs: Option<VfsHandoff>,
 }
 
 /// One custom option as placeholder text, or `None` if it cannot be one.
@@ -457,6 +492,21 @@ pub fn plan(
         env.insert(key.clone(), value);
     }
 
+    /*
+     * A virtual deploy needs a process of ours to inject into, and a URI
+     * hand-off gives us one belonging to Steam. Refusing is the honest
+     * outcome: the alternative starts the game with none of the sandbox's mods
+     * and reports success, which is the hardest kind of bug for a user to
+     * diagnose — the folder is stock, so there is nothing to find.
+     */
+    if ctx.vfs.is_some() && uri.is_some() {
+        return Err(AppError::invalid(
+            "This sandbox uses virtual-filesystem deployment, which needs the app to start the \
+             game itself — but this game's launch rule hands off to its store client. Switch the \
+             sandbox to hard links, or use a launch rule that names the game's own executable.",
+        ));
+    }
+
     Ok(LaunchPlan {
         rule: rule.source.clone(),
         program: program.map(|p| p.display().to_string()),
@@ -465,6 +515,7 @@ pub fn plan(
         cwd: cwd.map(|p| p.display().to_string()),
         env,
         hide_window: options.hide_on_launch.unwrap_or(false),
+        vfs: ctx.vfs.clone(),
     })
 }
 
@@ -825,6 +876,7 @@ mod tests {
             cwd: None,
             env: BTreeMap::new(),
             hide_window: false,
+            vfs: None,
         };
 
         assert_eq!(describe(&plan), r#"/games/run.sh --profile "Kitchen sink""#);

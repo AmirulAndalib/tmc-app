@@ -4452,6 +4452,7 @@ dependencies = [
  "tauri-plugin-opener",
  "tauri-plugin-os",
  "tmc-core",
+ "tmc-usvfs",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -4479,10 +4480,21 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "time",
+ "tmc-usvfs",
  "tokio",
  "tracing",
  "url",
  "zip",
+]
+
+[[package]]
+name = "tmc-usvfs"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tempfile",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

@@ -17,7 +17,25 @@ license = "GPL-3.0-only"
 default = []
 os-keyring = ["dep:keyring"]
 
+# Virtual-filesystem deployment, the strategy that leaves the game folder
+# byte-identical. OFF, and see `tmc-usvfs`'s header for exactly why: the tree
+# and the blob format are tested everywhere, but the halves that patch an import
+# table and inject a DLL into somebody else's game process have only ever been
+# type-checked against the Windows target. Turning this on is what makes
+# `Strategy::Usvfs` deployable rather than a documented refusal.
+#
+# It gates behaviour, not compilation: the crate is a dependency either way, so
+# `Strategy::Usvfs` builds the same virtual tree and reports the same
+# availability on every platform whether or not the feature is on.
+usvfs-hooks = []
+
 [dependencies]
+# The virtual tree and its blob format. No Windows-only code is reachable from
+# here — `hooks` and `inject` are `#[cfg(windows)]` inside that crate — so this
+# dependency costs a BTreeMap and a serde impl on the four platforms that will
+# never use it.
+tmc-usvfs = { path = "../usvfs" }
+
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"

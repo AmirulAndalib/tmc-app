@@ -429,6 +429,13 @@ export const LaunchPlanSchema = z.object({
     cwd: z.string().nullable(),
     env: z.record(z.string(), z.string()),
     hideWindow: z.boolean(),
+    /**
+     * Set when the sandbox being launched deployed virtually, so the game has
+     * to be started by the app itself with its filesystem carried in. Display
+     * only here — the injection happens in Rust, and the webview cannot ask
+     * for it or point it anywhere.
+     */
+    vfs: z.object({ blob: z.string(), root: z.string() }).nullable().default(null),
 })
 
 export const LaunchPreviewSchema = z.object({

@@ -79,7 +79,21 @@ tmc-core (src-tauri/core/src/)     ← NO Tauri dependency; tests anywhere
   ├──► website-city  /api/app/v1   (catalogue, auth, sandboxes)
   ├──► game servers directly       (live queries, latency, RCON)
   └──► wherever a mod's files are  (the download queue)
+
+tmc-usvfs (src-tauri/usvfs/)       ← the virtual filesystem, Windows-only halves
+  ├── tree.rs     the merged view a game is shown instead of its own folder
+  ├── shm.rs      publishing that tree where an injected process can map it
+  ├── hooks.rs    the import-table patch, inside somebody else's game
+  └── inject.rs   suspended launch + remote LoadLibrary
 ```
+
+**`tmc-usvfs` is a third crate rather than a module** for one concrete reason:
+it is the only part of the tree that can be `cargo check`ed for Windows from a
+Linux box. `tmc-core` cannot — bundled SQLite needs a C cross-compiler — so
+code that reaches into another process would otherwise be verified by reading
+it. The split is what makes `cargo check -p tmc-usvfs --target
+x86_64-pc-windows-gnu` possible, and that command has already caught four real
+bugs.
 
 **The workspace split is load-bearing.** `tmc-core` holds the plugin jail,
 the protocol parsers and the token lifecycle — the three things you most want to
@@ -134,7 +148,16 @@ genuinely need a window belongs on that side of the line.
 | `rcon/source.rs` | Valve's protocol, which is also Minecraft's |
 | `rcon/frostbite.rs` | Battlefield's, with `login.hashed` |
 | `rcon/store.rs` | Saved servers. Passwords encrypted; none of it leaves the device |
-| `launch.rs` | The only place in the app that spawns a process |
+| `launch.rs` | The only place a launch is RESOLVED. Produces a plan; runs nothing |
+
+**`src-tauri/usvfs/src/` — `tmc-usvfs`**
+
+| File | Owns |
+| --- | --- |
+| `tree.rs` | The merged view: resolution, directory listings, case rules. Platform-independent, tested everywhere |
+| `shm.rs` | The blob format, published atomically and parsed defensively — it is read inside a game |
+| `hooks.rs` | IAT patching and the redirecting `CreateFileW`. Windows only |
+| `inject.rs` | `CREATE_SUSPENDED` + `CreateRemoteThread(LoadLibraryW)`, and the quoting `CommandLineToArgvW` demands |
 
 **`src-tauri/src/` — `tmc-app`**
 
@@ -148,6 +171,7 @@ genuinely need a window belongs on that side of the line.
 | `commands/detect.rs` | Scan, and separately apply. A scan configures nothing |
 | `commands/rcon.rs` | Consoles. No command returns a password |
 | `commands/library.rs` | Sync, install, uninstall, launch |
+| `spawn.rs` | The only place in the app that starts a process. Which mechanism is the PLAN's decision, not the caller's |
 | `state.rs` | `AppState`, assembled once — shared locks and caches depend on that |
 | `paths.rs` | Every path, from Tauri's resolver — never `$HOME` |
 
@@ -654,15 +678,83 @@ file.
 | `direct` | modified | a full copy | never; it is the fallback |
 | `hardlink` | link pointers | nothing | staging is on another drive |
 | `symlink` | link pointers | nothing | Windows without Developer Mode |
-| `usvfs` | untouched | nothing | **not implemented — see below** |
+| `usvfs` | untouched | nothing | not Windows, or not built with `usvfs-hooks` |
 
-**USVFS is declared and refuses.** Mod Organizer's approach is a DLL injected
-into the game process that hooks `CreateFileW`/`FindFirstFileW`. Implementing it
-means shipping and injecting a native Windows component with its own signing
-story and its own anti-cheat exposure, and it has no meaning at all on the other
-four platforms. The variant exists so a sandbox can be *declared* to want it and
-so the plumbing — capability probe, strategy selection, ledger — is already
-shaped for it; asking for it today returns a refusal that says exactly this.
+#### USVFS: the one that deploys nothing
+
+Mod Organizer's approach, in `src-tauri/usvfs/` (`tmc-usvfs`): the mods stay in
+staging and the game is *told* they are there, by a DLL injected before its
+entry point runs that patches `CreateFileW` and `GetFileAttributesW` in its
+import table and answers them from a merged in-memory tree.
+
+```
+  app                              game process
+  ───                              ────────────
+  build the merged tree
+  publish it            ──blob──▶
+  launch suspended
+  inject the hook DLL   ──────▶    DllMain → read the tree, patch the IAT
+  resume                ──────▶    every open of a virtual path is answered
+                                   from staging
+```
+
+**Deploying is not a file operation**, and everything downstream follows from
+that:
+
+  * the merged tree is serialised to a blob inside the sandbox's own staging
+    folder, and **that publish IS the deploy**;
+  * **the ledger comes back empty**, which is the correct record rather than a
+    gap — it names files in the game folder and there are none, so `purge`
+    correctly does nothing and `verify` correctly reports a healthy folder;
+  * **a sandbox switching TO it still purges what the last strategy left**,
+    which is the one write to the game folder a virtual deploy performs. Without
+    it the user gets both: every file twice, with the virtual copy winning only
+    where the tree happens to cover it;
+  * **there is no fallback in either direction.** Whether the game folder is
+    modified at all is the reason somebody picks this, so silently linking
+    instead would dirty a folder chosen to stay clean, and silently going
+    virtual would leave a game that was never told about the mods.
+
+**The revision is a content hash, not a counter or a clock.** The injected DLL
+compares it to notice that a blob it already read has changed; a counter would
+also tick for a redeploy producing an identical tree.
+
+**It is gated twice, at deploy and at launch** (`deploy::usvfs_unavailable`,
+`spawn::launch_with_vfs`), on Windows AND on `tmc-core`'s `usvfs-hooks` feature,
+which is **off**. The two are halves of one decision: a build with only one on
+could publish a tree no launch would carry, or inject with nothing to inject.
+The refusals are separate strings because they are separate facts — "this is
+Windows-only" can never change for a Mac user, and "this build has it off" can.
+
+Why the gate exists at all is a confidence split, stated in `usvfs/src/lib.rs`:
+
+| Half | State |
+| --- | --- |
+| `tree` — the merged view, resolution, listings, case rules | **Tested**, on every platform |
+| `shm` — publishing and reading the blob atomically | **Tested**, including every malformed input |
+| `hooks` — IAT patching, the redirecting `CreateFileW` | **Type-checked against `x86_64-pc-windows-gnu`. Never run against a game.** |
+| `inject` — suspended launch, remote `LoadLibrary` | **Type-checked.** Argument quoting and environment building are tested; the launch is not |
+
+`cargo check -p tmc-usvfs --target x86_64-pc-windows-gnu` is how that
+type-checking happens and it is worth keeping working — it found four real bugs
+the first time it ran, including `IMAGE_NT_HEADERS64` living in
+`Diagnostics::Debug` while being gated behind the `Win32_System_SystemInformation`
+feature. `tmc-core` cannot be cross-checked the same way (bundled SQLite needs a
+C cross-compiler), which is exactly why the injector is its own dependency-light
+crate.
+
+**What it cannot do, even when it works:** calls through `GetProcAddress` are
+not redirected (the pointer never came from an import table), direct `ntdll`
+syscalls are not redirected, writes are not redirected, and every kernel-level
+anti-cheat treats injection as an attack — correctly. A game declaring
+`antiCheat: "kernel"` in its `sandbox.json` is refused this strategy before it
+reaches the engine.
+
+**A URI launch rule and a virtual deploy are refused together.** A game started
+through `steam://` is started by Steam, and there is no process of ours to
+inject into; the alternative starts the game with none of the sandbox's mods and
+reports success, which is the hardest kind of bug to diagnose because the folder
+is stock and there is nothing to find.
 
 **Capability is probed, not assumed.** `deploy::link::probe` creates one file
 and links it, twice, and reports what worked. Every rules table for this is
@@ -1346,24 +1438,14 @@ Honest list, so nothing here reads as finished when it is not:
 
 - **Auto-updates.** `autoUpdateCheck` is a stored setting with no updater behind
   it. Needs `tauri-plugin-updater` and a signing key.
-- **Writes.** The app is read-only against the API for CONTENT — no commenting,
-  rating, reviewing or publishing. Reviews are shown and cannot be written from
-  here: doing so needs the website's own rate limiting, edit window and
-  moderation hooks, and half of those living in a second place is how they
-  drift. Subscriptions, sandboxes and reports DO write.
-- **USVFS.** Declared as a strategy, refused at deploy, and documented above.
-  Needs a native Windows component the app does not ship — the plumbing is
-  shaped for it and nothing else is.
-- **A website page for device downloads.** The app reports its queue to
-  `/api/app/v1/downloads` and the endpoint reads back, but no page on the site
-  renders it yet.
-- **Mod dependencies and cross-mod conflicts.** The deployment engine reports
-  FILE conflicts — two mods providing one path — and resolves them by priority.
-  It does not know that mod A requires mod B, because
-  `ContentDetail.dependencies` is still always `[]` (below).
-- **Automatic updates for staged mods.** A sandbox re-stages when asked and the
-  library knows a newer release exists; nothing yet does it on a timer or on
-  launch.
+- **Writes.** The app is read-only against the API for publishing — no
+  commenting or uploading. Reviews, review votes, reports, subscriptions and
+  sandboxes DO write.
+- **USVFS injection, proven.** The strategy is implemented end to end and gated
+  behind `usvfs-hooks`, off by default. The tree and the blob are tested on
+  every platform; the two hundred lines that patch an import table in somebody
+  else's game process are type-checked against the Windows target and have never
+  been run against a game. Turning the feature on is a decision to find out.
 - **Plugin distribution.** Plugins install from a local folder. There is no
   registry, and `requireSignedPlugins` has no signature checking behind it yet.
 - **Proof that a human chose a jail anchor.** `anchor::validate_root` decides
@@ -1380,7 +1462,6 @@ Honest list, so nothing here reads as finished when it is not:
   format; the bzip2-compressed variant (old mods only) is not decoded, so those
   rosters are skipped. The info reply, which is what the browser renders, is
   unaffected.
-- **Dependency resolution.** `ContentDetail.dependencies` is always `[]`.
 - **Offline cache.** React Query is memory-only; a cold launch offline shows
   nothing.
 - **No end-to-end test against a real game server.** The protocol parsers are

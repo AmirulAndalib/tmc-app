@@ -403,6 +403,13 @@ impl AppState {
             game_dir: jail
                 .root_path(tmc_core::plugins::manifest::FsRoot::GameDir)
                 .map(std::path::Path::to_path_buf),
+            /*
+             * An INSTALL never carries one. A virtual filesystem belongs to a
+             * sandbox — it is that sandbox's merge tree — and launching the
+             * install is launching the game as it is on disk, which for every
+             * strategy but this one is the same thing.
+             */
+            vfs: None,
         };
 
         let mut plan = build_launch_plan(rule, &jail, &options, &ctx)?;

@@ -19,6 +19,7 @@ import { useLibrary } from '~/lib/library/provider'
 import { InstallSchema, type InstallT } from '~/lib/api/contract'
 import { appLabel } from '~/lib/api/labels'
 import Select from '~/components/select'
+import { LaunchDialog } from '~/components/launch-dialog'
 import type { LaunchPreviewT } from '~/lib/ipc/schemas'
 import { useFolderPicker } from '~/components/folder-picker'
 
@@ -653,66 +654,13 @@ export default function InstallsRoute() {
             ) : null}
 
             {preview ? (
-                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-                    <div className="w-full max-w-lg rounded-xl border border-border bg-surface p-4">
-                        <h2 className="text-sm font-semibold">
-                            Launch “{preview.install.name}”?
-                        </h2>
-
-                        {preview.error ? (
-                            <p className="mt-3 flex items-start gap-2 rounded-lg border border-danger/40 bg-danger/10 p-2 text-xs text-danger">
-                                <FiAlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                                {preview.error}
-                            </p>
-                        ) : null}
-
-                        {preview.plan ? (
-                            <>
-                                <p className="mt-3 text-xs text-muted">
-                                    This is exactly what will run. Nothing goes
-                                    through a shell — every argument is passed
-                                    separately.
-                                </p>
-
-                                <pre className="selectable mt-2 max-h-48 overflow-auto rounded-lg border border-border bg-surface-2 p-2 text-[11px]">
-                                    {preview.plan.command}
-                                </pre>
-
-                                {preview.plan.plan.cwd ? (
-                                    <p className="selectable mt-2 text-[11px] text-muted">
-                                        Working folder: {preview.plan.plan.cwd}
-                                    </p>
-                                ) : null}
-
-                                <p className="mt-1 text-[11px] text-muted">
-                                    Rule: {preview.plan.plan.rule}
-                                </p>
-                            </>
-                        ) : preview.error ? null : (
-                            <p className="mt-3 text-xs text-muted">Resolving…</p>
-                        )}
-
-                        <div className="mt-4 flex justify-end gap-2">
-                            <button
-                                type="button"
-                                onClick={() => setPreview(null)}
-                                className="rounded-lg border border-border px-3 py-1.5 text-xs"
-                            >
-                                Cancel
-                            </button>
-
-                            <button
-                                type="button"
-                                disabled={!preview.plan}
-                                onClick={() => void confirmLaunch()}
-                                className="flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-accent-foreground disabled:opacity-50"
-                            >
-                                <FiPlay className="h-3.5 w-3.5" />
-                                Launch
-                            </button>
-                        </div>
-                    </div>
-                </div>
+                <LaunchDialog
+                    title={`Launch “${preview.install.name}”?`}
+                    preview={preview.plan}
+                    error={preview.error}
+                    onCancel={() => setPreview(null)}
+                    onConfirm={() => void confirmLaunch()}
+                />
             ) : null}
         </div>
     )

@@ -355,6 +355,12 @@ export const ipc = {
     sandboxStrategies: (id: number) =>
         call('sandbox_strategies', z.array(StrategyReportSchema), { id }),
 
+    /** What starting this sandbox would run, without starting it. */
+    sandboxLaunchPreview: (id: number) =>
+        call('sandbox_launch_preview', LaunchPreviewSchema, { id }),
+    sandboxLaunch: (id: number) =>
+        call('sandbox_launch', LaunchPreviewSchema, { id }),
+
     /** A game's presets, option schema and deployment rules, or null. */
     sandboxSpec: (slug: string) =>
         call('sandbox_spec', SandboxSpecSchema.nullable(), { slug }),

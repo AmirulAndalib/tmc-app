@@ -17,16 +17,20 @@ use std::path::PathBuf;
 use serde::Serialize;
 use tauri::State;
 
+use tmc_core::audit;
 use tmc_core::deploy::{PurgeReport, StrategyReport, VerifyReport};
 use tmc_core::error::{AppError, AppResult};
+use tmc_core::launch::{describe, LaunchPlan};
 use tmc_core::library::autoupdate::{self, AutoUpdateReport, Outdated};
 use tmc_core::library::dependency::{DependencyReport, Edge, Relation};
 use tmc_core::library::deploy::{
-    deploy_sandbox, purge_sandbox, stage_mod, strategies_for, verify_sandbox, StageOutcome,
+    deploy_sandbox, launch_plan, purge_sandbox, stage_mod, strategies_for, verify_sandbox,
+    StageOutcome,
 };
 use tmc_core::library::sandbox::{NewSandbox, Sandbox, SandboxPatch};
 use tmc_core::plugins::apps::SandboxSpec;
 
+use crate::commands::library::LaunchPreview;
 use crate::state::AppState;
 
 /// A sandbox plus the answers every screen showing one wants.
@@ -669,6 +673,66 @@ pub fn sandbox_verify(state: State<'_, AppState>, id: i64) -> AppResult<VerifyRe
     let ctx = state.sandbox_ctx(&plugins, &settings, &roots, &staging, &backups);
 
     verify_sandbox(&state.library, &sandbox, &ctx)
+}
+
+// ------------------------------------------------------------------- Launch
+
+/// What starting this sandbox would run, WITHOUT starting it.
+///
+/// The same contract the install launcher has: the exact program, arguments and
+/// working directory are shown first. A declarative launcher is only auditable
+/// by the person it affects if they can see what it resolved to.
+#[tauri::command]
+pub fn sandbox_launch_preview(state: State<'_, AppState>, id: i64) -> AppResult<LaunchPreview> {
+    let plan = sandbox_plan(&state, id)?;
+    let command = describe(&plan);
+
+    Ok(LaunchPreview { plan, command })
+}
+
+/// Start the game with this sandbox in front of it.
+///
+/// The plan is re-resolved here rather than taken from the webview, for the
+/// reason `launch_install` gives: accepting a caller-supplied plan would make
+/// every check in `tmc_core::launch` advisory.
+#[tauri::command]
+pub fn sandbox_launch(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    id: i64,
+) -> AppResult<LaunchPreview> {
+    let plan = sandbox_plan(&state, id)?;
+    let command = describe(&plan);
+
+    audit!(
+        state.audit,
+        Security,
+        Install,
+        "sandbox.launch",
+        command.clone(),
+        plugin = plan.rule
+    );
+
+    crate::spawn::run(&app, &plan)?;
+
+    Ok(LaunchPreview { plan, command })
+}
+
+fn sandbox_plan(state: &State<'_, AppState>, id: i64) -> AppResult<LaunchPlan> {
+    let sandbox = state
+        .library
+        .sandbox_get(id)?
+        .ok_or_else(|| AppError::invalid("That sandbox does not exist."))?;
+
+    let plugins = state.app_plugins();
+    let settings = state.settings.get();
+    let roots = state.jail_roots();
+    let staging = state.paths.staging_dir();
+    let backups = state.paths.backup_dir();
+
+    let ctx = state.sandbox_ctx(&plugins, &settings, &roots, &staging, &backups);
+
+    launch_plan(&state.library, &sandbox, &ctx)
 }
 
 /// Which deployment strategies would actually work for this sandbox, here.

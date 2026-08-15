@@ -10,6 +10,7 @@ import {
     FiCloudOff,
     FiDownload,
     FiFolder,
+    FiPlay,
     FiPlus,
     FiRefreshCw,
     FiTrash2,
@@ -23,6 +24,7 @@ import { useAuth } from '~/lib/auth/provider'
 import { useLibrary } from '~/lib/library/provider'
 import type {
     DependencyReportT,
+    LaunchPreviewT,
     OutdatedT,
     DeployReportT,
     OptionSpecT,
@@ -30,6 +32,7 @@ import type {
     SandboxSpecT,
     StrategyReportT,
 } from '~/lib/ipc/schemas'
+import { LaunchDialog } from '~/components/launch-dialog'
 import Select from '~/components/select'
 import FolderPicker from '~/components/folder-picker'
 import { Toggle } from '~/components/form'
@@ -69,7 +72,7 @@ const STRATEGY_HINTS: Record<string, string> = {
     direct: 'Modifies the game. Displaced files are backed up and restored.',
     hardlink: 'Free, invisible to the game. Same drive only.',
     symlink: 'Free, crosses drives. Needs Developer Mode on Windows.',
-    usvfs: 'Not available in this build.',
+    usvfs: 'The game folder is never touched. Windows only.',
 }
 
 export default function SandboxesRoute() {
@@ -253,6 +256,18 @@ function SandboxDetail({
     const [report, setReport] = useState<DeployReportT | null>(null)
     const [picking, setPicking] = useState(false)
 
+    /*
+     * `null` means the dialog is closed. It opens BEFORE the plan resolves, so
+     * a slow rule still gives immediate feedback that the click landed — and so
+     * a rule that cannot resolve reports why in the dialog rather than in the
+     * page's error banner, where it would read as a deployment failure.
+     */
+    const [launch, setLaunch] = useState<{
+        preview: LaunchPreviewT | null
+        error: string | null
+        starting: boolean
+    } | null>(null)
+
     useEffect(() => {
         let live = true
 
@@ -285,6 +300,33 @@ function SandboxDetail({
             live = false
         }
     }, [sandbox.id, sandbox.appSlug, sandbox.targetDir, sandbox.mods])
+
+    const startLaunch = async () => {
+        setLaunch({ preview: null, error: null, starting: false })
+
+        try {
+            const preview = await ipc.sandboxLaunchPreview(sandbox.id)
+
+            setLaunch({ preview, error: null, starting: false })
+        } catch (err) {
+            setLaunch({ preview: null, error: messageOf(err), starting: false })
+        }
+    }
+
+    const confirmLaunch = async () => {
+        setLaunch((current) => (current ? { ...current, starting: true } : current))
+
+        try {
+            await ipc.sandboxLaunch(sandbox.id)
+            setLaunch(null)
+        } catch (err) {
+            setLaunch((current) =>
+                current
+                    ? { ...current, error: messageOf(err), starting: false }
+                    : current
+            )
+        }
+    }
 
     const run = async (label: string, fn: () => Promise<unknown>) => {
         setBusy(label)
@@ -365,6 +407,17 @@ function SandboxDetail({
                 </section>
             )}
 
+            {launch && (
+                <LaunchDialog
+                    title={`Launch “${sandbox.name}”?`}
+                    preview={launch.preview}
+                    error={launch.error}
+                    busy={launch.starting}
+                    onCancel={() => setLaunch(null)}
+                    onConfirm={() => void confirmLaunch()}
+                />
+            )}
+
             {picking && (
                 <FolderPicker
                     title={`Where is ${sandbox.appName ?? 'the game'} installed?`}
@@ -410,6 +463,24 @@ function SandboxDetail({
                 >
                     <FiCheck className="size-3.5" />
                     {busy === 'deploy' ? 'Deploying…' : 'Deploy'}
+                </button>
+
+                {/*
+                 * Offered whether or not the game has a launch rule: a game
+                 * with none is common and the honest place to say so is the
+                 * dialog, which explains that the sandbox is deployed either
+                 * way and the game can be started normally. Hiding the button
+                 * instead leaves somebody looking for a Play control that is
+                 * not there and no way to find out why.
+                 */}
+                <button
+                    type="button"
+                    disabled={busy !== null || !sandbox.targetDir}
+                    onClick={() => void startLaunch()}
+                    className="flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-sm hover:border-accent disabled:opacity-50"
+                >
+                    <FiPlay className="size-3.5" />
+                    Play
                 </button>
 
                 {sandbox.deployedFiles > 0 && (

@@ -1,5 +1,6 @@
 mod commands;
 mod paths;
+mod spawn;
 mod state;
 
 use tauri::Manager;
@@ -223,6 +224,8 @@ pub fn run() {
             commands::sandbox::sandbox_purge,
             commands::sandbox::sandbox_verify,
             commands::sandbox::sandbox_strategies,
+            commands::sandbox::sandbox_launch_preview,
+            commands::sandbox::sandbox_launch,
             commands::sandbox::sandbox_spec,
             commands::sandbox::sandbox_check,
             commands::sandbox::sandbox_refresh_dependencies,

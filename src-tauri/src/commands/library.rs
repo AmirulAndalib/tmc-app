@@ -379,48 +379,7 @@ pub async fn launch_install(
         plugin = plan.rule
     );
 
-    if let Some(uri) = &plan.uri {
-        /*
-         * Handed to the OS opener, which is what resolves a `steam://` link to
-         * the installed client. The scheme was checked at load time
-         * (`is_allowed_launch_uri`) and the value carries no control
-         * characters, so there is nothing here that could become a second
-         * argument.
-         */
-        use tauri_plugin_opener::OpenerExt;
-
-        app.opener()
-            .open_url(uri.clone(), None::<&str>)
-            .map_err(|e| AppError::internal(format!("could not open {uri}: {e}")))?;
-    } else if let Some(program) = &plan.program {
-        let mut command_builder = std::process::Command::new(program);
-
-        // An argv VECTOR. There is no shell anywhere in this, so quoting,
-        // `;`, backticks and `$( )` are inert bytes to the child.
-        command_builder.args(&plan.args);
-
-        if let Some(cwd) = &plan.cwd {
-            command_builder.current_dir(cwd);
-        }
-
-        for (key, value) in &plan.env {
-            command_builder.env(key, value);
-        }
-
-        /*
-         * Spawned and let go, deliberately: the game outlives the launcher, and
-         * holding the handle would make closing the app kill it. The zombie
-         * that leaves on unix is reaped by init once this process exits, and by
-         * `wait` never being called it costs one PID meanwhile.
-         */
-        command_builder
-            .spawn()
-            .map_err(|e| AppError::internal(format!("could not start the game: {e}")))?;
-    } else {
-        return Err(AppError::invalid(
-            "That launch rule names nothing to start.",
-        ));
-    }
+    crate::spawn::run(&app, &plan)?;
 
     // Report the play session so the account's install shows a last-played
     // time on every device. Best effort — a failed report is not a failed

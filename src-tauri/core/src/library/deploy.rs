@@ -41,10 +41,11 @@ use serde::Serialize;
 use crate::audit;
 use crate::deploy::{self, DeployReport, DeployRequest, LedgerEntry, PurgeReport, Strategy};
 use crate::error::{AppError, AppResult};
+use crate::launch::{LaunchContext, LaunchOptions, LaunchPlan, VfsHandoff};
 use crate::logging::Audit;
 use crate::plugins::apps::{AppPluginKind, AppPlugins};
 use crate::plugins::steps::{Executor, RunContext};
-use crate::plugins::{jail_for_scoped, JailRoots};
+use crate::plugins::{jail_for, jail_for_scoped, JailRoots};
 use crate::settings::AppSettings;
 
 use super::db::{LibraryDb, LibraryEntry};
@@ -399,11 +400,14 @@ pub fn deploy_sandbox(
 
     std::fs::create_dir_all(&staging)?;
 
+    let blob = deploy::vfs_blob(ctx.staging_root, sandbox.id);
+
     let report = deploy::deploy(&DeployRequest {
         strategy: sandbox.strategy,
         target: &target,
         staging: &staging,
         backup_root: &backups,
+        vfs_blob: Some(&blob),
         mods: &mods,
         previous: &previous,
         dry_run,
@@ -441,6 +445,135 @@ pub fn deploy_sandbox(
     Ok(report)
 }
 
+// ------------------------------------------------------------------- Launch
+
+/// What launching a sandbox would run.
+///
+/// The sandbox's own game folder becomes the jail's `gameDir`, exactly as an
+/// install's directory does — the same mechanism rather than a second one, so a
+/// profile can never end up with laxer path checks than the main install.
+///
+/// The sandbox's `launchArgs` and `launchEnv` are appended AFTER the rule's,
+/// for the reason a game's own argument parser gives: the last occurrence of a
+/// repeated flag wins, so appending is what makes an override override.
+pub fn launch_plan(
+    db: &LibraryDb,
+    sandbox: &Sandbox,
+    ctx: &SandboxCtx<'_>,
+) -> AppResult<LaunchPlan> {
+    let target = target_dir(sandbox, ctx.settings)?;
+
+    let slug = sandbox.app_slug.as_deref().ok_or_else(|| {
+        AppError::invalid("This sandbox's game has no slug, so no launch rule can be found for it.")
+    })?;
+
+    let rule = ctx
+        .plugins
+        .launch_for(slug, sandbox.loader.as_deref())
+        .ok_or_else(|| {
+            AppError::invalid(
+                "This game has no launch rule, so the app cannot start it. Start it the way you \
+                 normally would — the sandbox is deployed either way.",
+            )
+        })?;
+
+    /*
+     * The rule's jail is anchored at the SANDBOX's folder, which is why the
+     * settings copy is patched rather than read: a sandbox with its own
+     * directory is a different game folder from the app-wide one, and resolving
+     * the executable against the wrong one would either fail or — worse —
+     * launch the unmodded main install.
+     */
+    let mut settings = ctx.settings.clone();
+
+    settings
+        .game_dirs
+        .insert(sandbox.app_id.to_string(), target.display().to_string());
+
+    let manifest = rule.as_manifest();
+    let jail = jail_for(&manifest, ctx.roots, &settings, Some(sandbox.app_id))?;
+
+    let options: LaunchOptions = serde_json::from_value(serde_json::Value::Object(
+        sandbox.options.clone().into_iter().collect(),
+    ))
+    .unwrap_or_default();
+
+    /*
+     * The virtual tree is attached only when the sandbox is BOTH set to that
+     * strategy and has actually been deployed. A blob left over from a strategy
+     * change would otherwise be carried into the game, mapping files from a
+     * deploy that has since been undone.
+     */
+    let vfs = if sandbox.strategy == Strategy::Usvfs && sandbox.deployed_at.is_some() {
+        let blob = deploy::vfs_blob(ctx.staging_root, sandbox.id);
+
+        if !blob.is_file() {
+            return Err(AppError::invalid(
+                "This sandbox deploys virtually but has no published filesystem. Deploy it again \
+                 before launching.",
+            ));
+        }
+
+        Some(VfsHandoff {
+            blob: blob.display().to_string(),
+            root: target.display().to_string(),
+        })
+    } else {
+        None
+    };
+
+    let launch_ctx = LaunchContext {
+        install_name: Some(sandbox.name.clone()),
+        game_version: sandbox.game_version.clone(),
+        loader: sandbox.loader.clone(),
+        install_dir: Some(target.clone()),
+        game_dir: Some(target),
+        vfs,
+    };
+
+    let mut plan = crate::launch::plan(rule, &jail, &options, &launch_ctx)?;
+
+    for arg in &sandbox.launch_args {
+        // The same refusal the rule's own arguments get. A user-typed argument
+        // is not more trusted than a plugin-supplied one.
+        if arg.contains('\0') || arg.contains('\n') || arg.contains('\r') {
+            return Err(AppError::jail(
+                "A launch argument contains a control character.",
+            ));
+        }
+
+        plan.args.push(arg.clone());
+    }
+
+    for (key, value) in &sandbox.launch_env {
+        if key.contains('\0') || value.contains('\0') {
+            return Err(AppError::jail(
+                "A launch environment value contains a NUL byte.",
+            ));
+        }
+
+        plan.env.insert(key.clone(), value.clone());
+    }
+
+    /*
+     * Advisory, and deliberately not an error. A user who wants to start the
+     * game before deploying is entitled to; what they are not entitled to is
+     * doing it without being told, because the symptom — a game with none of
+     * the sandbox's mods — looks exactly like the mods being broken.
+     */
+    if sandbox.needs_deploy(&db.sandbox_ledger(sandbox.id)?) {
+        audit!(
+            ctx.audit,
+            Warn,
+            Install,
+            "sandbox.launch.stale",
+            format!("{} has changes that are not deployed", sandbox.name)
+        );
+    }
+
+    Ok(plan)
+}
+
 /// Take a sandbox back out of the game folder.
 pub fn purge_sandbox(
     db: &LibraryDb,
@@ -451,6 +584,16 @@ pub fn purge_sandbox(
     let previous = db.sandbox_ledger(sandbox.id)?;
 
     let report = deploy::purge(&target, &previous);
+
+    /*
+     * The published tree goes too, unconditionally rather than only for a
+     * sandbox currently set to `usvfs`. A user who deployed virtually, switched
+     * the strategy and then undeployed would otherwise leave a blob behind that
+     * the next launch of that game would still be handed.
+     */
+    if let Err(e) = deploy::purge_vfs(&deploy::vfs_blob(ctx.staging_root, sandbox.id)) {
+        tracing::warn!("could not remove the virtual tree for {}: {e}", sandbox.id);
+    }
 
     /*
      * Only the rows that were actually dealt with are dropped. A file left in

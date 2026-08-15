@@ -10,21 +10,30 @@
 //! | [`Strategy::Direct`] | modified | a full copy | never; it is the fallback |
 //! | [`Strategy::Hardlink`] | link pointers | nothing | staging is on another drive |
 //! | [`Strategy::Symlink`] | link pointers | nothing | Windows without Developer Mode |
-//! | [`Strategy::Usvfs`] | untouched | nothing | **not implemented — see below** |
+//! | [`Strategy::Usvfs`] | untouched | nothing | not Windows, or not built with `usvfs-hooks` |
 //!
 //! USVFS
 //! -----
 //! Mod Organizer's approach: a DLL injected into the game process that hooks
-//! `CreateFileW`/`FindFirstFileW` and answers them from a merged in-memory
-//! tree. It is the only strategy that leaves the game folder byte-identical.
+//! `CreateFileW`/`GetFileAttributesW` and answers them from a merged in-memory
+//! tree. It is the only strategy that leaves the game folder byte-identical,
+//! and it is implemented in [`tmc_usvfs`].
 //!
-//! **This app does not implement it and this module does not pretend to.**
-//! Doing so means shipping and injecting a native Windows DLL, which is a
-//! separate component with its own signing story, its own anti-cheat exposure
-//! and no meaning at all on the other four platforms this app targets. The
-//! variant exists so that a sandbox can be *declared* to want it and so the
-//! plumbing — capability probe, strategy selection, ledger — is already shaped
-//! for it; asking for it today returns a refusal that says exactly this.
+//! Deploying it is **not a file operation**. Nothing is placed, so:
+//!
+//!   * the merged tree is serialised to a blob the injected DLL maps, and that
+//!     publish IS the deploy;
+//!   * **the ledger comes back empty**, because a ledger records files in the
+//!     game folder and there are none. That is not a gap — [`purge`] over an
+//!     empty ledger correctly does nothing, and [`verify`] correctly reports a
+//!     healthy folder, because the folder genuinely is untouched;
+//!   * a sandbox switching TO this strategy still purges whatever the previous
+//!     strategy left behind, which is the one file operation a virtual deploy
+//!     performs.
+//!
+//! It is gated behind the `usvfs-hooks` feature and Windows. See
+//! [`usvfs_unavailable`] for what each refusal means, and `tmc-usvfs`'s own
+//! header for why the gate exists at all.
 //!
 //! FALLBACK, AND WHAT IS NOT AUTOMATIC
 //! -----------------------------------
@@ -66,7 +75,8 @@ pub enum Strategy {
     Hardlink,
     /// A pointer. Crosses volumes; needs a privilege on Windows.
     Symlink,
-    /// Runtime API hooking. Declared, not implemented — see the module header.
+    /// Runtime API hooking: nothing is placed and the game folder is never
+    /// touched. Windows only, and behind a feature — see the module header.
     Usvfs,
 }
 
@@ -170,7 +180,10 @@ pub fn available_strategies(staging: &Path, target: &Path) -> Vec<StrategyReport
                             })
                     }),
                 ),
-                Strategy::Usvfs => (false, Some(USVFS_REFUSAL.to_string())),
+                Strategy::Usvfs => match usvfs_unavailable() {
+                    Some(reason) => (false, Some(reason.to_string())),
+                    None => (true, None),
+                },
             };
 
             StrategyReport {
@@ -182,9 +195,37 @@ pub fn available_strategies(staging: &Path, target: &Path) -> Vec<StrategyReport
         .collect()
 }
 
-const USVFS_REFUSAL: &str = "Virtual-filesystem deployment is not available in this build. It \
-                             needs a native Windows component the app does not ship yet; use \
-                             hard links or symbolic links instead.";
+/// Why virtual-filesystem deployment cannot be used here, or `None` when it can.
+///
+/// Two different refusals, deliberately, because they are two different facts
+/// about the user's situation and only one of them can ever change:
+///
+///   * **Not Windows.** The mechanism is import-table patching in a process
+///     that has an import table of this shape. There is no macOS or Linux
+///     equivalent that does not mean `DYLD_INSERT_LIBRARIES` or `LD_PRELOAD`
+///     into a game — a different technique with different failure modes, not a
+///     port of this one.
+///   * **Not built with `usvfs-hooks`.** The build the user is running chose
+///     not to ship injection. Saying "not available in this build" rather than
+///     "not supported" is the honest version: another build of the same app on
+///     the same machine could do it.
+pub fn usvfs_unavailable() -> Option<&'static str> {
+    if !cfg!(windows) {
+        return Some(
+            "Virtual-filesystem deployment works by hooking Windows file APIs inside the game, so \
+             it is Windows-only. Use hard links, which leave the game folder just as recoverable.",
+        );
+    }
+
+    if !cfg!(feature = "usvfs-hooks") {
+        return Some(
+            "Virtual-filesystem deployment is turned off in this build of the app. Use hard links \
+             or symbolic links instead.",
+        );
+    }
+
+    None
+}
 
 /// One deploy.
 pub struct DeployRequest<'a> {
@@ -196,6 +237,9 @@ pub struct DeployRequest<'a> {
     pub staging: &'a Path,
     /// Where displaced originals go.
     pub backup_root: &'a Path,
+    /// Where [`Strategy::Usvfs`] publishes its tree for the injected DLL to
+    /// map. Required by that strategy and ignored by every other.
+    pub vfs_blob: Option<&'a Path>,
     /// Every enabled mod, in any order — [`merge::build`] sorts them.
     pub mods: &'a [DeployMod],
     /// The ledger from the last deploy of this sandbox.
@@ -251,7 +295,18 @@ pub fn resolve_strategy(
     target: &Path,
 ) -> AppResult<(Strategy, Option<String>, LinkSupport)> {
     if requested == Strategy::Usvfs {
-        return Err(AppError::invalid(USVFS_REFUSAL));
+        if let Some(reason) = usvfs_unavailable() {
+            return Err(AppError::invalid(reason));
+        }
+
+        /*
+         * No fallback, in either direction. A virtual deploy and a linked one
+         * differ in whether the game folder is modified at all, which is the
+         * reason somebody picks this — silently linking instead would put files
+         * in a folder the user chose this strategy to keep clean, and silently
+         * going virtual would leave a game that was never told about the mods.
+         */
+        return Ok((Strategy::Usvfs, None, link::probe(staging, target)));
     }
 
     let support = link::probe(staging, target);
@@ -317,10 +372,6 @@ pub fn deploy(req: &DeployRequest<'_>) -> AppResult<DeployReport> {
 
     let (used, fell_back, _support) = resolve_strategy(req.strategy, req.staging, req.target)?;
 
-    let kind = used
-        .link_kind()
-        .ok_or_else(|| AppError::invalid(USVFS_REFUSAL))?;
-
     let mut report = DeployReport {
         requested: req.strategy.as_str().to_string(),
         used: used.as_str().to_string(),
@@ -331,6 +382,15 @@ pub fn deploy(req: &DeployRequest<'_>) -> AppResult<DeployReport> {
         skipped: tree.skipped.clone(),
         ..Default::default()
     };
+
+    if used == Strategy::Usvfs {
+        return deploy_virtual(req, &tree, report);
+    }
+
+    // Unreachable for anything else: every remaining strategy places files.
+    let kind = used.link_kind().ok_or_else(|| {
+        AppError::internal("a strategy that places no files reached the placement path")
+    })?;
 
     // ------------------------------------------------------------- The diff
     //
@@ -436,6 +496,129 @@ pub fn deploy(req: &DeployRequest<'_>) -> AppResult<DeployReport> {
     }
 
     Ok(report)
+}
+
+/// Deploy by publishing a virtual tree instead of placing files.
+///
+/// The game folder is not written to at all — except to undo whatever a
+/// PREVIOUS strategy put there, which is the one thing a virtual deploy has to
+/// do to disk. A sandbox switched from hard links to this one otherwise keeps
+/// its links, and the user gets both the links and the virtual view: every file
+/// twice, with the virtual copy winning only for the paths the tree covers.
+fn deploy_virtual(
+    req: &DeployRequest<'_>,
+    tree: &MergeTree,
+    mut report: DeployReport,
+) -> AppResult<DeployReport> {
+    let blob = req.vfs_blob.ok_or_else(|| {
+        AppError::internal("a virtual deploy was requested with nowhere to publish it")
+    })?;
+
+    let mut virtual_tree = tmc_usvfs::VirtualTree::new(req.target.to_string_lossy().into_owned());
+
+    for (rel, winner) in &tree.files {
+        let source = winner.source.to_string_lossy();
+
+        if !virtual_tree.insert(rel, &source) {
+            /*
+             * The tree refuses a path it cannot represent — over its entry cap,
+             * absurdly long, or a shape that could not be a relative Windows
+             * path. An error rather than a warning: unlike a failed placement,
+             * which leaves the other files working, a mapping the game will
+             * never be told about is a mod that silently does nothing.
+             */
+            report
+                .errors
+                .push(format!("{rel}: cannot be represented in the virtual tree"));
+        }
+    }
+
+    report.placed = virtual_tree.len();
+
+    if req.dry_run {
+        report.removed = req.previous.len();
+
+        return Ok(report);
+    }
+
+    // Whatever the last strategy left in the game folder. Empty when the last
+    // deploy was also virtual, which is the common case.
+    let purged: PurgeReport = ledger::purge(req.target, req.previous);
+
+    report.removed = purged.removed;
+    report.restored = purged.restored;
+    report.errors.extend(purged.errors);
+
+    for path in purged.kept {
+        report.warnings.push(format!(
+            "{path} was changed since it was deployed and has been left alone."
+        ));
+    }
+
+    /*
+     * The revision is a hash of the tree, not a counter and not a clock. The
+     * injected DLL uses it to notice that a blob it already read has changed,
+     * and a hash makes that comparison mean "the mapping is different" — a
+     * counter would also tick for a redeploy that produced an identical tree,
+     * and a clock would tick on every single one.
+     */
+    let revision = tree_revision(&virtual_tree);
+
+    tmc_usvfs::publish(blob, revision, &virtual_tree).map_err(|e| {
+        AppError::internal(format!(
+            "could not publish the virtual filesystem to {}: {e}",
+            blob.display()
+        ))
+    })?;
+
+    /*
+     * The ledger stays EMPTY, and that is the correct record: it names files in
+     * the game folder, and this deploy put none there. `purge` over it does
+     * nothing because there is nothing to undo, and `verify` reports a healthy
+     * folder because the folder is untouched.
+     */
+    Ok(report)
+}
+
+/// Remove a published virtual tree.
+///
+/// Undeploying a virtual sandbox is exactly this — the game folder needs no
+/// work — and a missing blob is success, because the outcome asked for is "no
+/// tree published" and that is already true.
+pub fn purge_vfs(blob: &Path) -> std::io::Result<()> {
+    match std::fs::remove_file(blob) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        other => other,
+    }
+}
+
+/// Where a sandbox publishes its virtual tree.
+///
+/// Inside the sandbox's own staging folder, so deleting the sandbox deletes it
+/// and there is no second directory to keep in step. The name is not a mod key,
+/// so it cannot collide with one: [`safe_component`] never produces a leading
+/// dot.
+pub fn vfs_blob(root: &Path, sandbox_id: i64) -> PathBuf {
+    stage_root(root, sandbox_id).join(".tmc-vfs.bin")
+}
+
+/// A content hash of the published tree.
+fn tree_revision(tree: &tmc_usvfs::VirtualTree) -> u64 {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+
+    for mapping in tree.mappings() {
+        for byte in mapping
+            .virtual_path
+            .as_bytes()
+            .iter()
+            .chain(mapping.real_path.as_bytes())
+        {
+            hash ^= *byte as u64;
+            hash = hash.wrapping_mul(0x1000_0000_01b3);
+        }
+    }
+
+    hash
 }
 
 /// Previous entries the new tree still wants, keyed by path.
@@ -607,6 +790,7 @@ mod tests {
         staging: PathBuf,
         game: PathBuf,
         backups: PathBuf,
+        blob: PathBuf,
     }
 
     fn fixture() -> Fixture {
@@ -621,6 +805,7 @@ mod tests {
         }
 
         Fixture {
+            blob: staging.join(".tmc-vfs.bin"),
             _tmp: tmp,
             staging,
             game,
@@ -654,6 +839,7 @@ mod tests {
             target: &fx.game,
             staging: &fx.staging,
             backup_root: &fx.backups,
+            vfs_blob: Some(&fx.blob),
             mods,
             previous,
             dry_run: false,
@@ -802,26 +988,153 @@ mod tests {
         assert!(!fx.game.join("mods/a.jar").exists());
     }
 
+    /// The picker and the deploy have to agree, whichever way the gate is set.
+    /// A dropdown offering a strategy that then refuses is the failure this
+    /// test exists to prevent, and it is one a feature flag makes easy.
     #[test]
-    fn usvfs_refuses_clearly_rather_than_pretending() {
+    fn the_strategy_picker_agrees_with_what_a_deploy_would_do() {
         let fx = fixture();
 
-        let err = deploy(&request(&fx, Strategy::Usvfs, &[], &[])).expect_err("must refuse");
-
-        assert!(
-            err.to_string().contains("not available in this build"),
-            "the refusal has to say why: {err}"
-        );
-
-        // And the picker must say the same thing rather than offering it.
         let listed = available_strategies(&fx.staging, &fx.game);
         let usvfs = listed
             .iter()
             .find(|s| s.strategy == "usvfs")
             .expect("listed");
 
-        assert!(!usvfs.available);
-        assert!(usvfs.reason.is_some());
+        match usvfs_unavailable() {
+            Some(reason) => {
+                assert!(!usvfs.available);
+                assert_eq!(usvfs.reason.as_deref(), Some(reason));
+
+                let err =
+                    deploy(&request(&fx, Strategy::Usvfs, &[], &[])).expect_err("must refuse");
+
+                assert!(
+                    err.to_string().contains(reason),
+                    "the refusal has to say why: {err}"
+                );
+            }
+            None => {
+                assert!(usvfs.available);
+                assert!(usvfs.reason.is_none());
+
+                deploy(&request(&fx, Strategy::Usvfs, &[], &[])).expect("must not refuse");
+            }
+        }
+    }
+
+    /*
+     * The virtual deploy is exercised through `deploy_virtual` rather than
+     * through `deploy`, because `deploy` correctly refuses on a platform with
+     * nothing to inject into and these tests run on all of them. What is under
+     * test here is the part that is platform-independent and that the injected
+     * DLL depends on being right: which mappings get published, and what
+     * happens to the files the last strategy left behind.
+     */
+    fn virtual_deploy(fx: &Fixture, mods: &[DeployMod], previous: &[LedgerEntry]) -> DeployReport {
+        let req = request(fx, Strategy::Usvfs, mods, previous);
+        let tree = merge::build(req.mods).expect("merge");
+
+        let report = DeployReport {
+            requested: "usvfs".into(),
+            used: "usvfs".into(),
+            conflicts: tree.conflicts.clone(),
+            ..Default::default()
+        };
+
+        deploy_virtual(&req, &tree, report).expect("virtual deploy")
+    }
+
+    #[test]
+    fn a_virtual_deploy_publishes_a_tree_and_leaves_the_game_folder_alone() {
+        let fx = fixture();
+        let mods = vec![
+            stage(&fx, "mod-a", "mods/a.jar", "aaa"),
+            stage(&fx, "mod-b", "mods/b.jar", "bbb"),
+        ];
+
+        let report = virtual_deploy(&fx, &mods, &[]);
+
+        assert!(report.ok(), "{:?}", report.errors);
+        assert_eq!(report.placed, 2);
+
+        // The whole point: nothing was written to the game.
+        assert!(!fx.game.join("mods/a.jar").exists());
+        assert!(!fx.game.join("mods").exists());
+
+        // The ledger is empty, so a purge has nothing to undo and a verify
+        // reports a healthy folder — both of which are true.
+        assert!(report.ledger.is_empty());
+        assert!(verify(&fx.game, &report.ledger).healthy());
+
+        let published = tmc_usvfs::read(&fx.blob).expect("published");
+
+        assert_eq!(published.tree.len(), 2);
+        assert_eq!(
+            published
+                .tree
+                .resolve("mods/a.jar")
+                .map(std::path::Path::new),
+            Some(fx.staging.join("mod-a/mods/a.jar")).as_deref()
+        );
+
+        purge_vfs(&fx.blob).expect("purge");
+        assert!(!fx.blob.exists());
+        // Undeploying twice is not an error: the outcome asked for is already
+        // true the second time.
+        purge_vfs(&fx.blob).expect("purge again");
+    }
+
+    /// Switching a sandbox from hard links to virtual has to take the links
+    /// back off. Leaving them would give the user both — every file twice, with
+    /// the virtual one winning only where the tree happens to cover it.
+    #[test]
+    fn switching_to_virtual_takes_the_previous_strategys_files_back_off() {
+        let fx = fixture();
+        let mods = vec![stage(&fx, "mod-a", "mods/a.jar", "aaa")];
+
+        let first = deploy(&request(&fx, Strategy::Direct, &mods, &[])).expect("deploy");
+
+        assert!(fx.game.join("mods/a.jar").exists());
+
+        let second = virtual_deploy(&fx, &mods, &first.ledger);
+
+        assert_eq!(second.removed, 1);
+        assert!(
+            !fx.game.join("mods/a.jar").exists(),
+            "the linked copy is gone"
+        );
+        assert_eq!(second.placed, 1, "and the mapping replaced it");
+    }
+
+    /// The revision has to move when the mapping does, and stay put when it
+    /// does not — it is how the injected DLL knows a blob it already read is
+    /// stale.
+    #[test]
+    fn the_published_revision_tracks_the_tree_rather_than_the_deploy() {
+        let fx = fixture();
+        let mods = vec![stage(&fx, "mod-a", "mods/a.jar", "aaa")];
+
+        virtual_deploy(&fx, &mods, &[]);
+        let first = tmc_usvfs::read(&fx.blob).expect("read").revision;
+
+        virtual_deploy(&fx, &mods, &[]);
+        let again = tmc_usvfs::read(&fx.blob).expect("read").revision;
+
+        assert_eq!(first, again, "an identical tree is not a new revision");
+
+        let more = vec![
+            stage(&fx, "mod-a", "mods/a.jar", "aaa"),
+            stage(&fx, "mod-b", "mods/b.jar", "bbb"),
+        ];
+
+        virtual_deploy(&fx, &more, &[]);
+
+        assert_ne!(
+            first,
+            tmc_usvfs::read(&fx.blob).expect("read").revision,
+            "a changed tree is"
+        );
     }
 
     #[test]

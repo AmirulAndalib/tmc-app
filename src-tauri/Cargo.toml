@@ -2,7 +2,7 @@
 # which has no Tauri dependency and can therefore be compiled and tested on a
 # machine with no GTK/WebKit stack — see `core/src/lib.rs`.
 [workspace]
-members = ["core"]
+members = ["core", "usvfs"]
 
 [package]
 name = "tmc-app"
@@ -21,6 +21,15 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+
+[features]
+default = []
+
+# Virtual-filesystem deployment. Forwards to `tmc-core`'s gate of the same name
+# — the two halves are the deploy and the launch, and a build where only one of
+# them is on could deploy a tree no launch would ever carry, or launch with an
+# injector and nothing to inject. See `usvfs/src/lib.rs` for why this is off.
+usvfs-hooks = ["tmc-core/usvfs-hooks"]
 
 [dependencies]
 tmc-core = { path = "core", features = ["os-keyring"] }
@@ -46,6 +55,12 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [target.'cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))'.dependencies]
 tauri-plugin-deep-link = "2"
+
+# The injector. Windows-only here — `tmc-core` depends on the same crate on
+# every platform for the virtual tree, but `inject` is `#[cfg(windows)]` and
+# this crate uses nothing else from it.
+[target.'cfg(target_os = "windows")'.dependencies]
+tmc-usvfs = { path = "usvfs" }
 
 # See https://tauri.app/concept/size/#cargo-configuration
 [profile.release]

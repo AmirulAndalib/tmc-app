@@ -53,8 +53,9 @@ pub mod link;
 pub mod merge;
 
 pub use engine::{
-    available_strategies, backup_root, deploy, purge, resolve_strategy, stage_dir, stage_root,
-    verify, DeployReport, DeployRequest, Strategy, StrategyReport, VerifyReport,
+    available_strategies, backup_root, deploy, purge, purge_vfs, resolve_strategy, stage_dir,
+    stage_root, usvfs_unavailable, verify, vfs_blob, DeployReport, DeployRequest, Strategy,
+    StrategyReport, VerifyReport,
 };
 pub use ledger::{LedgerEntry, PurgeReport};
 pub use link::{LinkKind, LinkSupport};
