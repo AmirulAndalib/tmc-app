@@ -110,4 +110,8 @@ keyring = { version = "3", features = [
 
 [dev-dependencies]
 tempfile = "3"
+# Key generation for `examples/plugin-sign`. A dev-dependency on purpose: the
+# shipped crate only ever VERIFIES, and nothing in it should be able to mint a
+# signing key.
+getrandom = "0.2"
 tokio = { version = "1", features = ["rt", "macros", "test-util"] }

@@ -617,6 +617,13 @@ Two properties of the gate that are easy to lose:
     that has to work when followed, not after a restart — and removing a key has
     to stop those plugins at once, which is the entire reason to remove one.
 
+**Producing one** is `cargo run -p tmc-core --example plugin-sign` — `keygen`,
+`sign <dir> <secret>`, `verify <dir> <public>`. It exists so the feature is
+usable without reimplementing it from a doc comment, which would mean guessing
+at the one detail that matters. Its two properties are worth checking by hand
+after any change to `Manifest`: a manifest minified and key-sorted still
+verifies, and one extra `gameDir` write grant does not.
+
 What a signature buys is bounded and stated in the module header: it says a
 holder of that key produced *these* permissions and *these* steps. It says
 nothing about whether they are safe. A signed plugin is confined by exactly the
@@ -1599,8 +1606,9 @@ Honest list, so nothing here reads as finished when it is not:
 - **Plugin distribution.** Plugins install from a local folder and there is no
   registry to fetch them from. Signature *checking* is implemented and
   `requireSignedPlugins` enforces it, but nothing is published to be checked
-  yet, and there is no signing tool in this repo — a publisher signs the
-  canonical manifest bytes with any Ed25519 implementation.
+  yet. Signing is `examples/plugin-sign`; what is missing is somewhere to
+  publish the result and a key distribution story better than "paste this hex
+  string".
 - **Proof that a human chose a jail anchor.** `anchor::validate_root` decides
   whether a *directory* is an acceptable jail anchor, which is the enforceable
   half. The other half — that the path came from a real click rather than from
