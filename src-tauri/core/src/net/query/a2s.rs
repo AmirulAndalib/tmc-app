@@ -36,9 +36,23 @@ const REPLY_CHALLENGE: u8 = b'A';
 
 const A2S_INFO_PAYLOAD: &[u8] = b"\xFF\xFF\xFF\xFFTSource Engine Query\0";
 
-/// Fragments accepted for one split reply. The wire format packs the count into
-/// a nibble, so it cannot exceed 15 anyway; a 256-slot roster needs a handful.
-const MAX_FRAGMENTS: usize = 12;
+/// Fragments accepted for one split reply.
+///
+/// The count is a whole byte, so a server may legitimately announce up to 255;
+/// a 256-slot roster arrives in a handful. The cap is what stops a hostile
+/// reply making this allocate 255 slots and then wait out the deadline for
+/// fragments that will never come.
+const MAX_FRAGMENTS: usize = 32;
+
+/// Bit in the reply id meaning "the joined payload is bzip2".
+const COMPRESSED: u32 = 0x8000_0000;
+
+/// Cap on what a compressed reply may claim to decompress to.
+///
+/// A bzip2 bomb is a few hundred bytes that expands without limit, and this
+/// arrives from an unauthenticated machine over UDP. `go-a2s` — which is what
+/// `spy` itself uses — caps at exactly 1 MB, and a roster does not approach it.
+const MAX_DECOMPRESSED: usize = 1024 * 1024;
 
 /// Roster entries kept. Above this the list is not useful to a human anyway,
 /// and it bounds what a lying server can make the UI render.
@@ -253,27 +267,44 @@ async fn fetch_players(session: &UdpSession, timeout: Duration) -> AppResult<Vec
 /// deadline: a server that announces twelve fragments and sends one must time
 /// out, not wait forever.
 async fn reassemble(session: &UdpSession, timeout: Duration, first: Vec<u8>) -> AppResult<Vec<u8>> {
-    let (total, _, _) = split_header(&first)?;
+    let head = split_header(&first)?;
 
-    if total == 0 || total > MAX_FRAGMENTS {
+    if head.total == 0 || head.total > MAX_FRAGMENTS {
         return Err(AppError::invalid("The server sent too many fragments."));
     }
+
+    let total = head.total;
+    let id = head.id;
+    let compressed = head.compressed();
 
     let mut parts: Vec<Option<Vec<u8>>> = vec![None; total];
 
     let store = |parts: &mut Vec<Option<Vec<u8>>>, packet: Vec<u8>| -> AppResult<()> {
-        let (count, index, offset) = split_header(&packet)?;
+        let head = split_header(&packet)?;
 
-        // Every fragment of one reply must agree about how many there are.
-        if count != total || index >= total {
+        /*
+         * Every fragment of one reply must agree about the id and the count.
+         * The id check is not ceremony: a server answering two of our queries
+         * at once puts both replies on this socket, and joining a fragment of
+         * one with fragments of the other produces a roster made of two
+         * different rosters' bytes.
+         */
+        if head.total != total || head.id != id || head.index >= total {
             return Err(AppError::invalid("The server sent inconsistent fragments."));
         }
 
-        let body = packet.get(offset..).unwrap_or(&[]).to_vec();
+        let Some(slot) = parts.get_mut(head.index) else {
+            return Err(AppError::invalid("The server sent inconsistent fragments."));
+        };
 
-        if let Some(slot) = parts.get_mut(index) {
-            *slot = Some(body);
+        // A repeat is a misparse or a hostile sender, not a retransmission to
+        // be tolerated: taking the second copy is how a garbled roster gets
+        // built out of packets that individually looked fine.
+        if slot.is_some() {
+            return Err(AppError::invalid("The server sent a fragment twice."));
         }
+
+        *slot = Some(packet.get(head.offset..).unwrap_or(&[]).to_vec());
 
         Ok(())
     };
@@ -309,30 +340,136 @@ async fn reassemble(session: &UdpSession, timeout: Duration, first: Vec<u8>) -> 
         out.extend_from_slice(&body);
     }
 
+    if compressed {
+        return decompress(&out);
+    }
+
     Ok(out)
 }
 
-/// `(fragment count, this fragment's index, where its payload starts)`.
+/// Un-bzip2 a joined split reply.
 ///
-/// Layout: `-2`, a 4-byte reply id, a packed byte holding count in the low
-/// nibble and index in the high one, then a 2-byte fragment size — the size
-/// field being absent from the FIRST packet of a compressed reply, which we do
-/// not support and which is vanishingly rare outside old mods.
-fn split_header(buf: &[u8]) -> AppResult<(usize, usize, usize)> {
+/// The compressed form puts two extra fields at the front of the JOINED
+/// payload rather than in each fragment's header — the decompressed size and a
+/// CRC32 of the decompressed bytes — which is why this happens after the join
+/// and not during it.
+///
+/// Old mods only, in practice: no current Source server compresses. It is
+/// implemented because the alternative is that those servers' rosters fail with
+/// a parse error that looks exactly like the server being broken.
+fn decompress(payload: &[u8]) -> AppResult<Vec<u8>> {
+    use std::io::Read;
+
+    let mut r = Reader::new(payload);
+
+    let declared = r.u32_le()? as usize;
+    let expected_crc = r.u32_le()?;
+
+    /*
+     * The size is checked BEFORE decompressing, and against a fixed cap rather
+     * than against anything the reply also controls. bzip2 is a compression
+     * bomb's favourite format — a few hundred bytes expand without limit — and
+     * this arrives over UDP from an unauthenticated machine.
+     */
+    if declared == 0 || declared > MAX_DECOMPRESSED {
+        return Err(AppError::invalid(
+            "The server's compressed reply declares an implausible size.",
+        ));
+    }
+
+    let body = payload.get(r.position()..).unwrap_or(&[]);
+
+    let mut out = Vec::with_capacity(declared);
+
+    /*
+     * `take(declared)` bounds the reader itself, so the cap holds even if the
+     * declared size is a lie — a stream that expands past it stops there and
+     * fails the length check below rather than filling memory first.
+     */
+    bzip2::read::BzDecoder::new(body)
+        .take(declared as u64)
+        .read_to_end(&mut out)
+        .map_err(|_| AppError::invalid("The server's compressed reply did not decompress."))?;
+
+    if out.len() != declared {
+        return Err(AppError::invalid(
+            "The server's compressed reply was the wrong length.",
+        ));
+    }
+
+    /*
+     * The checksum is verified rather than trusted. A corrupted fragment
+     * reassembled in the right order still decompresses to something, and
+     * "something" rendered as a player list is worse than an error.
+     */
+    if crc32fast::hash(&out) != expected_crc {
+        return Err(AppError::invalid(
+            "The server's compressed reply failed its checksum.",
+        ));
+    }
+
+    Ok(out)
+}
+
+/// One fragment's header.
+struct SplitHeader {
+    /// Shared by every fragment of one reply. Its top bit means the JOINED
+    /// payload is bzip2, not this fragment.
+    id: u32,
+    total: usize,
+    index: usize,
+    /// Where this fragment's payload starts.
+    offset: usize,
+}
+
+impl SplitHeader {
+    fn compressed(&self) -> bool {
+        self.id & COMPRESSED != 0
+    }
+}
+
+/// Parse a fragment header.
+///
+/// Layout, after the `-2`: a 4-byte reply id, **`total` as a whole byte**,
+/// **`number` as a whole byte**, then a 2-byte split size.
+///
+/// The two counts being separate bytes is the part that is easy to get wrong,
+/// and this got it wrong: GoldSrc packs them into one byte (index in the high
+/// nibble, total in the low) and has no size field at all, and reading that
+/// layout while ALSO consuming a size field produced a parser that no server
+/// matches. It looked correct because fragment 0 of a real Source reply decodes
+/// to `total = 2, index = 0` under the packed reading — plausible — while every
+/// later fragment decodes to index 0 as well, so they overwrote each other and
+/// the reply always came out "incomplete". Which is to say: every split roster
+/// on every full server failed, and the unit test agreed with the bug because
+/// it built packets in the same invented shape.
+///
+/// The layout here is the one `go-a2s` implements — the library `spy` itself
+/// queries A2S with — and it matches PHP-Source-Query and python-a2s. GoldSrc's
+/// packed variant is not supported and is not worth supporting: every A2S game
+/// in this catalogue is Orange Box or newer, and guessing between two layouts
+/// that both parse produces a garbled roster rather than an error.
+fn split_header(buf: &[u8]) -> AppResult<SplitHeader> {
     let mut r = Reader::new(buf);
 
     if r.i32_le()? != SPLIT {
         return Err(AppError::invalid("Not a split A2S reply."));
     }
 
-    let _id = r.u32_le()?;
-    let packed = r.u8()?;
-    let _size = r.u16_le()?;
+    let id = r.u32_le()?;
+    let total = usize::from(r.u8()?);
+    let index = usize::from(r.u8()?);
 
-    let total = usize::from(packed & 0x0F);
-    let index = usize::from(packed >> 4);
+    // The maximum-packet-size field. Present on Orange Box and later, which is
+    // everything this speaks to; read and discarded.
+    let _split_size = r.u16_le()?;
 
-    Ok((total, index, r.position()))
+    Ok(SplitHeader {
+        id,
+        total,
+        index,
+        offset: r.position(),
+    })
 }
 
 fn parse_players(buf: &[u8]) -> AppResult<Vec<PlayerEntry>> {
@@ -504,22 +641,60 @@ mod tests {
         assert!(parse_info(&[0xFF, 0xFF, 0xFF, 0xFF, b'Z'], 1, 0).is_err());
     }
 
-    fn split_packet(total: u8, index: u8, body: &[u8]) -> Vec<u8> {
+    /// One fragment, in the shape a real Orange Box server sends: `total` and
+    /// `number` are SEPARATE bytes, then a split size.
+    fn split_packet(id: u32, total: u8, index: u8, body: &[u8]) -> Vec<u8> {
         let mut b = vec![0xFE, 0xFF, 0xFF, 0xFF];
-        b.extend_from_slice(&7u32.to_le_bytes()); // reply id
-        b.push((index << 4) | total);
-        b.extend_from_slice(&1248u16.to_le_bytes()); // fragment size
+
+        b.extend_from_slice(&id.to_le_bytes());
+        b.push(total);
+        b.push(index);
+        b.extend_from_slice(&1248u16.to_le_bytes()); // split size
         b.extend_from_slice(body);
         b
     }
 
     #[test]
     fn a_split_header_yields_count_index_and_payload_offset() {
-        let (total, index, offset) = split_header(&split_packet(3, 2, b"body")).expect("parses");
+        let packet = split_packet(7, 3, 2, b"body");
+        let head = split_header(&packet).expect("parses");
 
-        assert_eq!(total, 3);
-        assert_eq!(index, 2);
-        assert_eq!(&split_packet(3, 2, b"body")[offset..], b"body");
+        assert_eq!(head.total, 3);
+        assert_eq!(head.index, 2);
+        assert_eq!(head.id, 7);
+        assert!(!head.compressed());
+        assert_eq!(&packet[head.offset..], b"body");
+    }
+
+    /// The bug this layout replaced, stated as a test so it cannot come back.
+    ///
+    /// Under the old packed-nibble reading, EVERY fragment of a real reply
+    /// decoded to index 0 — so they overwrote each other and the roster always
+    /// came out incomplete. Fragment 0 decoded plausibly, which is why it went
+    /// unnoticed.
+    #[test]
+    fn later_fragments_have_distinct_indices() {
+        let indices: Vec<usize> = (0..4u8)
+            .map(|n| {
+                split_header(&split_packet(7, 4, n, b"x"))
+                    .expect("parses")
+                    .index
+            })
+            .collect();
+
+        assert_eq!(indices, vec![0, 1, 2, 3]);
+    }
+
+    /// The top bit of the reply id, and nothing else, means bzip2.
+    #[test]
+    fn the_compression_bit_is_read_from_the_reply_id() {
+        assert!(split_header(&split_packet(0x8000_0001, 2, 0, b"x"))
+            .expect("parses")
+            .compressed());
+
+        assert!(!split_header(&split_packet(0x7FFF_FFFF, 2, 0, b"x"))
+            .expect("parses")
+            .compressed());
     }
 
     #[test]
@@ -530,11 +705,115 @@ mod tests {
 
     #[test]
     fn truncated_split_headers_never_panic() {
-        let full = split_packet(2, 0, b"x");
+        let full = split_packet(7, 2, 0, b"x");
 
         for cut in 0..full.len() {
             let _ = split_header(&full[..cut]);
         }
+    }
+
+    // ------------------------------------------------- Compressed replies
+
+    fn compress(body: &[u8]) -> Vec<u8> {
+        use std::io::Read;
+
+        let mut out = Vec::new();
+
+        bzip2::read::BzEncoder::new(body, bzip2::Compression::best())
+            .read_to_end(&mut out)
+            .expect("compress");
+
+        out
+    }
+
+    /// A joined compressed payload: size, CRC32, then the bzip2 stream.
+    fn compressed_payload(body: &[u8]) -> Vec<u8> {
+        let mut out = Vec::new();
+
+        out.extend_from_slice(&(body.len() as u32).to_le_bytes());
+        out.extend_from_slice(&crc32fast::hash(body).to_le_bytes());
+        out.extend_from_slice(&compress(body));
+
+        out
+    }
+
+    #[test]
+    fn a_compressed_reply_round_trips() {
+        let body = b"\xFF\xFF\xFF\xFFD\x02player one\0";
+
+        assert_eq!(
+            decompress(&compressed_payload(body)).expect("decompresses"),
+            body.to_vec()
+        );
+    }
+
+    /// The checksum is verified rather than trusted: a reply reassembled out of
+    /// the wrong fragments still decompresses to SOMETHING, and something
+    /// rendered as a player list is worse than an error.
+    #[test]
+    fn a_compressed_reply_with_a_bad_checksum_is_refused() {
+        let mut payload = compressed_payload(b"hello world");
+
+        payload[4] ^= 0xFF;
+
+        assert!(decompress(&payload).is_err());
+    }
+
+    #[test]
+    fn a_compressed_reply_that_lies_about_its_length_is_refused() {
+        let body = b"hello world";
+
+        let mut payload = Vec::new();
+
+        payload.extend_from_slice(&(body.len() as u32 + 5).to_le_bytes());
+        payload.extend_from_slice(&crc32fast::hash(body).to_le_bytes());
+        payload.extend_from_slice(&compress(body));
+
+        assert!(decompress(&payload).is_err());
+    }
+
+    /// A bzip2 bomb is a few hundred bytes that expands without limit, arriving
+    /// over UDP from an unauthenticated machine. The declared size is checked
+    /// against a FIXED cap before anything is decompressed, and the reader is
+    /// bounded as well so a lying size cannot get past it either.
+    #[test]
+    fn a_compression_bomb_is_refused_before_it_is_decompressed() {
+        let mut payload = Vec::new();
+
+        payload.extend_from_slice(&u32::MAX.to_le_bytes());
+        payload.extend_from_slice(&0u32.to_le_bytes());
+        payload.extend_from_slice(&compress(&vec![b'A'; 4096]));
+
+        assert!(decompress(&payload).is_err());
+
+        // And a size just over the cap, which is the near-miss version.
+        let mut payload = Vec::new();
+
+        payload.extend_from_slice(&((MAX_DECOMPRESSED + 1) as u32).to_le_bytes());
+        payload.extend_from_slice(&0u32.to_le_bytes());
+        payload.extend_from_slice(&compress(&vec![b'A'; 4096]));
+
+        assert!(decompress(&payload).is_err());
+    }
+
+    #[test]
+    fn a_truncated_compressed_reply_never_panics() {
+        let full = compressed_payload(b"a roster of some length, compressed");
+
+        for cut in 0..=full.len() {
+            let _ = decompress(&full[..cut]);
+        }
+    }
+
+    #[test]
+    fn garbage_where_a_bzip2_stream_should_be_is_an_error() {
+        let mut payload = Vec::new();
+
+        payload.extend_from_slice(&16u32.to_le_bytes());
+        payload.extend_from_slice(&0u32.to_le_bytes());
+        payload.extend_from_slice(b"not a bzip2 stream at all");
+
+        assert!(decompress(&payload).is_err());
     }
 
     #[test]

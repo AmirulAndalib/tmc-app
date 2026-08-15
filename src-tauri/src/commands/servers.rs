@@ -392,8 +392,13 @@ mod tests {
     /// nuisance: pick the next one still on the list. Frostbite and TeamSpeak 3
     /// both used to sit here and neither qualifies any more.
     ///
-    /// Still on the list: `Discord`, `HytaleNitrado`, `GtaNetwork`, `GtaRage`,
-    /// `Scum`.
+    /// Still on the list: `Discord`, `GtaNetwork`, `GtaRage`, `Scum` — and all
+    /// four are there for a REASON rather than for want of writing, which is
+    /// the thing to read before picking one off it. Each is a protocol the
+    /// scanner speaks by asking a third party rather than the server, so doing
+    /// it from a user's device would measure that third party's hosting and
+    /// tell it every server the user scrolled past. `net::query::hytale`'s
+    /// module header spells this out.
     const UNIMPLEMENTED: QueryProtocol = QueryProtocol::Scum;
 
     #[test]

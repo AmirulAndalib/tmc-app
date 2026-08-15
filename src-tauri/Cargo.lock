@@ -4463,7 +4463,9 @@ name = "tmc-core"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "bzip2",
  "chacha20poly1305",
+ "crc32fast",
  "flate2",
  "futures-util",
  "hex",

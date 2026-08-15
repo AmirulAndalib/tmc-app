@@ -16,6 +16,7 @@ pub mod a2s;
 pub mod fivem;
 pub mod frostbite;
 pub mod gamespy;
+pub mod hytale;
 pub mod minecraft;
 pub mod quake3;
 pub mod samp;
@@ -78,9 +79,17 @@ pub enum QueryProtocol {
     /// to. See `teamspeak3`'s module docs.
     Teamspeak3,
 
-    // ---- Recognised but not natively implemented; see `is_native`. ----
-    Discord,
+    /// Hytale on Nitrado — an HTTPS status document on game + 3.
     HytaleNitrado,
+
+    // ---- Recognised but not natively implemented; see `is_native`. ----
+    //
+    // All four are protocols the SCANNER speaks by asking a third party, not
+    // the server: `SCUM` reads `api.hellbz.de`, `GTA_NETWORK`
+    // `multiplayerhosting.info`, `GTA_RAGE` the RAGE:MP master list, and
+    // `DISCORD` queries nothing at all. See `hytale`'s module header for why
+    // that makes them undoable HERE specifically rather than merely unwritten.
+    Discord,
     Frostbite,
     GtaNetwork,
     GtaRage,
@@ -111,6 +120,7 @@ impl QueryProtocol {
                 | Self::Fivem
                 | Self::Frostbite
                 | Self::Teamspeak3
+                | Self::HytaleNitrado
                 | Self::TcpOnly
         )
     }
@@ -124,6 +134,7 @@ impl QueryProtocol {
                 | Self::Fivem
                 | Self::Frostbite
                 | Self::Teamspeak3
+                | Self::HytaleNitrado
                 | Self::TcpOnly
         )
     }
@@ -320,6 +331,17 @@ impl QueryTarget {
              * and the game port is what `use port=` selects between.
              */
             QueryProtocol::Teamspeak3 => teamspeak3::DEFAULT_QUERY_PORT,
+            /*
+             * `spy/internal/protocols/hytale_nitrado.go`'s
+             * `NITRADO_PORT_OFFSET`: the status endpoint is on game + 3.
+             * `checked_add` for the same reason Frostbite has one — a wrapped
+             * port is not merely wrong, it probes a stranger's unrelated
+             * service on a low port number.
+             */
+            QueryProtocol::HytaleNitrado => self
+                .game_port
+                .checked_add(hytale::PORT_OFFSET)
+                .unwrap_or(self.game_port),
             _ => self.game_port,
         })
     }
@@ -353,6 +375,7 @@ pub async fn query(target: &QueryTarget) -> AppResult<ServerQueryResult> {
         QueryProtocol::Teamspeak3 => {
             teamspeak3::query(addr, timeout, target.want_players, target.game_port).await
         }
+        QueryProtocol::HytaleNitrado => hytale::query(addr, timeout, target.want_players).await,
 
         // Everything else, including the recognised-but-unimplemented set.
         _ => tcp_only(addr, timeout, protocol).await,
@@ -466,6 +489,31 @@ mod tests {
     /// instead. `spy` declines the arithmetic above 43535 for the same reason:
     /// a wrapped port is not merely wrong, it probes a stranger's unrelated
     /// service on a low port number.
+    /// `spy`'s `NITRADO_PORT_OFFSET`, and the same wrap guard Frostbite has.
+    #[test]
+    fn hytale_queries_three_above_the_game_port() {
+        let mut t = target(None, 0, false);
+
+        t.protocol = Some(QueryProtocol::HytaleNitrado);
+        t.game_port = 25_565;
+
+        assert_eq!(t.resolve_port().expect("port"), 25_568);
+
+        t.game_port = 65_535;
+
+        assert_eq!(
+            t.resolve_port().expect("port"),
+            65_535,
+            "an addition that would wrap falls back to the game port rather \
+             than probing a low port on somebody else's service"
+        );
+
+        // An explicit query port still wins, as it does for every protocol.
+        t.query_port = Some(9_999);
+
+        assert_eq!(t.resolve_port().expect("port"), 9_999);
+    }
+
     #[test]
     fn a_frostbite_port_that_would_wrap_is_left_alone() {
         let mut t = target(None, 0, false);

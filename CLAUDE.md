@@ -377,6 +377,32 @@ probe, and it must not fall back to guessing.
 | `SAMP` | SA-MP, open.mp | IPv4 only, by protocol design |
 | `FIVEM` | GTA V, RedM | HTTP `/dynamic.json` + `/info.json` |
 | `FROSTBITE` | BF3, BF4, Bad Company 2, Hardline | R-CON over TCP on game + 22000; roster columns keyed by tag name |
+| `TEAMSPEAK3` | TeamSpeak 3 | ServerQuery on a fixed 10011; the game port SELECTS a virtual server rather than being connected to |
+| `HYTALE_NITRADO` | Hytale on Nitrado | HTTPS status document on game + 3, self-signed |
+
+### The four that stay on `TCP_ONLY`, and why it is not laziness
+
+`DISCORD`, `SCUM`, `GTA_NETWORK` and `GTA_RAGE` are the last unimplemented
+entries, and each is unimplementable *here* for the same reason:
+
+| Protocol | What `spy` actually asks |
+| --- | --- |
+| `SCUM` | `api.hellbz.de` |
+| `GTA_NETWORK` | `multiplayerhosting.info` |
+| `GTA_RAGE` | the RAGE:MP master list at `cdn.rage.mp` |
+| `DISCORD` | nothing — the handler is a stub |
+
+None of them talks to the server. That is fine for a scanner reading a list
+once on everybody's behalf, and wrong for this app three times over: **the
+latency would describe that third party's hosting**, identical for every row
+(`spy` says so itself in three comments, and records no latency for any of
+them); it would **tell a third party every server a user scrolls past**; and on
+a phone it would be one HTTPS request per row per tick. So they measure a real
+TCP handshake to the real box instead, and their player counts come from the
+API — which got them from the scanner, which read those lists once.
+
+`net/query/hytale.rs`'s module header carries this, because it is the one of
+the five that DID qualify.
 
 Everything else in the enum is recognised but falls through to `TCP_ONLY`, which
 still yields a real latency figure. A Server Live Query plugin can cover any of
@@ -409,6 +435,13 @@ Three protocol details that are easy to get wrong and are commented at the site:
   readable, since the continuation datagrams arrive unprompted on that socket.
 - **GameSpy v3's challenge is a SIGNED decimal string.** Parse it unsigned and
   roughly half of all servers look unreachable.
+- **A split A2S reply's `total` and `number` are two SEPARATE bytes.** GoldSrc
+  packs them into one (index high nibble, total low) and has no split-size
+  field; Orange Box and later use two bytes plus a size. Reading the packed form
+  while also consuming a size field parses fragment 0 plausibly — `total = 2,
+  index = 0` — and decodes every LATER fragment to index 0 as well, so they
+  overwrite each other and every split roster comes out "incomplete". The
+  authority is `go-a2s`, which is the library `spy` queries A2S with.
 
 ### The registry
 
@@ -1505,14 +1538,12 @@ Honest list, so nothing here reads as finished when it is not:
   script — died with the native dialog and cannot be recovered while the picker
   is drawn by the app. Restoring it needs an OS-level confirmation the webview
   cannot forge.
-- **Protocols left on `TCP_ONLY`.** `DISCORD`, `TEAMSPEAK3`,
-  `HYTALE_NITRADO`, `GTA_NETWORK`, `GTA_RAGE`, `SCUM`. Each is a module under
-  `net/query/` away. `commands/servers.rs`'s `UNIMPLEMENTED` test constant has
-  to name one of them, so implementing the next one fails two tests on purpose.
-- **A2S compressed split replies.** Reassembly handles the ordinary split
-  format; the bzip2-compressed variant (old mods only) is not decoded, so those
-  rosters are skipped. The info reply, which is what the browser renders, is
-  unaffected.
+- **Protocols left on `TCP_ONLY`.** `DISCORD`, `GTA_NETWORK`, `GTA_RAGE`,
+  `SCUM` — and unlike the rest of this list, they are not waiting to be
+  written. Each is one the scanner speaks by asking a third party rather than
+  the server, which the section above explains cannot be done from a user's
+  device. `commands/servers.rs`'s `UNIMPLEMENTED` test constant names one of
+  them, so a native implementation fails two tests on purpose.
 - **Offline cache.** React Query is memory-only; a cold launch offline shows
   nothing.
 - **No end-to-end test against a real game server.** The protocol parsers are

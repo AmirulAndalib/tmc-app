@@ -84,6 +84,12 @@ serde_yaml_ng = "0.10"
 # Archive readers for installer plugins. Both are pure Rust; neither is allowed
 # to write outside a jail (see `plugins::sandbox`).
 zip = { version = "2", default-features = false, features = ["deflate", "bzip2"] }
+
+# A2S's compressed split replies. Both already build as part of `zip`; naming
+# them here is what makes `net::query::a2s` allowed to use them directly rather
+# than reaching through a dependency's re-exports.
+bzip2 = "0.5"
+crc32fast = "1"
 tar = "0.4"
 flate2 = "1"
 
