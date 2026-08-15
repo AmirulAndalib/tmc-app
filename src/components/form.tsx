@@ -79,29 +79,13 @@ export function Toggle({
     )
 }
 
-export function Select<T extends string>({
-    value,
-    options,
-    onChange,
-    label,
-}: {
-    value: T
-    options: { value: T; label: string }[]
-    onChange: (next: T) => void
-    label: string
-}) {
-    return (
-        <select
-            aria-label={label}
-            value={value}
-            onChange={(e) => onChange(e.target.value as T)}
-            className="rounded-lg border border-border bg-background px-2 py-1.5 text-sm"
-        >
-            {options.map((option) => (
-                <option key={option.value} value={option.value}>
-                    {option.label}
-                </option>
-            ))}
-        </select>
-    )
-}
+/**
+ * Re-exported from `components/select`, which is a real listbox rather than a
+ * `<select>`.
+ *
+ * The native element's popup is drawn by the OS and cannot be styled at all, so
+ * every settings pane in a dark theme had one white rectangle in it. See that
+ * module's header for what replacing it costs and what it buys.
+ */
+export { default as Select } from '~/components/select'
+export type { SelectOption } from '~/components/select'

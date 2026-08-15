@@ -3,6 +3,20 @@ import { z } from 'zod'
 import { call } from './index'
 import {
     ApiEnvSchema,
+    DetectedGameSchema,
+    DeployReportSchema,
+    PurgeReportSchema,
+    QueueSnapshotSchema,
+    RconHistorySchema,
+    RconProtocolSchema,
+    RconReplySchema,
+    RconServerSchema,
+    SandboxModSchema,
+    SandboxRowSchema,
+    SandboxSpecSchema,
+    StageOutcomeSchema,
+    StrategyReportSchema,
+    VerifyReportSchema,
     AppSettingsSchema,
     DirListingSchema,
     DirRootSchema,
@@ -244,4 +258,183 @@ export const ipc = {
         call('launch_install', LaunchPreviewSchema, { installId }),
     launchAvailable: (slug: string) =>
         call('launch_available', z.boolean(), { slug }),
+
+    // -------------------------------------------------------------- Sandboxes
+    //
+    // A sandbox is named by ID everywhere below, never by a directory. Rust
+    // looks up where it deploys; a command that took a target path would make
+    // every check in the anchor validator and the deployment engine advisory.
+
+    sandboxList: (appId?: number) =>
+        call('sandbox_list', z.array(SandboxRowSchema), { appId }),
+
+    sandboxGet: (id: number) =>
+        call('sandbox_get', SandboxRowSchema.nullable(), { id }),
+
+    /**
+     * Create one, optionally from one of the game's presets.
+     *
+     * The preset is applied in RUST, not here: it carries a deployment strategy
+     * and a set of option values, and assembling those in the webview would
+     * mean a sandbox whose settings never went through the game's own schema.
+     */
+    sandboxCreate: (
+        sandbox: {
+            appId: number
+            name: string
+            appSlug?: string | null
+            appName?: string | null
+            description?: string | null
+            environment?: 'client' | 'server' | 'shared'
+            strategy?: 'direct' | 'hardlink' | 'symlink' | 'usvfs'
+            gameVersion?: string | null
+            loader?: string | null
+            gameDir?: string | null
+            options?: Record<string, unknown>
+            cloudSync?: boolean
+        },
+        preset?: string
+    ) => call('sandbox_create', SandboxRowSchema, { new: sandbox, preset }),
+
+    sandboxPatch: (
+        id: number,
+        patch: {
+            name?: string
+            description?: string | null
+            environment?: 'client' | 'server' | 'shared'
+            strategy?: 'direct' | 'hardlink' | 'symlink' | 'usvfs'
+            gameVersion?: string | null
+            loader?: string | null
+            gameDir?: string | null
+            options?: Record<string, unknown>
+            launchArgs?: string[]
+            launchEnv?: Record<string, string>
+            cloudSync?: boolean
+            isDefault?: boolean
+        }
+    ) => call('sandbox_patch', SandboxRowSchema, { id, patch }),
+
+    /** Undeploys first — the ledger goes with the row, so it has to. */
+    sandboxDelete: (id: number, keepFiles = false) =>
+        call('sandbox_delete', PurgeReportSchema, { id, keepFiles }),
+
+    sandboxSetDefault: (id: number) =>
+        call('sandbox_set_default', z.void(), { id }),
+
+    sandboxAddMod: (id: number, kind: string, itemId: number) =>
+        call('sandbox_add_mod', SandboxRowSchema, { id, kind, itemId }),
+
+    sandboxRemoveMod: (id: number, modKey: string) =>
+        call('sandbox_remove_mod', SandboxRowSchema, { id, modKey }),
+
+    sandboxSetModEnabled: (id: number, modKey: string, enabled: boolean) =>
+        call('sandbox_set_mod_enabled', z.void(), { id, modKey, enabled }),
+
+    /** The load order, first to last. Unnamed entries keep their place after. */
+    sandboxReorder: (id: number, keys: string[]) =>
+        call('sandbox_reorder', z.array(SandboxModSchema), { id, keys }),
+
+    /** Download and unpack whatever is not staged yet. */
+    sandboxStage: (id: number, force = false) =>
+        call('sandbox_stage', z.array(StageOutcomeSchema), { id, force }),
+
+    sandboxDeploy: (id: number, dryRun = false) =>
+        call('sandbox_deploy', DeployReportSchema, { id, dryRun }),
+
+    sandboxPurge: (id: number) =>
+        call('sandbox_purge', PurgeReportSchema, { id }),
+
+    sandboxVerify: (id: number) =>
+        call('sandbox_verify', VerifyReportSchema, { id }),
+
+    /** Which strategies would actually work here, and why the others would not. */
+    sandboxStrategies: (id: number) =>
+        call('sandbox_strategies', z.array(StrategyReportSchema), { id }),
+
+    /** A game's presets, option schema and deployment rules, or null. */
+    sandboxSpec: (slug: string) =>
+        call('sandbox_spec', SandboxSpecSchema.nullable(), { slug }),
+
+    // -------------------------------------------------------------- Downloads
+    //
+    // There is deliberately no `downloadStart(url, path)`: it would be an
+    // arbitrary-write primitive with a progress bar attached. Everything here
+    // acts on a queue row that already exists.
+
+    downloadList: () => call('download_list', QueueSnapshotSchema),
+    downloadPause: (id: string) => call('download_pause', z.void(), { id }),
+    downloadResume: (id: string) => call('download_resume', z.void(), { id }),
+    downloadCancel: (id: string) => call('download_cancel', z.void(), { id }),
+
+    downloadSetPriority: (id: string, priority: number) =>
+        call('download_set_priority', z.void(), { id, priority }),
+
+    /** Bytes per second, or null for no limit. */
+    downloadSetLimit: (id: string, bps: number | null) =>
+        call('download_set_limit', z.void(), { id, bps }),
+
+    downloadSetGlobalLimit: (bps: number | null) =>
+        call('download_set_global_limit', z.void(), { bps }),
+
+    downloadSetConcurrency: (n: number) =>
+        call('download_set_concurrency', z.void(), { n }),
+
+    downloadClearFinished: () => call('download_clear_finished', z.number()),
+
+    // -------------------------------------------------------------- Detection
+    /** Read-only. Applying a result is a separate, deliberate step. */
+    detectGames: () => call('detect_games', z.array(DetectedGameSchema)),
+
+    /**
+     * Point a game's folder at a detected one.
+     *
+     * Takes the SLUG, not an app id — Rust resolves the id itself, so a
+     * mismatched pair cannot point one game's installer at another's folder.
+     */
+    detectApply: (slug: string, path: string) =>
+        call('detect_apply', z.void(), { slug, path }),
+
+    // ------------------------------------------------------------------ RCON
+    //
+    // No command here returns a password, and there is no shape one could take
+    // that would: a password goes in on create or change, and after that the
+    // webview can only name a server id.
+
+    rconList: () => call('rcon_list', z.array(RconServerSchema)),
+
+    rconCreate: (server: {
+        name: string
+        host: string
+        port: number
+        protocol?: 'source' | 'frostbite'
+        password: string
+        serverId?: number | null
+        appId?: number | null
+    }) => call('rcon_create', z.number(), { server }),
+
+    rconUpdate: (id: number, name: string, host: string, port: number) =>
+        call('rcon_update', z.void(), { id, name, host, port }),
+
+    rconSetPassword: (id: number, password: string | null) =>
+        call('rcon_set_password', z.void(), { id, password }),
+
+    rconDelete: (id: number) => call('rcon_delete', z.void(), { id }),
+
+    /** Opens a session, so a wrong password is reported before a command is. */
+    rconConnect: (id: number) => call('rcon_connect', z.void(), { id }),
+    rconDisconnect: (id: number) => call('rcon_disconnect', z.void(), { id }),
+    rconIsConnected: (id: number) =>
+        call('rcon_is_connected', z.boolean(), { id }),
+
+    rconExec: (id: number, command: string, timeoutMs?: number) =>
+        call('rcon_exec', RconReplySchema, { id, command, timeoutMs }),
+
+    rconHistory: (id: number, limit?: number) =>
+        call('rcon_history', z.array(RconHistorySchema), { id, limit }),
+
+    rconClearHistory: (id: number) =>
+        call('rcon_clear_history', z.void(), { id }),
+
+    rconSuggestProtocol: (queryProtocol: string | null) =>
+        call('rcon_suggest_protocol', RconProtocolSchema, { queryProtocol }),
 }

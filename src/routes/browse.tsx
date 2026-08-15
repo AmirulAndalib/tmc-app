@@ -16,6 +16,7 @@ import { useIsWide } from '~/lib/hooks/use-breakpoint'
 import { useLiveQuery } from '~/lib/hooks/use-live-query'
 import { useSettings } from '~/lib/settings/provider'
 import BrowseFilters from '~/components/browse-filters'
+import Select from '~/components/select'
 import ContentCard from '~/components/content-card'
 import ServerTable from '~/components/server-table'
 
@@ -446,17 +447,16 @@ export default function BrowseRoute() {
                 <span className="text-xs font-medium uppercase tracking-wide text-muted">
                     Sort
                 </span>
-                <select
+                <Select
+                    label="Sort"
+                    fullWidth
                     value={displaySort(sort)}
-                    onChange={(e) => setParam('sort', e.target.value)}
-                    className="rounded-lg border border-border bg-surface px-2 py-1.5"
-                >
-                    {sortsFor(kind).map((value) => (
-                        <option key={value} value={value}>
-                            {SORT_LABELS[value]}
-                        </option>
-                    ))}
-                </select>
+                    onChange={(next) => setParam('sort', next)}
+                    options={sortsFor(kind).map((value) => ({
+                        value,
+                        label: SORT_LABELS[value],
+                    }))}
+                />
             </div>
 
             {/* Sort by ping sits with Sort, not with the filters: it reorders

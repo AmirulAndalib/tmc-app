@@ -4,9 +4,12 @@ import {
     FiAlertTriangle,
     FiArrowDownCircle,
     FiCheckCircle,
+    FiDownload,
     FiExternalLink,
+    FiLayers,
     FiPauseCircle,
     FiRefreshCw,
+    FiTerminal,
     FiTrash2,
 } from 'react-icons/fi'
 
@@ -281,6 +284,37 @@ export default function LibraryRoute() {
                     />
                     Sync now
                 </button>
+            </div>
+
+            {/*
+             * The two screens the compact tab bar cannot fit — see
+             * `components/shell`. Reachable from here rather than unreachable
+             * on a phone, and useful on a desktop too: the library is where
+             * somebody notices they want a sandbox for what they just
+             * subscribed to.
+             */}
+            <div className="flex flex-wrap gap-2">
+                <Link
+                    to="/sandboxes"
+                    className="flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1 text-xs hover:border-accent"
+                >
+                    <FiLayers className="size-3" />
+                    Sandboxes
+                </Link>
+                <Link
+                    to="/rcon"
+                    className="flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1 text-xs hover:border-accent"
+                >
+                    <FiTerminal className="size-3" />
+                    Server console
+                </Link>
+                <Link
+                    to="/downloads"
+                    className="flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1 text-xs hover:border-accent"
+                >
+                    <FiDownload className="size-3" />
+                    Downloads
+                </Link>
             </div>
 
             {error ? (

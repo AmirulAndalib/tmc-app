@@ -18,6 +18,7 @@ import { useAuth } from '~/lib/auth/provider'
 import { useLibrary } from '~/lib/library/provider'
 import { InstallSchema, type InstallT } from '~/lib/api/contract'
 import { appLabel } from '~/lib/api/labels'
+import Select from '~/components/select'
 import type { LaunchPreviewT } from '~/lib/ipc/schemas'
 import { useFolderPicker } from '~/components/folder-picker'
 
@@ -303,7 +304,9 @@ function NewInstallDialog({
     const [loader, setLoader] = useState('')
     const [busy, setBusy] = useState(false)
     const [error, setError] = useState<string | null>(null)
-    const [apps, setApps] = useState<{ id: number; name: string }[]>([])
+    const [apps, setApps] = useState<
+        { id: number; name: string; icon: string | null }[]
+    >([])
 
     useEffect(() => {
         let live = true
@@ -322,7 +325,11 @@ function NewInstallDialog({
                 setApps(
                     facets.apps
                         .filter((a) => a.url && slugs.has(a.url.toLowerCase()))
-                        .map((a) => ({ id: a.id, name: appLabel(a) }))
+                        .map((a) => ({
+                            id: a.id,
+                            name: appLabel(a),
+                            icon: a.icon,
+                        }))
                 )
             } catch (err) {
                 if (live) setError(messageOf(err))
@@ -374,23 +381,27 @@ function NewInstallDialog({
                     </p>
                 ) : null}
 
-                <label className="mt-3 block text-xs">
-                    Game
-                    <select
-                        value={appId ?? ''}
-                        onChange={(e) =>
-                            setAppId(e.target.value ? Number(e.target.value) : null)
-                        }
-                        className="mt-1 w-full rounded-lg border border-border bg-surface-2 px-2 py-1.5 text-xs"
-                    >
-                        <option value="">Choose a game…</option>
-                        {apps.map((a) => (
-                            <option key={a.id} value={a.id}>
-                                {a.name}
-                            </option>
-                        ))}
-                    </select>
-                </label>
+                <div className="mt-3 text-xs">
+                    <span className="mb-1 block">Game</span>
+                    <Select
+                        label="Game"
+                        fullWidth
+                        placeholder="Choose a game…"
+                        value={appId ? String(appId) : ''}
+                        onChange={(next) => setAppId(next ? Number(next) : null)}
+                        options={apps.map((a) => ({
+                            value: String(a.id),
+                            label: a.name,
+                            icon: a.icon ? (
+                                <img
+                                    src={a.icon}
+                                    alt=""
+                                    className="size-4 rounded-sm object-cover"
+                                />
+                            ) : undefined,
+                        }))}
+                    />
+                </div>
 
                 <label className="mt-3 block text-xs">
                     Name

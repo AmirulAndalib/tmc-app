@@ -9,6 +9,7 @@ import {
     type FacetsResponseT,
 } from '~/lib/api/contract'
 import { appLabel } from '~/lib/api/labels'
+import Select from '~/components/select'
 
 /**
  * The browse filter panel.
@@ -111,7 +112,6 @@ function Check({
     )
 }
 
-const selectClass = 'rounded-lg border border-border bg-surface px-2 py-1.5 text-sm'
 const inputClass =
     'w-full rounded-lg border border-border bg-surface px-2 py-1.5 text-sm'
 
@@ -264,18 +264,28 @@ export default function BrowseFilters({
                 >
                     {hasApp && (facets?.apps.length ?? 0) > 0 && (
                         <Field label="Game">
-                            <select
+                            <Select
+                                label="Game"
+                                fullWidth
                                 value={get('app') ?? ''}
-                                onChange={(e) => set('app', e.target.value || null)}
-                                className={selectClass}
-                            >
-                                <option value="">All games</option>
-                                {facets?.apps.map((game) => (
-                                    <option key={game.id} value={game.id}>
-                                        {appLabel(game)} ({game.count})
-                                    </option>
-                                ))}
-                            </select>
+                                onChange={(next) => set('app', next || null)}
+                                options={[
+                                    { value: '', label: 'All games' },
+                                    ...(facets?.apps ?? []).map((game) => ({
+                                        value: String(game.id),
+                                        label: appLabel(game),
+                                        hint: `${game.count.toLocaleString()} items`,
+                                        icon: game.icon ? (
+                                            <img
+                                                src={game.icon}
+                                                alt=""
+                                                loading="lazy"
+                                                className="size-4 rounded-sm object-cover"
+                                            />
+                                        ) : undefined,
+                                    })),
+                                ]}
+                            />
                         </Field>
                     )}
 
@@ -384,18 +394,19 @@ export default function BrowseFilters({
                     />
 
                     <Field label="Operating system">
-                        <select
+                        <Select
+                            label="Operating system"
+                            fullWidth
                             value={get('os') ?? ''}
-                            onChange={(e) => set('os', e.target.value || null)}
-                            className={selectClass}
-                        >
-                            <option value="">Any</option>
-                            {ServerOsVals.map((os) => (
-                                <option key={os} value={os}>
-                                    {OS_LABELS[os]}
-                                </option>
-                            ))}
-                        </select>
+                            onChange={(next) => set('os', next || null)}
+                            options={[
+                                { value: '', label: 'Any' },
+                                ...ServerOsVals.map((os) => ({
+                                    value: os,
+                                    label: OS_LABELS[os],
+                                })),
+                            ]}
+                        />
                     </Field>
 
                     <Field label="Map">
@@ -413,22 +424,18 @@ export default function BrowseFilters({
             <Group title="Content" active={counts.content}>
                 {hasEnvironment && (
                     <Field label="Runs on">
-                        <select
+                        <Select
+                            label="Runs on"
+                            fullWidth
                             value={get('env') ?? 'ALL'}
-                            onChange={(e) =>
-                                set(
-                                    'env',
-                                    e.target.value === 'ALL' ? null : e.target.value
-                                )
+                            onChange={(next) =>
+                                set('env', next === 'ALL' ? null : next)
                             }
-                            className={selectClass}
-                        >
-                            {BrowseEnvironmentVals.map((env) => (
-                                <option key={env} value={env}>
-                                    {ENV_LABELS[env]}
-                                </option>
-                            ))}
-                        </select>
+                            options={BrowseEnvironmentVals.map((env) => ({
+                                value: env,
+                                label: ENV_LABELS[env],
+                            }))}
+                        />
                     </Field>
                 )}
 

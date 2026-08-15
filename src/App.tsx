@@ -6,10 +6,14 @@ import { AuthProvider } from '~/lib/auth/provider'
 import { SettingsProvider } from '~/lib/settings/provider'
 import { LiveQueryProvider } from '~/lib/hooks/use-live-query'
 import { LibraryProvider } from '~/lib/library/provider'
+import { DownloadsProvider } from '~/lib/downloads/provider'
 import Shell from '~/components/shell'
 import BrowseRoute from '~/routes/browse'
 import LibraryRoute from '~/routes/library'
 import InstallsRoute from '~/routes/installs'
+import SandboxesRoute from '~/routes/sandboxes'
+import DownloadsRoute from '~/routes/downloads'
+import RconRoute from '~/routes/rcon'
 import ViewRoute from '~/routes/view'
 import AccountRoute from '~/routes/account'
 import SettingsLayout from '~/routes/settings'
@@ -37,6 +41,11 @@ const router = createHashRouter([
             { path: 'view/:kind/:id', element: <ViewRoute /> },
             { path: 'library', element: <LibraryRoute /> },
             { path: 'installs', element: <InstallsRoute /> },
+            { path: 'sandboxes', element: <SandboxesRoute /> },
+            { path: 'sandboxes/:id', element: <SandboxesRoute /> },
+            { path: 'downloads', element: <DownloadsRoute /> },
+            { path: 'rcon', element: <RconRoute /> },
+            { path: 'rcon/:id', element: <RconRoute /> },
             { path: 'account', element: <AccountRoute /> },
             {
                 path: 'settings',
@@ -127,7 +136,13 @@ export default function App() {
                                 that is the whole point of a subscription made
                                 in a browser reaching this device. */}
                             <LibraryProvider>
-                                <RouterProvider router={router} />
+                                {/* Above the router as well: downloads keep
+                                    running while somebody browses, and the
+                                    queue badge has to be right on every
+                                    screen rather than only on its own. */}
+                                <DownloadsProvider>
+                                    <RouterProvider router={router} />
+                                </DownloadsProvider>
                             </LibraryProvider>
                         </LiveQueryProvider>
                     </SettingsProvider>

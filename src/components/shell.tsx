@@ -7,11 +7,15 @@ import {
     FiGrid,
     FiSettings,
     FiUser,
+    FiDownload,
     FiDownloadCloud,
+    FiLayers,
+    FiTerminal,
 } from 'react-icons/fi'
 import type { IconType } from 'react-icons'
 
 import { useAuth } from '~/lib/auth/provider'
+import { useDownloads } from '~/lib/downloads/provider'
 import { useIsCompact } from '~/lib/hooks/use-breakpoint'
 import { useIsDesktop } from '~/lib/hooks/use-platform'
 import Titlebar, { WindowResizeEdges } from './titlebar'
@@ -43,6 +47,23 @@ type Tab = {
     icon: IconType
     /** Also highlight for these path prefixes. */
     match?: string[]
+    /**
+     * Show the count of active downloads on this tab.
+     *
+     * Only one tab carries it, and it is the reason downloads have a tab at
+     * all: a queue nobody can see the state of from another screen is one
+     * people check by opening it, which is the thing a badge exists to save.
+     */
+    badge?: 'downloads'
+    /**
+     * Show this in the bottom tab bar as well as the rail.
+     *
+     * Default true. Turned off for the two screens that are deep work rather
+     * than navigation — a phone-width bar with nine items in it is a row of
+     * unreadable four-pixel labels, and the fix is fewer items rather than
+     * smaller text. Both are still reachable, from the Library screen.
+     */
+    compact?: boolean
 }
 
 const TABS: Tab[] = [
@@ -77,6 +98,23 @@ const TABS: Tab[] = [
         icon: FiDownloadCloud,
         match: ['/installs'],
     },
+    {
+        // The mod manager proper. Its own tab rather than a tab inside Library
+        // because it is where somebody SPENDS time — reordering, deploying,
+        // checking what conflicted — while the library is a list they glance
+        // at.
+        to: '/sandboxes',
+        label: 'Sandboxes',
+        icon: FiLayers,
+        compact: false,
+    },
+    {
+        to: '/downloads',
+        label: 'Downloads',
+        icon: FiDownload,
+        badge: 'downloads',
+    },
+    { to: '/rcon', label: 'Console', icon: FiTerminal, compact: false },
     { to: '/settings', label: 'Settings', icon: FiSettings },
 ]
 
@@ -91,6 +129,7 @@ export default function Shell() {
     const desktop = useIsDesktop()
     const { pathname } = useLocation()
     const { user, status } = useAuth()
+    const downloads = useDownloads()
 
     /*
      * On desktop the app draws its own frame — see components/titlebar. The
@@ -138,7 +177,15 @@ export default function Shell() {
                                     }`}
                                 >
                                     <tab.icon className="size-4 shrink-0" />
-                                    {tab.label}
+                                    <span className="truncate">
+                                        {tab.label}
+                                    </span>
+                                    {tab.badge === 'downloads' &&
+                                        downloads.active > 0 && (
+                                            <span className="ml-auto rounded-full bg-accent px-1.5 py-0.5 text-[0.6rem] font-medium text-accent-foreground">
+                                                {downloads.active}
+                                            </span>
+                                        )}
                                 </NavLink>
                             ))}
                         </div>
@@ -183,7 +230,7 @@ export default function Shell() {
                             className="flex shrink-0 items-stretch border-t border-border bg-surface"
                             style={{ paddingBottom: 'var(--safe-bottom)' }}
                         >
-                            {TABS.map((tab) => (
+                            {TABS.filter((tab) => tab.compact !== false).map((tab) => (
                                 <NavLink
                                     key={tab.to}
                                     to={tab.to}
@@ -193,7 +240,15 @@ export default function Shell() {
                                             : 'text-muted'
                                     }`}
                                 >
-                                    <tab.icon className="size-5" />
+                                    <span className="relative">
+                                        <tab.icon className="size-5" />
+                                        {tab.badge === 'downloads' &&
+                                            downloads.active > 0 && (
+                                                <span className="absolute -right-2 -top-1 min-w-3.5 rounded-full bg-accent px-1 text-[0.55rem] font-medium leading-tight text-accent-foreground">
+                                                    {downloads.active}
+                                                </span>
+                                            )}
+                                    </span>
                                     {tab.label}
                                 </NavLink>
                             ))}

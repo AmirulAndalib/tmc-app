@@ -89,3 +89,39 @@ export async function call<S extends z.ZodTypeAny>(
 export function isIpcError(err: unknown): err is IpcError {
     return err instanceof IpcError
 }
+
+/**
+ * Subscribe to a Rust-emitted event, parsed the same way a command's reply is.
+ *
+ * The push half of the boundary. `call` covers everything the frontend asks
+ * for; this covers what Rust says on its own — currently the download queue,
+ * which ticks twice a second per transfer and would be hundreds of polls a
+ * second if the UI had to ask.
+ *
+ * Parsed through a schema for exactly the reason `call` is: `listen` returns
+ * whatever the caller claims, so without this the payload type is an unchecked
+ * assertion about a Rust struct that may have moved.
+ *
+ * A payload that fails to parse is DROPPED with a console error rather than
+ * thrown: an event handler has no caller to catch for it, and one malformed
+ * message must not tear down a subscription that is otherwise working.
+ */
+export async function subscribe<S extends z.ZodTypeAny>(
+    event: string,
+    schema: S,
+    onEvent: (payload: z.infer<S>) => void
+): Promise<() => void> {
+    const { listen } = await import('@tauri-apps/api/event')
+
+    return listen(event, (message) => {
+        const parsed = schema.safeParse(message.payload)
+
+        if (!parsed.success) {
+            console.error(`[ipc] ${event} had an unexpected shape`, parsed.error)
+
+            return
+        }
+
+        onEvent(parsed.data as z.infer<S>)
+    })
+}

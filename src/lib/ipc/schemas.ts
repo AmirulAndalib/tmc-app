@@ -462,3 +462,300 @@ export const DirRootSchema = z.object({
 })
 
 export type DirRootT = z.infer<typeof DirRootSchema>
+
+// ----------------------------------------------------------------- Sandboxes
+
+/** Mirrors `tmc_core::library::sandbox::Environment`. */
+export const SandboxEnvironmentSchema = z.enum(['client', 'server', 'shared'])
+export type SandboxEnvironmentT = z.infer<typeof SandboxEnvironmentSchema>
+
+/** Mirrors `tmc_core::deploy::Strategy`. */
+export const DeployStrategySchema = z.enum([
+    'direct',
+    'hardlink',
+    'symlink',
+    'usvfs',
+])
+export type DeployStrategyT = z.infer<typeof DeployStrategySchema>
+
+export const SandboxModSchema = z.object({
+    modKey: z.string(),
+    kind: z.string(),
+    itemId: z.number(),
+    name: z.string(),
+    enabled: z.boolean(),
+    priority: z.number(),
+    /** Which release is downloaded into this sandbox's staging folder. */
+    releaseId: z.number().nullable(),
+    version: z.string().nullable(),
+    stagedAt: z.string().nullable(),
+    lastError: z.string().nullable(),
+})
+
+export type SandboxModT = z.infer<typeof SandboxModSchema>
+
+export const SandboxRowSchema = z.object({
+    id: z.number(),
+    /** `AppInstall.id`, or null for a sandbox kept off the cloud. */
+    remoteId: z.number().nullable(),
+    appId: z.number(),
+    appSlug: z.string().nullable(),
+    appName: z.string().nullable(),
+    name: z.string(),
+    description: z.string().nullable(),
+    environment: SandboxEnvironmentSchema,
+    strategy: DeployStrategySchema,
+    gameVersion: z.string().nullable(),
+    loader: z.string().nullable(),
+    preset: z.string().nullable(),
+    isDefault: z.boolean(),
+    cloudSync: z.boolean(),
+    gameDir: z.string().nullable(),
+    options: z.record(z.string(), z.unknown()),
+    launchArgs: z.array(z.string()),
+    launchEnv: z.record(z.string(), z.string()),
+    deployedAt: z.string().nullable(),
+    lastDeploy: z.unknown().nullable(),
+    createdAt: z.string(),
+    updatedAt: z.string(),
+    mods: z.array(SandboxModSchema),
+
+    // Derived by the command layer, so every screen agrees on the answer.
+    needsDeploy: z.boolean(),
+    deployedFiles: z.number(),
+    /** Null is the UI's cue to ask for a game folder before anything else. */
+    targetDir: z.string().nullable(),
+})
+
+export type SandboxRowT = z.infer<typeof SandboxRowSchema>
+
+export const ConflictSchema = z.object({
+    path: z.string(),
+    winner: z.string(),
+    losers: z.array(z.string()),
+})
+
+export const DeployReportSchema = z.object({
+    requested: z.string(),
+    used: z.string(),
+    /** Set when the requested strategy was not possible here, and why. */
+    fellBack: z.string().nullable(),
+    dryRun: z.boolean(),
+    placed: z.number(),
+    reused: z.number(),
+    removed: z.number(),
+    restored: z.number(),
+    backedUp: z.number(),
+    conflicts: z.array(ConflictSchema),
+    empty: z.array(z.string()),
+    skipped: z.array(z.string()),
+    warnings: z.array(z.string()),
+    errors: z.array(z.string()),
+})
+
+export type DeployReportT = z.infer<typeof DeployReportSchema>
+
+export const PurgeReportSchema = z.object({
+    removed: z.number(),
+    restored: z.number(),
+    /** Files left alone because they are no longer the ones we deployed. */
+    kept: z.array(z.string()),
+    missing: z.number(),
+    errors: z.array(z.string()),
+})
+
+export type PurgeReportT = z.infer<typeof PurgeReportSchema>
+
+export const VerifyReportSchema = z.object({
+    total: z.number(),
+    intact: z.number(),
+    missing: z.array(z.string()),
+    changed: z.array(z.string()),
+})
+
+export type VerifyReportT = z.infer<typeof VerifyReportSchema>
+
+export const StrategyReportSchema = z.object({
+    strategy: z.string(),
+    available: z.boolean(),
+    /** Why not, when `available` is false — and a warning when it is true. */
+    reason: z.string().nullable(),
+})
+
+export type StrategyReportT = z.infer<typeof StrategyReportSchema>
+
+export const StageOutcomeSchema = z.object({
+    modKey: z.string(),
+    ok: z.boolean(),
+    rule: z.string().nullable(),
+    files: z.number(),
+    error: z.string().nullable(),
+})
+
+export type StageOutcomeT = z.infer<typeof StageOutcomeSchema>
+
+/** One setting a game's launch rule understands — `apps::OptionSpec`. */
+export const OptionSpecSchema = z.object({
+    key: z.string(),
+    label: z.string(),
+    description: z.string().nullable().optional(),
+    type: z.enum(['int', 'text', 'bool', 'select']),
+    default: z.unknown().nullable().optional(),
+    min: z.number().nullable().optional(),
+    max: z.number().nullable().optional(),
+    step: z.number().nullable().optional(),
+    unit: z.string().nullable().optional(),
+    choices: z.array(z.object({ value: z.string(), label: z.string() })),
+    /** Empty means every environment. */
+    environments: z.array(z.string()),
+})
+
+export type OptionSpecT = z.infer<typeof OptionSpecSchema>
+
+export const PresetSpecSchema = z.object({
+    id: z.string(),
+    label: z.string(),
+    description: z.string().nullable().optional(),
+    environment: z.string().nullable().optional(),
+    gameVersion: z.string().nullable().optional(),
+    loader: z.string().nullable().optional(),
+    strategy: z.string().nullable().optional(),
+    options: z.record(z.string(), z.unknown()),
+    launchArgs: z.array(z.string()),
+})
+
+export type PresetSpecT = z.infer<typeof PresetSpecSchema>
+
+export const SandboxSpecSchema = z.object({
+    deploy: z.object({
+        defaultStrategy: z.string().nullable().optional(),
+        supportedStrategies: z.array(z.string()),
+        /** `kernel` is the one that matters — see the deploy engine. */
+        antiCheat: z.string().nullable().optional(),
+        modTargets: z.array(z.object({ type: z.string(), relPath: z.string() })),
+        notes: z.array(z.string()),
+    }),
+    presets: z.array(PresetSpecSchema),
+    options: z.array(OptionSpecSchema),
+    detect: z
+        .object({
+            steamAppIds: z.array(z.string()),
+            epicAppNames: z.array(z.string()),
+            gogProductIds: z.array(z.string()),
+            names: z.array(z.string()),
+            markers: z.array(z.string()),
+            paths: z.record(z.string(), z.array(z.string())),
+        })
+        .optional(),
+})
+
+export type SandboxSpecT = z.infer<typeof SandboxSpecSchema>
+
+// ----------------------------------------------------------------- Downloads
+
+export const DownloadStatusSchema = z.enum([
+    'queued',
+    'running',
+    'paused',
+    'done',
+    'failed',
+    'cancelled',
+])
+
+export type DownloadStatusT = z.infer<typeof DownloadStatusSchema>
+
+export const DownloadSchema = z.object({
+    id: z.string(),
+    label: z.string(),
+    url: z.string(),
+    dest: z.string(),
+    status: DownloadStatusSchema,
+    /** Null until the server says, and it may never say. */
+    total: z.number().nullable(),
+    done: z.number(),
+    speedBps: z.number(),
+    etaSecs: z.number().nullable(),
+    priority: z.number(),
+    limitBps: z.number().nullable(),
+    attempts: z.number(),
+    error: z.string().nullable(),
+    sha256: z.string().nullable(),
+    /** Recent speeds, oldest first — what the graph draws. */
+    samples: z.array(z.number()),
+    queuedAt: z.string(),
+    updatedAt: z.string(),
+    meta: z.record(z.string(), z.string()),
+})
+
+export type DownloadT = z.infer<typeof DownloadSchema>
+
+export const QueueSnapshotSchema = z.object({
+    downloads: z.array(DownloadSchema),
+    active: z.number(),
+    speedBps: z.number(),
+    limitBps: z.number().nullable(),
+})
+
+export type QueueSnapshotT = z.infer<typeof QueueSnapshotSchema>
+
+// ---------------------------------------------------------------- Detection
+
+export const DetectedGameSchema = z.object({
+    /** `steam`, `epic`, `gog`, `xbox`, `ubisoft`, `ea`, `battlenet`, `folder`. */
+    source: z.string(),
+    name: z.string(),
+    path: z.string(),
+    launcherId: z.string().nullable(),
+    launchUri: z.string().nullable(),
+    sizeBytes: z.number().nullable(),
+    /** The TMC game this was matched to, when a hint matched. */
+    slug: z.string().nullable(),
+    alreadySet: z.boolean(),
+    replaces: z.string().nullable(),
+})
+
+export type DetectedGameT = z.infer<typeof DetectedGameSchema>
+
+// --------------------------------------------------------------------- RCON
+
+export const RconProtocolSchema = z.enum(['source', 'frostbite'])
+export type RconProtocolT = z.infer<typeof RconProtocolSchema>
+
+/**
+ * A saved server.
+ *
+ * Note what is absent: the password. The Rust type has no field for one, so no
+ * refactor can start returning it — see `rcon::store`.
+ */
+export const RconServerSchema = z.object({
+    id: z.number(),
+    name: z.string(),
+    host: z.string(),
+    port: z.number(),
+    protocol: RconProtocolSchema,
+    serverId: z.number().nullable(),
+    appId: z.number().nullable(),
+    /** Whether one is stored, so the UI can prompt without being told what. */
+    hasPassword: z.boolean(),
+    lastUsedAt: z.string().nullable(),
+    createdAt: z.string(),
+})
+
+export type RconServerT = z.infer<typeof RconServerSchema>
+
+export const RconReplySchema = z.object({
+    command: z.string(),
+    output: z.string(),
+    tookMs: z.number(),
+})
+
+export type RconReplyT = z.infer<typeof RconReplySchema>
+
+export const RconHistorySchema = z.object({
+    command: z.string(),
+    output: z.string(),
+    ok: z.boolean(),
+    at: z.string(),
+})
+
+export type RconHistoryT = z.infer<typeof RconHistorySchema>

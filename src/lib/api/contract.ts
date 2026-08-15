@@ -55,7 +55,14 @@ export function ApiOk<S extends z.ZodTypeAny>(schema: S) {
 /** Self-reported client identity. Untrusted — a label for the approval screen. */
 export const ClientInfoSchema = z.object({
     name: z.string().min(1).max(64),
-    platform: z.enum(['windows', 'macos', 'linux', 'android', 'ios', 'unknown']),
+    platform: z.enum([
+        'windows',
+        'macos',
+        'linux',
+        'android',
+        'ios',
+        'unknown',
+    ]),
     version: z.string().min(1).max(32),
 })
 
@@ -169,11 +176,16 @@ export const StatsSchema = z.object({
 /**
  * The query protocols an app's servers can speak.
  *
- * Mirrors Prisma's `SpyQueryProtocols` exactly, which is the same list the
- * site's own scanners use. The app speaks these natively and queries servers
- * itself, so a player sees latency and player counts measured from THEIR
- * connection rather than from our scanner's — which is the whole reason the
- * app can do something a browser tab cannot.
+ * A subset of Prisma's `SpyQueryProtocols`, which is the same list the site's
+ * own scanners use. The app speaks these natively and queries servers itself,
+ * so a player sees latency and player counts measured from THEIR connection
+ * rather than from our scanner's — which is the whole reason the app can do
+ * something a browser tab cannot.
+ *
+ * `PALWORLD_REST` is deliberately NOT here. It is the one protocol that needs a
+ * credential — the server's admin password — and the app has none and must
+ * never be handed one. `buildQueryConfig` drops protocols this list doesn't
+ * know, so a Palworld app configured with both simply reaches the app as `A2S`.
  */
 export const QueryProtocolVals = [
     'A2S',
@@ -528,7 +540,19 @@ export type BrowseResponseT = z.infer<typeof BrowseResponseSchema>
 
 /** Sidebar facets, so the app's filters are populated from real data. */
 export const FacetsResponseSchema = z.object({
-    apps: z.array(RefSchema.extend({ count: z.number().int() })),
+    apps: z.array(
+        RefSchema.extend({
+            count: z.number().int(),
+            /**
+             * The game's own artwork, absolute.
+             *
+             * Optional with a null default so an app talking to a server that
+             * predates it renders a text-only picker rather than failing to
+             * parse the whole facets response.
+             */
+            icon: z.string().nullable().default(null),
+        })
+    ),
     categories: z.array(
         RefSchema.extend({
             count: z.number().int(),
@@ -544,7 +568,9 @@ export const FacetsResponseSchema = z.object({
      * nothing, and a filter that can only ever return an empty list is worse
      * than no filter.
      */
-    countries: z.array(RefSchema.extend({ count: z.number().int() })).default([]),
+    countries: z
+        .array(RefSchema.extend({ count: z.number().int() }))
+        .default([]),
 })
 
 export type FacetsResponseT = z.infer<typeof FacetsResponseSchema>
@@ -792,6 +818,45 @@ export const InstallItemSchema = z.object({
     subscribed: z.boolean(),
 })
 
+/**
+ * How the app puts a sandbox's files in front of the game.
+ *
+ * `direct` copies into the game folder (and backs up whatever it displaced);
+ * the two link strategies leave the game folder made of pointers; `usvfs` is
+ * Mod Organizer's runtime API hooking, which the app declares and does not yet
+ * implement.
+ *
+ * The server stores this as a STRING and validates it against this list, but a
+ * value it does not recognise is not fatal to the app — it falls back to its
+ * own default. That is what lets a new strategy ship in the app before it ships
+ * here.
+ */
+export const DeployStrategyVals = [
+    'direct',
+    'hardlink',
+    'symlink',
+    'usvfs',
+] as const
+
+export const DeployStrategySchema = z.enum(DeployStrategyVals)
+export type DeployStrategyT = (typeof DeployStrategyVals)[number]
+
+/**
+ * Which side of a game a sandbox is for.
+ *
+ * Not decoration: it decides which mods are offered for it and which of the
+ * game's own options are shown. A dedicated server and a player's game are the
+ * same files arranged differently, and a manager that cannot tell them apart
+ * offers everybody both halves of every list.
+ *
+ * `shared` accepts both, which is what the website's own `ALL` environment
+ * means on a mod.
+ */
+export const SandboxEnvVals = ['client', 'server', 'shared'] as const
+
+export const SandboxEnvSchema = z.enum(SandboxEnvVals)
+export type SandboxEnvT = (typeof SandboxEnvVals)[number]
+
 export const InstallSchema = z.object({
     id: z.number().int(),
     appId: z.number().int(),
@@ -806,6 +871,12 @@ export const InstallSchema = z.object({
     gameVersion: z.string().nullable(),
     loader: z.string().nullable(),
     isDefault: z.boolean(),
+    /**
+     * Defaulted rather than required, so an app talking to a server that
+     * predates these fields gets a working sandbox instead of a parse error.
+     */
+    strategy: DeployStrategySchema.default('hardlink'),
+    environment: SandboxEnvSchema.default('client'),
     launchArgs: z.array(z.string()),
     launchEnv: z.record(z.string(), z.string()),
     options: InstallOptionsSchema,
@@ -835,6 +906,8 @@ export const InstallCreateRequest = z.object({
     gameVersion: z.string().max(64).optional(),
     loader: z.string().max(64).optional(),
     isDefault: z.boolean().optional(),
+    strategy: DeployStrategySchema.optional(),
+    environment: SandboxEnvSchema.optional(),
     launch: InstallLaunchSchema.optional(),
 })
 
@@ -845,6 +918,8 @@ export const InstallUpdateRequest = z.object({
     gameVersion: z.string().max(64).nullable().optional(),
     loader: z.string().max(64).nullable().optional(),
     isDefault: z.boolean().optional(),
+    strategy: DeployStrategySchema.optional(),
+    environment: SandboxEnvSchema.optional(),
     launch: InstallLaunchSchema.optional(),
     /**
      * Playtime the app is reporting for this install, in seconds since the last
@@ -864,4 +939,146 @@ export const InstallItemRequest = z.object({
     /** Present on a patch; absent on add/remove. */
     enabled: z.boolean().optional(),
     order: z.number().int().min(0).max(10000).optional(),
+})
+
+// --------------------------------------------------------- Device downloads
+
+/**
+ * What one device is downloading, as it reports it.
+ *
+ * The queue itself lives on the device and is the authority for everything —
+ * this is a **snapshot for display**, so a user on their phone can see whether
+ * the modpack their desktop started has finished. Nothing on the server side
+ * ever drives a download.
+ *
+ * Note what a row does NOT carry: no URL, no filesystem path, no device
+ * identifier beyond the user's own label for the machine. A path would put
+ * somebody's username and drive layout in a row that is one authorisation bug
+ * away from public, in exchange for nothing anybody would read.
+ */
+export const DeviceDownloadItemSchema = z.object({
+    id: z.string().max(128),
+    label: z.string().max(200),
+    status: z.enum(['queued', 'running', 'paused', 'done', 'failed', 'cancelled']),
+    done: z.number().int().nonnegative(),
+    total: z.number().int().nonnegative().nullable(),
+    speedBps: z.number().int().nonnegative(),
+})
+
+export type DeviceDownloadItemT = z.infer<typeof DeviceDownloadItemSchema>
+
+/** Cap on the rows one report may carry. A modpack is hundreds; a list is not. */
+export const MAX_REPORTED_DOWNLOADS = 25
+
+export const DeviceDownloadReportRequest = z.object({
+    active: z.number().int().min(0).max(100000),
+    queued: z.number().int().min(0).max(100000),
+    paused: z.number().int().min(0).max(100000),
+    failed: z.number().int().min(0).max(100000),
+    finished: z.number().int().min(0).max(100000),
+    speedBps: z.number().int().min(0),
+    remainingBytes: z.number().int().min(0),
+    /**
+     * The in-flight rows, newest first, capped. The app sends the ones worth
+     * showing rather than the whole queue — the summary counters above are what
+     * a device list renders, and the items are for the one device somebody
+     * opened.
+     */
+    items: z.array(DeviceDownloadItemSchema).max(MAX_REPORTED_DOWNLOADS).default([]),
+})
+
+export const DeviceDownloadSchema = z.object({
+    deviceName: z.string(),
+    /** Whether this is the device asking. */
+    isThisDevice: z.boolean(),
+    active: z.number().int(),
+    queued: z.number().int(),
+    paused: z.number().int(),
+    failed: z.number().int(),
+    finished: z.number().int(),
+    speedBps: z.number().int(),
+    remainingBytes: z.number().int(),
+    items: z.array(DeviceDownloadItemSchema),
+    updatedAt: z.string(),
+})
+
+export const DeviceDownloadListResponse = z.object({
+    devices: z.array(DeviceDownloadSchema),
+})
+
+export type DeviceDownloadT = z.infer<typeof DeviceDownloadSchema>
+
+// ----------------------------------------------------------------- Reviews
+
+/**
+ * One review, as the app renders it.
+ *
+ * Narrower than the website's own row on purpose. The site shows five separate
+ * sub-scores for some content types; the app shows one number and the text,
+ * because a phone-sized card with six ratings on it is a card nobody reads. The
+ * sub-scores stay on the website, where there is room for them.
+ */
+export const ReviewSchema = z.object({
+    id: z.number().int(),
+    owner: UserRefSchema.nullable(),
+    /** 1–5, or null for a review that is only text. */
+    rating: z.number().int().min(1).max(5).nullable(),
+    content: z.string().nullable(),
+    createdAt: z.string(),
+    lastEdit: z.string().nullable(),
+    /** Net helpful score, as the site counts it. */
+    score: z.number().int(),
+})
+
+export type ReviewT = z.infer<typeof ReviewSchema>
+
+export const ReviewListResponse = z.object({
+    reviews: z.array(ReviewSchema),
+    nextCursor: z.string().nullable(),
+    /** How many of each score, so the app can draw the distribution bars. */
+    breakdown: z.object({
+        one: z.number().int().nonnegative(),
+        two: z.number().int().nonnegative(),
+        three: z.number().int().nonnegative(),
+        four: z.number().int().nonnegative(),
+        five: z.number().int().nonnegative(),
+    }),
+    /** Mean, or null when nothing is scored. */
+    average: z.number().nullable(),
+    total: z.number().int().nonnegative(),
+})
+
+export const ReviewQuerySchema = z.object({
+    kind: ContentKindSchema,
+    id: z.coerce.number().int().positive(),
+    sort: z.enum(['recent', 'helpful', 'rating']).default('recent'),
+    cursor: z.coerce.string().nullish(),
+    limit: z.coerce.number().int().min(1).max(50).default(20),
+})
+
+// ------------------------------------------------------------------ Reports
+
+/**
+ * Reporting something from inside the app.
+ *
+ * Deliberately the same shape the website's own form submits, with the same
+ * `Report` row behind it — a report made in the app has to land in the same
+ * moderation queue, or the app becomes a way to file something nobody sees.
+ *
+ * There is no "reason" enum beyond the website's own two types. A free-text
+ * body is what moderators actually read, and a longer enum only ever produces
+ * arguments about which bucket something belongs in.
+ */
+export const ReportKindVals = ['SPAM', 'OTHER'] as const
+
+export const ReportCreateRequest = z.object({
+    kind: ContentKindSchema,
+    id: z.coerce.number().int().positive(),
+    type: z.enum(ReportKindVals).default('OTHER'),
+    title: z.string().min(3).max(120),
+    content: z.string().min(10).max(4000),
+})
+
+export const ReportCreateResponse = z.object({
+    reported: z.literal(true),
 })
