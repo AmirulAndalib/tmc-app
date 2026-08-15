@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { call } from './index'
 import {
     ApiEnvSchema,
+    DependencyReportSchema,
     DetectedGameSchema,
     DeployReportSchema,
     PurgeReportSchema,
@@ -353,6 +354,29 @@ export const ipc = {
     /** A game's presets, option schema and deployment rules, or null. */
     sandboxSpec: (slug: string) =>
         call('sandbox_spec', SandboxSpecSchema.nullable(), { slug }),
+
+    /**
+     * What this sandbox's items say about each other.
+     *
+     * A LOCAL query — every edge was cached when its item was added — so a
+     * screen can call it on every render without a request going anywhere.
+     */
+    sandboxCheck: (id: number) =>
+        call('sandbox_check', DependencyReportSchema, { id }),
+
+    /** Re-fetch every member's edges. What "check again" calls. */
+    sandboxRefreshDependencies: (id: number) =>
+        call('sandbox_refresh_dependencies', DependencyReportSchema, { id }),
+
+    /**
+     * Add everything missing that the account is already subscribed to.
+     *
+     * Only subscribed items: the installer refuses one the account did not ask
+     * to keep, so adding the row would produce an entry that can never
+     * download. Returns the names it added.
+     */
+    sandboxAddMissing: (id: number) =>
+        call('sandbox_add_missing', z.array(z.string()), { id }),
 
     // -------------------------------------------------------------- Downloads
     //

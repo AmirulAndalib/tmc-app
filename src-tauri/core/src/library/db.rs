@@ -41,7 +41,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::{AppError, AppResult};
 
 /// Schema version. Bumped whenever `migrate` gains a step.
-const SCHEMA_VERSION: i64 = 4;
+const SCHEMA_VERSION: i64 = 5;
 
 /// One subscribed item as this device knows it.
 ///
@@ -227,6 +227,7 @@ impl LibraryDb {
                     2 => conn.execute_batch(SCHEMA_V2)?,
                     3 => conn.execute_batch(SCHEMA_V3)?,
                     4 => conn.execute_batch(SCHEMA_V4)?,
+                    5 => conn.execute_batch(SCHEMA_V5)?,
                     _ => break,
                 }
 
@@ -318,6 +319,49 @@ const SCHEMA_V1: &str = r#"
 /// sandboxes the cloud has never heard of (see `cloud_sync`). Merging the two
 /// would mean a sync deleting a local-only sandbox because the server did not
 /// list it.
+/// Dependency edges, cached per item.
+///
+/// WHY THEY ARE CACHED AT ALL
+/// --------------------------
+/// Checking a sandbox for missing requirements and internal conflicts is a
+/// question about EVERY item in it at once. Asking the API per item would be
+/// forty requests before a deploy, on a screen somebody is waiting on, for data
+/// that changes about as often as a mod is re-released.
+///
+/// So an item's edges are fetched once — when it is added to a sandbox — and
+/// re-fetched when it is staged. Between those the check is a local join and
+/// costs nothing.
+///
+/// STALENESS IS ACCEPTABLE HERE AND IS NOT ELSEWHERE
+/// ------------------------------------------------
+/// These rows drive a WARNING, never a refusal. An author who adds a
+/// requirement today and a user who deploys before their next sync sees no
+/// warning, which is exactly what they saw yesterday. Nothing is installed or
+/// removed on the strength of this table.
+const SCHEMA_V5: &str = r#"
+                CREATE TABLE IF NOT EXISTS item_dependency (
+                    /* The item that HAS the dependency. */
+                    kind      TEXT NOT NULL,
+                    item_id   INTEGER NOT NULL,
+
+                    /* The other end. */
+                    rel_kind  TEXT NOT NULL,
+                    rel_id    INTEGER NOT NULL,
+
+                    /* Required | Optional | Recommended | Conflict */
+                    relation  TEXT NOT NULL,
+                    name      TEXT NOT NULL,
+                    icon      TEXT,
+                    note      TEXT,
+                    fetched_at TEXT NOT NULL,
+
+                    PRIMARY KEY (kind, item_id, rel_kind, rel_id)
+                );
+
+                CREATE INDEX IF NOT EXISTS item_dependency_rel_idx
+                    ON item_dependency (rel_kind, rel_id);
+"#;
+
 /// Saved RCON servers and their console history.
 ///
 /// The `password` column holds CIPHERTEXT, never a password — see

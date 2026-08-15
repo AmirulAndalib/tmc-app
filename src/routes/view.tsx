@@ -23,6 +23,7 @@ import Markdown from '~/components/markdown'
 import ServerPanel from '~/components/server-panel'
 import InstallButton from '~/components/install-button'
 import SubscribeButton from '~/components/subscribe-button'
+import Dependencies from '~/components/dependencies'
 import Gallery from '~/components/gallery'
 import ReportButton from '~/components/report-button'
 import Reviews from '~/components/reviews'
@@ -67,7 +68,8 @@ export default function ViewRoute() {
 
     if (detail.isError) return <Centered>{detail.error.message}</Centered>
 
-    const { summary, content, rules, releases, media, links } = detail.data
+    const { summary, content, rules, releases, media, links, dependencies } =
+        detail.data
     const banner = summary.images.banner ?? summary.images.card
 
     /*
@@ -314,6 +316,8 @@ export default function ViewRoute() {
                         </ul>
                     </section>
                 )}
+
+                <Dependencies items={dependencies} />
 
                 {/*
                  * Reviews last, under everything the item itself says. They are

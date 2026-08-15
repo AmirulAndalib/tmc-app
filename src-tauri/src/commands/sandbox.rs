@@ -19,6 +19,7 @@ use tauri::State;
 
 use tmc_core::deploy::{PurgeReport, StrategyReport, VerifyReport};
 use tmc_core::error::{AppError, AppResult};
+use tmc_core::library::dependency::{DependencyReport, Edge, Relation};
 use tmc_core::library::deploy::{
     deploy_sandbox, purge_sandbox, stage_mod, strategies_for, verify_sandbox, StageOutcome,
 };
@@ -296,7 +297,7 @@ pub fn sandbox_set_default(state: State<'_, AppState>, id: i64) -> AppResult<()>
 /// naming an item would let a rendered mod description put a row in somebody's
 /// sandbox list under any label it liked.
 #[tauri::command]
-pub fn sandbox_add_mod(
+pub async fn sandbox_add_mod(
     state: State<'_, AppState>,
     id: i64,
     kind: String,
@@ -324,12 +325,154 @@ pub fn sandbox_add_mod(
         .library
         .sandbox_add_mod(id, &kind, item_id, &entry.name)?;
 
+    /*
+     * The item's dependency edges are fetched HERE, once, and cached. The
+     * alternative is asking the API per item at deploy time, which is forty
+     * requests on a screen somebody is waiting on for data that changes about
+     * as often as a mod is re-released.
+     *
+     * A failure is not fatal: the item is already in the sandbox, and the
+     * report names anything it could not check rather than pretending it found
+     * nothing.
+     */
+    if let Err(err) = cache_dependencies(&state, &kind, item_id).await {
+        let detail = err.detail();
+
+        tracing::warn!("could not fetch dependencies for {kind}:{item_id}: {detail}");
+    }
+
     let sandbox = state
         .library
         .sandbox_get(id)?
         .ok_or_else(|| AppError::internal("the sandbox vanished"))?;
 
     row(sandbox, &state)
+}
+
+/// What this sandbox's items say about each other.
+///
+/// A local query — every edge was cached when its item was added — so a screen
+/// can call it on every render without a request going anywhere.
+#[tauri::command]
+pub fn sandbox_check(state: State<'_, AppState>, id: i64) -> AppResult<DependencyReport> {
+    let sandbox = state
+        .library
+        .sandbox_get(id)?
+        .ok_or_else(|| AppError::invalid("That sandbox does not exist."))?;
+
+    state.library.dependency_check(&sandbox)
+}
+
+/// Re-fetch the edges for everything in a sandbox.
+///
+/// What the "check again" button calls. Bounded by the sandbox's own size, and
+/// one failure does not stop the rest — an item whose page 404s should not cost
+/// the other thirty their answer.
+#[tauri::command]
+pub async fn sandbox_refresh_dependencies(
+    state: State<'_, AppState>,
+    id: i64,
+) -> AppResult<DependencyReport> {
+    let sandbox = state
+        .library
+        .sandbox_get(id)?
+        .ok_or_else(|| AppError::invalid("That sandbox does not exist."))?;
+
+    for member in &sandbox.mods {
+        if let Err(err) = cache_dependencies(&state, &member.kind, member.item_id).await {
+            tracing::warn!(
+                "could not refresh dependencies for {}: {}",
+                member.mod_key,
+                err.detail()
+            );
+        }
+    }
+
+    state.library.dependency_check(&sandbox)
+}
+
+/// Add everything a sandbox is missing, where the account is subscribed to it.
+///
+/// **Only subscribed items.** A missing dependency the user has not subscribed
+/// to cannot be materialised — the installer refuses an item the account did
+/// not ask to keep — so adding the row would produce a sandbox entry that can
+/// never download. The UI links those out to their pages instead.
+#[tauri::command]
+pub async fn sandbox_add_missing(state: State<'_, AppState>, id: i64) -> AppResult<Vec<String>> {
+    let sandbox = state
+        .library
+        .sandbox_get(id)?
+        .ok_or_else(|| AppError::invalid("That sandbox does not exist."))?;
+
+    let report = state.library.dependency_check(&sandbox)?;
+
+    let mut added = Vec::new();
+
+    for edge in report.missing {
+        let Some(entry) = state.library.find_item(&edge.rel_kind, edge.rel_id)? else {
+            continue;
+        };
+
+        if state
+            .library
+            .sandbox_add_mod(id, &edge.rel_kind, edge.rel_id, &entry.name)
+            .is_ok()
+        {
+            let _ = cache_dependencies(&state, &edge.rel_kind, edge.rel_id).await;
+
+            added.push(entry.name);
+        }
+    }
+
+    Ok(added)
+}
+
+/// Fetch one item's dependency edges from the API and cache them.
+///
+/// The parsing is deliberately forgiving: a field the server adds later must
+/// not make the whole item uncheckable, and an edge whose relation this build
+/// does not recognise is dropped rather than guessed at — guessing would mean
+/// inventing a requirement or a conflict out of a string.
+async fn cache_dependencies(state: &AppState, kind: &str, item_id: i64) -> AppResult<()> {
+    let path = format!("/content/{kind}/{item_id}");
+
+    let value = state
+        .api
+        .request(tmc_core::api::Method::GET, &path, None, false)
+        .await?;
+
+    let edges: Vec<Edge> = value
+        .get("dependencies")
+        .and_then(serde_json::Value::as_array)
+        .map(|list| {
+            list.iter()
+                .filter_map(|raw| {
+                    Some(Edge {
+                        kind: kind.to_string(),
+                        item_id,
+                        rel_kind: raw.get("kind")?.as_str()?.to_string(),
+                        rel_id: raw.get("id")?.as_i64()?,
+                        relation: Relation::parse(raw.get("relation")?.as_str()?)?,
+                        name: raw
+                            .get("name")
+                            .and_then(serde_json::Value::as_str)
+                            .unwrap_or("Unknown")
+                            .to_string(),
+                        icon: raw
+                            .get("icon")
+                            .and_then(serde_json::Value::as_str)
+                            .map(str::to_string),
+                        note: raw
+                            .get("note")
+                            .and_then(serde_json::Value::as_str)
+                            .map(str::to_string),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    state.library.dependency_set(kind, item_id, &edges)
 }
 
 #[tauri::command]
@@ -460,7 +603,33 @@ pub fn sandbox_deploy(
 
     let ctx = state.sandbox_ctx(&plugins, &settings, &roots, &staging, &backups);
 
-    deploy_sandbox(&state.library, &sandbox, &ctx, dry_run.unwrap_or(false))
+    let mut report = deploy_sandbox(&state.library, &sandbox, &ctx, dry_run.unwrap_or(false))?;
+
+    /*
+     * Dependency problems ride along as WARNINGS on the deploy report, and the
+     * deploy still happens. The metadata is author-written and frequently wrong
+     * — a required edge left in place after a mod absorbed its own dependency
+     * is the normal state of every mod site — and a refusal with no escape
+     * hatch is one people learn to ignore, which costs the accurate warnings
+     * their credibility too. See `library::dependency`.
+     */
+    if let Ok(deps) = state.library.dependency_check(&sandbox) {
+        for edge in &deps.missing {
+            report.warnings.push(format!(
+                "{} is required by something in this sandbox and is not in it.",
+                edge.name
+            ));
+        }
+
+        for clash in &deps.conflicts {
+            report.warnings.push(format!(
+                "{} and {} are marked as incompatible.",
+                clash.a_name, clash.b_name
+            ));
+        }
+    }
+
+    Ok(report)
 }
 
 /// Take it back out.

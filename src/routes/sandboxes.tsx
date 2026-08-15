@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams } from 'react-router-dom'
 import {
     FiAlertTriangle,
     FiArrowDown,
+    FiLink2,
     FiArrowUp,
     FiCheck,
     FiCloud,
@@ -21,6 +22,7 @@ import { appLabel } from '~/lib/api/labels'
 import { useAuth } from '~/lib/auth/provider'
 import { useLibrary } from '~/lib/library/provider'
 import type {
+    DependencyReportT,
     DeployReportT,
     OptionSpecT,
     SandboxRowT,
@@ -244,6 +246,7 @@ function SandboxDetail({
 
     const [spec, setSpec] = useState<SandboxSpecT | null>(null)
     const [strategies, setStrategies] = useState<StrategyReportT[]>([])
+    const [deps, setDeps] = useState<DependencyReportT | null>(null)
     const [busy, setBusy] = useState<string | null>(null)
     const [error, setError] = useState<string | null>(null)
     const [report, setReport] = useState<DeployReportT | null>(null)
@@ -270,12 +273,17 @@ function SandboxDetail({
 
                 if (live) setStrategies(listed)
             }
+
+            // Local, so it costs nothing to ask on every change to the list.
+            const checked = await ipc.sandboxCheck(sandbox.id).catch(() => null)
+
+            if (live) setDeps(checked)
         })()
 
         return () => {
             live = false
         }
-    }, [sandbox.id, sandbox.appSlug, sandbox.targetDir])
+    }, [sandbox.id, sandbox.appSlug, sandbox.targetDir, sandbox.mods])
 
     const run = async (label: string, fn: () => Promise<unknown>) => {
         setBusy(label)
@@ -446,6 +454,19 @@ function SandboxDetail({
 
             {report && <DeploySummary report={report} />}
 
+            {deps && (
+                <DependencyPanel
+                    sandboxId={sandbox.id}
+                    report={deps}
+                    onChanged={async () => {
+                        await onChanged()
+                        setDeps(
+                            await ipc.sandboxCheck(sandbox.id).catch(() => null)
+                        )
+                    }}
+                />
+            )}
+
             {/* -------------------------------------------------------- Mods */}
             <section className="rounded-xl border border-border bg-surface">
                 <header className="flex items-center justify-between border-b border-border px-3 py-2">
@@ -602,6 +623,169 @@ function SandboxDetail({
                 onDeleted={onDeleted}
             />
         </div>
+    )
+}
+
+/**
+ * What this sandbox's items say about each other.
+ *
+ * **Warnings, never a block.** The metadata is author-written and frequently
+ * wrong — a required edge left in place after a mod absorbed its own dependency
+ * is the normal state of every mod site — and a refusal with no escape hatch is
+ * one people learn to ignore, which costs the accurate warnings their
+ * credibility too. So the deploy button stays live and says so.
+ *
+ * "Add the missing ones" only offers items the account is already subscribed
+ * to. The installer refuses an item the account did not ask to keep, so adding
+ * the rest would produce sandbox entries that can never download; those link
+ * out to their pages instead.
+ */
+function DependencyPanel({
+    sandboxId,
+    report,
+    onChanged,
+}: {
+    sandboxId: number
+    report: DependencyReportT
+    onChanged: () => Promise<void>
+}) {
+    const library = useLibrary()
+    const [busy, setBusy] = useState(false)
+
+    const nothing =
+        report.missing.length === 0 &&
+        report.conflicts.length === 0 &&
+        report.suggested.length === 0 &&
+        report.unchecked.length === 0
+
+    if (nothing) return null
+
+    const subscribed = (kind: string, id: number) =>
+        library.rows.some((row) => row.kind === kind && row.itemId === id)
+
+    const addable = report.missing.filter((edge) =>
+        subscribed(edge.relKind, edge.relId)
+    )
+
+    return (
+        <section className="flex flex-col gap-2 rounded-xl border border-border bg-surface p-3">
+            <div className="flex items-center justify-between gap-2">
+                <h2 className="flex items-center gap-1.5 text-sm font-semibold">
+                    <FiLink2 className="size-3.5" />
+                    Dependencies
+                </h2>
+
+                <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => {
+                        setBusy(true)
+
+                        void ipc
+                            .sandboxRefreshDependencies(sandboxId)
+                            .then(onChanged)
+                            .finally(() => setBusy(false))
+                    }}
+                    className="rounded-lg border border-border px-2 py-1 text-xs hover:border-accent disabled:opacity-50"
+                >
+                    {busy ? 'Checking…' : 'Check again'}
+                </button>
+            </div>
+
+            {report.conflicts.map((clash) => (
+                <p
+                    key={`${clash.aKey}-${clash.bKey}`}
+                    className="flex items-start gap-1.5 text-xs text-warning"
+                >
+                    <FiAlertTriangle className="mt-0.5 size-3 shrink-0" />
+                    <span>
+                        <strong>{clash.aName}</strong> and{' '}
+                        <strong>{clash.bName}</strong> are marked as incompatible.
+                        {clash.note && (
+                            <span className="text-muted"> {clash.note}</span>
+                        )}
+                    </span>
+                </p>
+            ))}
+
+            {report.missing.length > 0 && (
+                <div className="flex flex-col gap-1.5">
+                    <p className="text-xs">
+                        Missing {report.missing.length} required item
+                        {report.missing.length === 1 ? '' : 's'}:
+                    </p>
+
+                    <ul className="flex flex-wrap gap-1.5">
+                        {report.missing.map((edge) => (
+                            <li key={`${edge.relKind}:${edge.relId}`}>
+                                <Link
+                                    to={`/view/${edge.relKind}/${edge.relId}`}
+                                    className="flex items-center gap-1.5 rounded-lg border border-border px-2 py-1 text-xs hover:border-accent"
+                                >
+                                    {edge.icon && (
+                                        <img
+                                            src={edge.icon}
+                                            alt=""
+                                            loading="lazy"
+                                            className="size-3.5 rounded-sm object-cover"
+                                        />
+                                    )}
+                                    {edge.name}
+                                    {!subscribed(edge.relKind, edge.relId) && (
+                                        <span className="text-muted">
+                                            · subscribe first
+                                        </span>
+                                    )}
+                                </Link>
+                            </li>
+                        ))}
+                    </ul>
+
+                    {addable.length > 0 && (
+                        <button
+                            type="button"
+                            disabled={busy}
+                            onClick={() => {
+                                setBusy(true)
+
+                                void ipc
+                                    .sandboxAddMissing(sandboxId)
+                                    .then(onChanged)
+                                    .finally(() => setBusy(false))
+                            }}
+                            className="self-start rounded-lg bg-accent px-3 py-1.5 text-xs text-accent-foreground disabled:opacity-50"
+                        >
+                            Add {addable.length} subscribed item
+                            {addable.length === 1 ? '' : 's'}
+                        </button>
+                    )}
+                </div>
+            )}
+
+            {report.suggested.length > 0 && (
+                <p className="text-xs text-muted">
+                    Also recommended:{' '}
+                    {report.suggested.map((edge, index) => (
+                        <span key={`${edge.relKind}:${edge.relId}`}>
+                            {index > 0 && ', '}
+                            <Link
+                                to={`/view/${edge.relKind}/${edge.relId}`}
+                                className="hover:text-accent"
+                            >
+                                {edge.name}
+                            </Link>
+                        </span>
+                    ))}
+                </p>
+            )}
+
+            {report.unchecked.length > 0 && (
+                <p className="text-[0.7rem] text-muted">
+                    Not checked yet: {report.unchecked.join(', ')}. Press check
+                    again once you are online.
+                </p>
+            )}
+        </section>
     )
 }
 

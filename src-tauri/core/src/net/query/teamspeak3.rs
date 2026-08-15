@@ -113,9 +113,7 @@ pub async fn query(
     session
         .command(&format!("use port={game_port}"), timeout)
         .await
-        .map_err(|_| {
-            AppError::invalid("No TeamSpeak server is running on that voice port.")
-        })?;
+        .map_err(|_| AppError::invalid("No TeamSpeak server is running on that voice port."))?;
 
     let info = session.command("serverinfo", timeout).await?;
     let info = info.first().cloned().unwrap_or_default();
@@ -123,15 +121,18 @@ pub async fn query(
     let mut out = ServerQueryResult::offline(QueryProtocol::Teamspeak3, addr.port());
     out.online = true;
     out.rtt_ms = rtt;
-    out.name = info.get("virtualserver_name").cloned().filter(|s| !s.is_empty());
+    out.name = info
+        .get("virtualserver_name")
+        .cloned()
+        .filter(|s| !s.is_empty());
     out.version = info
         .get("virtualserver_version")
         .cloned()
         .filter(|s| !s.is_empty());
-    out.max_players = info.get("virtualserver_maxclients").and_then(|v| v.parse().ok());
-    out.password = info
-        .get("virtualserver_flag_password")
-        .map(|v| v == "1");
+    out.max_players = info
+        .get("virtualserver_maxclients")
+        .and_then(|v| v.parse().ok());
+    out.password = info.get("virtualserver_flag_password").map(|v| v == "1");
 
     // The server's own count, less the monitoring tools connected to it. See
     // the module docs on why the roster length is the wrong number.
@@ -271,7 +272,9 @@ impl Session {
                 .map_err(|_| AppError::Network("The server stopped responding.".into()))??;
 
             if read == 0 {
-                return Err(AppError::Network("The server closed the connection.".into()));
+                return Err(AppError::Network(
+                    "The server closed the connection.".into(),
+                ));
             }
 
             self.pending.extend_from_slice(&chunk[..read]);
@@ -594,7 +597,10 @@ mod tests {
                 // the head of the first command's reply behind it.
                 write.write_all(b"TS3\n\r").await.unwrap();
                 tokio::time::sleep(Duration::from_millis(30)).await;
-                write.write_all(b"Welcome to ServerQuery\n\r").await.unwrap();
+                write
+                    .write_all(b"Welcome to ServerQuery\n\r")
+                    .await
+                    .unwrap();
             } else {
                 write
                     .write_all(b"TS3\n\rWelcome to ServerQuery\n\r")

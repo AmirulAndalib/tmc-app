@@ -764,3 +764,56 @@ export const RconHistorySchema = z.object({
 })
 
 export type RconHistoryT = z.infer<typeof RconHistorySchema>
+
+// ------------------------------------------------------------- Dependencies
+
+/** Mirrors `library::dependency::Relation`, which mirrors Prisma's enum. */
+export const DependencyRelationSchema = z.enum([
+    'Required',
+    'Optional',
+    'Recommended',
+    'Conflict',
+])
+
+export type DependencyRelationT = z.infer<typeof DependencyRelationSchema>
+
+export const DependencyEdgeSchema = z.object({
+    /** The item that HAS the dependency. */
+    kind: z.string(),
+    itemId: z.number(),
+    /** The other end. */
+    relKind: z.string(),
+    relId: z.number(),
+    relation: DependencyRelationSchema,
+    name: z.string(),
+    icon: z.string().nullable(),
+    note: z.string().nullable(),
+})
+
+export type DependencyEdgeT = z.infer<typeof DependencyEdgeSchema>
+
+export const DependencyConflictSchema = z.object({
+    aKey: z.string(),
+    aName: z.string(),
+    bKey: z.string(),
+    bName: z.string(),
+    note: z.string().nullable(),
+})
+
+export const DependencyReportSchema = z.object({
+    /** Required by something here, and not here. */
+    missing: z.array(DependencyEdgeSchema),
+    /** Recommended by something here, and not here. */
+    suggested: z.array(DependencyEdgeSchema),
+    conflicts: z.array(DependencyConflictSchema),
+    /**
+     * Items whose edges have never been fetched.
+     *
+     * Named rather than hidden: "no problems found" and "we did not look" are
+     * different answers, and a screen showing the first when it means the
+     * second is lying.
+     */
+    unchecked: z.array(z.string()),
+})
+
+export type DependencyReportT = z.infer<typeof DependencyReportSchema>

@@ -14,6 +14,7 @@
 //! `install` executes it, and only the second one needs a filesystem.
 
 pub mod db;
+pub mod dependency;
 pub mod deploy;
 pub mod install;
 pub mod sandbox;

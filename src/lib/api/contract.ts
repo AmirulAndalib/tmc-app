@@ -329,6 +329,44 @@ export const LinkSchema = z.object({
     isSource: z.boolean(),
 })
 
+/**
+ * How one item relates to another. Mirrors Prisma's `DependencyType`.
+ *
+ * `Conflict` is the reason this is on the wire at all: collapsing every edge
+ * into "dependencies" turns "these two must not be installed together" into
+ * "install this one too", which is the exact opposite of what the author wrote.
+ */
+export const DependencyRelationVals = [
+    'Required',
+    'Optional',
+    'Recommended',
+    'Conflict',
+] as const
+
+export const DependencyRelationSchema = z.enum(DependencyRelationVals)
+export type DependencyRelationT = (typeof DependencyRelationVals)[number]
+
+/**
+ * One dependency edge, in the narrow shape the app acts on.
+ *
+ * A name, an id, something to draw, and the edge type — not a full
+ * `ContentSummary`. The app renders these as a list and uses them to answer one
+ * question (*what else do I need, and is anything going to fight?*), so a card
+ * row would be three times the payload for a screen that renders none of it.
+ * Tapping one navigates by `kind` and `id`, which fetches the real row.
+ */
+export const ContentDependencySchema = z.object({
+    relation: DependencyRelationSchema,
+    /** The author's note about this edge, markdown. */
+    note: z.string().nullable(),
+    kind: ContentKindSchema,
+    id: z.number().int(),
+    name: z.string(),
+    icon: z.string().nullable(),
+})
+
+export type ContentDependencyT = z.infer<typeof ContentDependencySchema>
+
 /** A single item's full page. `summary` is byte-identical to its browser row. */
 export const ContentDetailSchema = z.object({
     summary: ContentSummarySchema,
@@ -339,8 +377,18 @@ export const ContentDetailSchema = z.object({
     releases: z.array(ReleaseSchema),
     media: z.array(MediaSchema),
     links: z.array(LinkSchema),
-    /** Item ids this one requires, resolved to summaries where possible. */
-    dependencies: z.array(ContentSummarySchema),
+
+    /**
+     * What this item needs, recommends, and cannot live beside.
+     *
+     * The element type CHANGED from `ContentSummary` to
+     * {@link ContentDependencySchema}. That is a wire break in principle and
+     * not one in practice: the field was hardcoded to `[]` from the day it was
+     * declared until the day this shipped, so no build has ever rendered an
+     * element of it. Carrying a second, parallel field forever to avoid a
+     * change nobody can observe would be the worse trade.
+     */
+    dependencies: z.array(ContentDependencySchema),
 })
 
 export type ContentDetailT = z.infer<typeof ContentDetailSchema>
