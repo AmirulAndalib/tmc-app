@@ -21,6 +21,19 @@
             ]
         },
 
+        "detect": {
+            "names": ["Minecraft", "Minecraft Launcher", "Minecraft: Java Edition"],
+            "paths": {
+                "windows": ["<appData>/.minecraft"],
+                "linux": [
+                    "~/.minecraft",
+                    "~/.var/app/com.mojang.Minecraft/.minecraft",
+                    "~/snap/mc-installer/current/.minecraft"
+                ],
+                "macos": ["~/Library/Application Support/minecraft"]
+            }
+        },
+
         "presets": [
             {
                 "id": "vanilla",

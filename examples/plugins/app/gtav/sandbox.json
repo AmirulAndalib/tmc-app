@@ -21,6 +21,18 @@
             ]
         },
 
+        "detect": {
+            "steamAppIds": ["271590"],
+            "names": ["Grand Theft Auto V", "GTAV", "Grand Theft Auto V Enhanced"],
+            "markers": ["GTA5.exe", "PlayGTAV.exe", "GTA5_Enhanced.exe"],
+            "paths": {
+                "windows": [
+                    "<programFiles>/Rockstar Games/Grand Theft Auto V",
+                    "<drives>/Games/Grand Theft Auto V"
+                ]
+            }
+        },
+
         "presets": [
             {
                 "id": "singleplayer",

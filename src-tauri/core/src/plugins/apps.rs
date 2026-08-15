@@ -312,6 +312,66 @@ pub struct SandboxSpec {
     /// The settings this game's launch rule understands, and how to edit them.
     #[serde(default)]
     pub options: Vec<OptionSpec>,
+
+    /// How to recognise this game on a machine — see [`crate::detect`].
+    #[serde(default)]
+    pub detect: DetectSpec,
+}
+
+/// How to find this game's install folder without asking.
+///
+/// Every field is a hint, and detection only ever SUGGESTS: a folder found
+/// through one of these still goes through [`crate::anchor::validate_root`]
+/// before it can become a jail anchor, exactly as a hand-typed one does.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DetectSpec {
+    /// Steam app ids, as strings — `["271590"]`. The most reliable hint there
+    /// is: exact, language-independent, and unchanged by a rename.
+    #[serde(default)]
+    pub steam_app_ids: Vec<String>,
+
+    /// Epic's `AppName` values.
+    #[serde(default)]
+    pub epic_app_names: Vec<String>,
+
+    /// GOG product ids, as strings.
+    #[serde(default)]
+    pub gog_product_ids: Vec<String>,
+
+    /// Display names to match. Compared with punctuation, case and edition
+    /// suffixes removed, so `GRAND THEFT AUTO V™` matches
+    /// `Grand Theft Auto V`.
+    #[serde(default)]
+    pub names: Vec<String>,
+
+    /// A file that must be in the folder for it to be this game — `GTA5.exe`.
+    ///
+    /// What stops a name match being wrong. A folder matched only by name and
+    /// with a marker declared must have it; an exact launcher-id match is not
+    /// second-guessed.
+    #[serde(default)]
+    pub markers: Vec<String>,
+
+    /// Folders to look in directly, keyed by platform (`windows`, `macos`,
+    /// `linux`, `android`, `ios`, or `any` for all of them).
+    ///
+    /// Supports `~/`, `<drives>/`, `<programFiles>/`, `<appData>/` and
+    /// `<localAppData>/` prefixes; anything else must be absolute. This is the
+    /// escape hatch for what no launcher records — `~/.minecraft`, a dedicated
+    /// server somebody unpacked by hand.
+    #[serde(default)]
+    pub paths: BTreeMap<String, Vec<String>>,
+}
+
+impl DetectSpec {
+    pub fn is_empty(&self) -> bool {
+        self.steam_app_ids.is_empty()
+            && self.epic_app_names.is_empty()
+            && self.gog_product_ids.is_empty()
+            && self.names.is_empty()
+            && self.paths.is_empty()
+    }
 }
 
 /// Which deployment strategies make sense for this game.
@@ -1041,6 +1101,11 @@ impl AppPlugins {
             .filter(|(_, files)| files.iter().any(|f| f.kind.is_manage()))
             .map(|(slug, _)| slug.clone())
             .collect()
+    }
+
+    /// Every game with at least one rule of any kind.
+    pub fn slugs(&self) -> Vec<String> {
+        self.by_slug.keys().cloned().collect()
     }
 
     /// How this game's sandboxes behave, if it says.

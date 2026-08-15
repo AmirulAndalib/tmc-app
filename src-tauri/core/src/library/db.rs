@@ -41,7 +41,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::{AppError, AppResult};
 
 /// Schema version. Bumped whenever `migrate` gains a step.
-const SCHEMA_VERSION: i64 = 2;
+const SCHEMA_VERSION: i64 = 3;
 
 /// One subscribed item as this device knows it.
 ///
@@ -225,6 +225,7 @@ impl LibraryDb {
                 match next {
                     1 => conn.execute_batch(SCHEMA_V1)?,
                     2 => conn.execute_batch(SCHEMA_V2)?,
+                    3 => conn.execute_batch(SCHEMA_V3)?,
                     _ => break,
                 }
 
@@ -316,6 +317,37 @@ const SCHEMA_V1: &str = r#"
 /// sandboxes the cloud has never heard of (see `cloud_sync`). Merging the two
 /// would mean a sync deleting a local-only sandbox because the server did not
 /// list it.
+/// The download queue, so it survives the app closing.
+///
+/// Kept in the same database as everything else device-local rather than in its
+/// own file: a completed download hands a staged file to a sandbox, and the two
+/// facts wanting to be written together is exactly the case one file per
+/// subsystem gets wrong.
+const SCHEMA_V3: &str = r#"
+                CREATE TABLE IF NOT EXISTS download (
+                    id         TEXT PRIMARY KEY,
+                    url        TEXT NOT NULL,
+                    /* Absolute, and already through the jail when it was queued. */
+                    dest       TEXT NOT NULL,
+                    label      TEXT NOT NULL,
+                    sha256     TEXT,
+                    total      INTEGER,
+                    /* A HINT. The `.part` file's length is the real answer. */
+                    done       INTEGER NOT NULL DEFAULT 0,
+                    status     TEXT NOT NULL,
+                    priority   INTEGER NOT NULL DEFAULT 0,
+                    limit_bps  INTEGER,
+                    attempts   INTEGER NOT NULL DEFAULT 0,
+                    error      TEXT,
+                    /* Whatever the caller attached — the sandbox id, the mod key. */
+                    meta       TEXT NOT NULL DEFAULT '{}',
+                    queued_at  TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS download_status_idx ON download (status);
+"#;
+
 const SCHEMA_V2: &str = r#"
                 CREATE TABLE IF NOT EXISTS sandbox (
                     id            INTEGER PRIMARY KEY AUTOINCREMENT,
