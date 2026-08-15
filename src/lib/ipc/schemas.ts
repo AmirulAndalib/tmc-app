@@ -252,6 +252,35 @@ export type LatencySeriesT = z.infer<typeof LatencySeriesSchema>
 export const PluginKindSchema = z.enum(['installer', 'serverQuery', 'theme'])
 export type PluginKindT = z.infer<typeof PluginKindSchema>
 
+/**
+ * Who vouched for a bundle.
+ *
+ * Three states, not two. "Signed by somebody you have not trusted" is not the
+ * same fact as "not signed": the first is either a publisher whose key the user
+ * has not added yet or a tampered bundle, and both deserve saying out loud
+ * rather than folding into silence.
+ *
+ * Rust serialises this as `{ state, keyId }`, with `keyId` present only for
+ * `trusted`.
+ */
+export const SignatureStateSchema = z.union([
+    z.object({ state: z.literal('unsigned') }),
+    z.object({ state: z.literal('untrusted') }),
+    z.object({ state: z.literal('trusted'), keyId: z.string() }),
+])
+
+export type SignatureStateT = z.infer<typeof SignatureStateSchema>
+
+export const TrustedKeySchema = z.object({
+    id: z.string(),
+    label: z.string(),
+    /** 32 bytes, hex. */
+    publicKey: z.string(),
+    addedAt: z.string(),
+})
+
+export type TrustedKeyT = z.infer<typeof TrustedKeySchema>
+
 export const PluginRecordSchema = z.object({
     id: z.string(),
     name: z.string(),
@@ -266,6 +295,11 @@ export const PluginRecordSchema = z.object({
     enabled: z.boolean(),
     dir: z.string(),
     needsReapproval: z.boolean(),
+    /**
+     * Defaulted, because a registry written before signatures existed has no
+     * such field — and those plugins genuinely are unsigned.
+     */
+    signature: SignatureStateSchema.default({ state: 'unsigned' }),
 })
 
 export type PluginRecordT = z.infer<typeof PluginRecordSchema>
@@ -280,6 +314,7 @@ export const PluginPreviewSchema = z.object({
     permissions: z.array(z.string()),
     fingerprint: z.string(),
     dir: z.string(),
+    signature: SignatureStateSchema,
 })
 
 export type PluginPreviewT = z.infer<typeof PluginPreviewSchema>

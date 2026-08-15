@@ -3,6 +3,7 @@ pub mod jail;
 pub mod manifest;
 pub mod query;
 pub mod registry;
+pub mod signature;
 pub mod steps;
 pub mod theme;
 

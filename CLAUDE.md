@@ -127,7 +127,8 @@ genuinely need a window belongs on that side of the line.
 | `plugins/apps.rs` | Per-game rules: where mods go, how to launch, sandbox presets |
 | `plugins/query.rs` | The declarative parser for Server Live Query plugins |
 | `plugins/theme.rs` | Theme token validation |
-| `plugins/registry.rs` | Installed plugins, approvals, fingerprint drift |
+| `plugins/registry.rs` | Installed plugins, approvals, fingerprint drift, the signature gate |
+| `plugins/signature.rs` | **Who vouched for a plugin.** Ed25519 over the canonical manifest, against the user's own trust store |
 | `deploy/merge.rs` | The virtual tree: who wins each path, and what conflicts |
 | `deploy/link.rs` | One syscall each, and the platform reason it might fail |
 | `deploy/ledger.rs` | What landed, what it displaced, and how to undo both |
@@ -566,16 +567,60 @@ merge them into the widest one.
 | Theme token + colour allow-list | `url()` beacons, `display:none` on the uninstall button |
 | Grants as filters over a root-relative path | Two grants for one root merging into the widest |
 | Manifest fingerprint | An update silently widening permissions |
+| Ed25519 signature over the canonical manifest | An anonymous bundle, when `requireSignedPlugins` is on |
 
 ### Approval
 
-`plugin_inspect` returns a fingerprint (SHA-256 of the canonical manifest) and
-the full permission list; `plugin_approve` takes the fingerprint back. That
-closes the window between the user reading the permissions and clicking approve.
+`plugin_inspect` returns a fingerprint (SHA-256 of the canonical manifest), the
+full permission list and the signature state; `plugin_approve` takes the
+fingerprint back. That closes the window between the user reading the
+permissions and clicking approve.
 
 `Registry::rescan` runs every launch and re-hashes each installed manifest. A
 drifted plugin is **disabled** and flagged `needsReapproval`; the toggle refuses
 to re-enable it, because the toggle is not where permissions are shown.
+
+### Signatures
+
+The fingerprint answers *"is this the same plugin the user approved?"*. It
+cannot answer *"did anybody the user trusts write it?"* — a hash of whatever is
+in the folder is perfectly good for a bundle that anything at all dropped there.
+`plugins/signature.rs` is the second question: Ed25519 over the manifest's
+**canonical bytes**, the same serialisation the fingerprint hashes, so a bundle
+reformatted in transit keeps its signature and a bundle whose declared
+permissions changed loses it. The detached signature is `plugin.sig`, hex.
+
+**Three states, not two.** `Unsigned`, `Trusted(keyId)` and `Untrusted` — the
+last being a signature that matches nothing the user trusts, which is either a
+publisher whose key has not been added yet or a tampered bundle. Folding it into
+"unsigned" is how the interesting case disappears, so the UI and the refusal
+messages keep them apart.
+
+**The trust store is the user's, and no key is compiled in.** Keys live in
+`plugins/trusted-keys.json`, and TMC's own publishing key will be a row in it
+like anybody else's — the honest shape while there is no registry to distribute
+plugins through, and still correct once there is. Bundling a key nobody signs
+with would make `requireSignedPlugins` a switch that refuses everything.
+
+**`requireSignedPlugins` now does something.** It was a stored boolean with
+nothing behind it, which is worse than not having it — somebody turns it on,
+believes they are protected, and installs accordingly. With it on, `active()`
+refuses an unsigned or untrusted plugin before the executor can be reached.
+
+Two properties of the gate that are easy to lose:
+
+  * **It re-verifies rather than reading `record.signature`.** The stored verdict
+    is a claim about a check that ran at some earlier time under a trust store
+    that may since have changed, and this is the last gate before something
+    writes to a game folder.
+  * **Trusting a key rescans immediately.** "Add the publisher's key" is advice
+    that has to work when followed, not after a restart — and removing a key has
+    to stop those plugins at once, which is the entire reason to remove one.
+
+What a signature buys is bounded and stated in the module header: it says a
+holder of that key produced *these* permissions and *these* steps. It says
+nothing about whether they are safe. A signed plugin is confined by exactly the
+same jail as an unsigned one.
 
 Examples live in `examples/plugins/` and are **validated by two Rust tests**:
 one parses every manifest, the other builds each installer's real jail and
@@ -1551,8 +1596,11 @@ Honest list, so nothing here reads as finished when it is not:
   every platform; the two hundred lines that patch an import table in somebody
   else's game process are type-checked against the Windows target and have never
   been run against a game. Turning the feature on is a decision to find out.
-- **Plugin distribution.** Plugins install from a local folder. There is no
-  registry, and `requireSignedPlugins` has no signature checking behind it yet.
+- **Plugin distribution.** Plugins install from a local folder and there is no
+  registry to fetch them from. Signature *checking* is implemented and
+  `requireSignedPlugins` enforces it, but nothing is published to be checked
+  yet, and there is no signing tool in this repo — a publisher signs the
+  canonical manifest bytes with any Ed25519 implementation.
 - **Proof that a human chose a jail anchor.** `anchor::validate_root` decides
   whether a *directory* is an acceptable jail anchor, which is the enforceable
   half. The other half — that the path came from a real click rather than from

@@ -8,6 +8,7 @@ use tmc_core::audit;
 use tmc_core::error::{AppError, AppResult};
 use tmc_core::plugins::manifest::Theme;
 use tmc_core::plugins::registry::PluginRecord;
+use tmc_core::plugins::signature::{SignatureState, TrustedKey};
 use tmc_core::plugins::steps::{RunContext, RunReport};
 
 use crate::state::AppState;
@@ -30,6 +31,13 @@ pub struct PluginPreview {
     /// Echoed back to `plugin_approve`, closing the read-then-approve window.
     pub fingerprint: String,
     pub dir: String,
+
+    /// Who vouched for this bundle, if anybody.
+    ///
+    /// Shown beside the permissions rather than after the fact: who signed a
+    /// plugin is part of what the user is deciding about, and finding out later
+    /// from a list is finding out too late.
+    pub signature: SignatureState,
 }
 
 fn kinds_of(manifest: &tmc_core::plugins::manifest::Manifest) -> Vec<String> {
@@ -57,7 +65,7 @@ pub fn plugin_inspect(state: State<'_, AppState>, dir: String) -> AppResult<Plug
         return Err(AppError::invalid("That is not a folder."));
     }
 
-    let (manifest, permissions) = state.plugins.inspect(&path)?;
+    let (manifest, permissions, signature) = state.plugins.inspect(&path)?;
 
     Ok(PluginPreview {
         id: manifest.id.clone(),
@@ -69,7 +77,53 @@ pub fn plugin_inspect(state: State<'_, AppState>, dir: String) -> AppResult<Plug
         permissions,
         fingerprint: manifest.fingerprint(),
         dir,
+        signature,
     })
+}
+
+// ------------------------------------------------------------ Trusted keys
+
+/// Every publishing key the user trusts.
+#[tauri::command]
+pub fn plugin_trusted_keys(state: State<'_, AppState>) -> Vec<TrustedKey> {
+    state.plugins.trusted_keys()
+}
+
+/// Trust a publishing key.
+///
+/// Audited at Security level, and deliberately so: this widens what may run on
+/// the machine when `requireSignedPlugins` is on, and a change to that must be
+/// visible in the log whether or not logging is turned up.
+#[tauri::command]
+pub fn plugin_trust_key(
+    state: State<'_, AppState>,
+    id: String,
+    label: String,
+    public_key: String,
+) -> AppResult<TrustedKey> {
+    let key = state.plugins.trust_key(&id, &label, &public_key)?;
+
+    audit!(
+        state.audit,
+        Security,
+        Plugin,
+        "plugin.key.trust",
+        format!("{} ({})", key.label, key.public_key)
+    );
+
+    Ok(key)
+}
+
+/// Stop trusting one.
+#[tauri::command]
+pub fn plugin_untrust_key(state: State<'_, AppState>, id: String) -> AppResult<bool> {
+    let removed = state.plugins.untrust_key(&id)?;
+
+    if removed {
+        audit!(state.audit, Security, Plugin, "plugin.key.untrust", id);
+    }
+
+    Ok(removed)
 }
 
 #[tauri::command]
@@ -79,7 +133,7 @@ pub fn plugin_approve(
     fingerprint: String,
 ) -> AppResult<PluginRecord> {
     let path = PathBuf::from(&dir);
-    let (manifest, _) = state.plugins.inspect(&path)?;
+    let (manifest, _, _) = state.plugins.inspect(&path)?;
 
     let record = state.plugins.approve(&manifest, &path, &fingerprint)?;
 

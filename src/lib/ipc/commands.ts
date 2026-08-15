@@ -35,6 +35,7 @@ import {
     PingResultSchema,
     PluginPreviewSchema,
     PluginRecordSchema,
+    TrustedKeySchema,
     PollOutcomeSchema,
     QueryOutcomeSchema,
     RunReportSchema,
@@ -178,6 +179,20 @@ export const ipc = {
     pluginList: () => call('plugin_list', z.array(PluginRecordSchema)),
     pluginInspect: (dir: string) =>
         call('plugin_inspect', PluginPreviewSchema, { dir }),
+
+    /** Every publishing key the user trusts. */
+    pluginTrustedKeys: () => call('plugin_trusted_keys', z.array(TrustedKeySchema)),
+    /**
+     * Trust a key.
+     *
+     * Widens what may run when `requireSignedPlugins` is on, so it is audited
+     * at Security level in Rust — a change to that is visible in the log
+     * whether or not logging is turned up.
+     */
+    pluginTrustKey: (id: string, label: string, publicKey: string) =>
+        call('plugin_trust_key', TrustedKeySchema, { id, label, publicKey }),
+    pluginUntrustKey: (id: string) =>
+        call('plugin_untrust_key', z.boolean(), { id }),
     /** `fingerprint` must be the one `pluginInspect` returned — see the Rust side. */
     pluginApprove: (dir: string, fingerprint: string) =>
         call('plugin_approve', PluginRecordSchema, { dir, fingerprint }),

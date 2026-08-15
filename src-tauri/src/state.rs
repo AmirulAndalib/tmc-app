@@ -96,6 +96,14 @@ impl AppState {
 
         let plugins = Registry::load(paths.registry_file(), paths.plugins.clone());
 
+        /*
+         * The registry holds no settings store, so the one setting that gates
+         * what may RUN is pushed into it — here at startup and again on every
+         * `settings_patch`. Reading it the other way round would make the gate
+         * depend on which of the two was constructed first.
+         */
+        plugins.set_require_signed(current.require_signed_plugins);
+
         let library = Arc::new(LibraryDb::open(paths.library_file())?);
 
         /*

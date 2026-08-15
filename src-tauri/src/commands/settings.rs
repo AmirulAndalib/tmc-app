@@ -49,8 +49,20 @@ pub fn settings_get(state: State<'_, AppState>) -> AppSettings {
 pub fn settings_patch(state: State<'_, AppState>, patch: Value) -> AppResult<AppSettings> {
     let next = state.settings.patch(patch)?;
 
-    // Logging verbosity is the one setting with an immediate side effect.
+    // Two settings have an immediate side effect rather than being read where
+    // they are used, and both are pushed here so a change takes hold without a
+    // restart.
     state.audit.set_verbose(next.verbose_logging);
+
+    /*
+     * The plugin gate. A user turning this ON expects the next install run to
+     * be refused, not the one after their next launch — and a user turning it
+     * OFF because a plugin they trust is unsigned expects that plugin to work
+     * immediately.
+     */
+    state
+        .plugins
+        .set_require_signed(next.require_signed_plugins);
 
     audit!(
         state.audit,
