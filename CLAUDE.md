@@ -183,6 +183,7 @@ genuinely need a window belongs on that side of the line.
 | `lib/api/contract.ts` | **Mirror** of website-city's contract. `npm run contract:sync` |
 | `lib/api/client.ts` | `api.*`, every response zod-parsed |
 | `lib/api/labels.ts` | How a game is named on screen — always its full name |
+| `lib/api/offline-cache.ts` | What a cold launch shows before the network answers. Allow-listed, public data only |
 | `lib/api/env.ts` | Which site this build talks to, for display and for the site's own links |
 | `lib/auth/provider.tsx` | Login state and the poll loop |
 | `lib/settings/provider.tsx` | App settings + account settings, kept apart |
@@ -1441,6 +1442,15 @@ changed it, and the lookup costs nothing.
   Chromium extension, so it appears to work on Windows and silently does nothing
   on the two platforms the custom titlebar most needs. Use
   `data-tauri-drag-region`.
+- **The offline cache is an ALLOW-list, and the timestamps it restores are the
+  original ones.** `lib/api/offline-cache.ts` stores `browse`, `content`,
+  `facets` and `reviews` — public catalogue data — into `localStorage`, and puts
+  them back at boot with the `dataUpdatedAt` they had. Restoring them as fresh
+  would suppress the refetch and pin the app to whatever it last saw. It is an
+  allow-list because the failure modes are not symmetrical: a new query holding
+  account data that nobody remembered to exclude gets written to disk in
+  cleartext, while a new public one that nobody remembered to include costs a
+  spinner. `me`, `log` and `plugins` are all excluded by not being on it.
 - **Every browse filter lives in the URL, never in component state.** A
   filtered browse has to survive a reload, a deep link and the back button, and
   a HashRouter over a static bundle has nowhere else durable to put it.
@@ -1544,8 +1554,11 @@ Honest list, so nothing here reads as finished when it is not:
   the server, which the section above explains cannot be done from a user's
   device. `commands/servers.rs`'s `UNIMPLEMENTED` test constant names one of
   them, so a native implementation fails two tests on purpose.
-- **Offline cache.** React Query is memory-only; a cold launch offline shows
-  nothing.
+- **No test runner on the frontend side.** `npm run check` is `tsc` plus
+  `eslint`, and there are no unit tests in `src/`. The Rust side carries the
+  logic that would most repay them — parsers, the jail, the deploy engine — but
+  `lib/api/offline-cache.ts`'s allow-list is security-relevant and is currently
+  held up by a code comment rather than by a test.
 - **No end-to-end test against a real game server.** The protocol parsers are
   covered by golden-reply and fuzz-shaped unit tests; the socket paths above
   them have been exercised only against the bounds checks, not a live box. The

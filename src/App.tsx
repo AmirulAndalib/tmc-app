@@ -1,5 +1,7 @@
 import { Component, type ReactNode } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+
+import { attachOfflineCache } from '~/lib/api/offline-cache'
 import { createHashRouter, Navigate, RouterProvider } from 'react-router-dom'
 
 import { AuthProvider } from '~/lib/auth/provider'
@@ -78,6 +80,17 @@ const queryClient = new QueryClient({
         },
     },
 })
+
+/*
+ * At module scope, and deliberately not in an effect: restoring is synchronous
+ * and has to have happened before the first component mounts, or the first
+ * render still sees an empty cache and every screen flashes its spinner before
+ * the data it already had appears.
+ *
+ * Never unsubscribed. The client is a singleton for the life of the process, so
+ * there is no teardown to run — the returned function exists for tests.
+ */
+attachOfflineCache(queryClient)
 
 /**
  * The last line of defence against a white screen.
