@@ -1206,3 +1206,29 @@ export const ReportCreateRequest = z.object({
 export const ReportCreateResponse = z.object({
     reported: z.literal(true),
 })
+
+// ------------------------------------------------------------------ Version
+
+/**
+ * What `GET /api/app/v1/version` answers.
+ *
+ * A NOTICE, not an updater. There is no artifact URL, no signature and no
+ * checksum here because the app does not update itself — it compares its own
+ * version against `latest` and offers to open `download` in the user's real
+ * browser. A self-updater needs a signing key held by whoever cuts releases and
+ * a manifest this would have to serve; shipping the client half against neither
+ * would be a feature that names a capability it does not have.
+ *
+ * Both fields are nullable and both mean "say nothing". Until a release is
+ * published there is nothing to point anybody at, and an app told about a
+ * version that does not exist sends people to a 404 — which reads as the app
+ * being broken rather than as a field nobody filled in.
+ */
+export const AppVersionResponse = z.object({
+    /** A version string, compared against the running build's. */
+    latest: z.string().nullable(),
+    /** Absolute https, or null. Where a user goes to get it. */
+    download: z.string().nullable(),
+})
+
+export type AppVersionResponseT = z.infer<typeof AppVersionResponse>

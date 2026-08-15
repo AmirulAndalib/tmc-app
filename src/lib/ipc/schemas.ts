@@ -281,6 +281,25 @@ export const TrustedKeySchema = z.object({
 
 export type TrustedKeyT = z.infer<typeof TrustedKeySchema>
 
+/**
+ * What an update check found.
+ *
+ * A NOTICE, not an updater — there is no artifact, signature or checksum here
+ * because the app does not update itself. `outdated` is computed in Rust by
+ * comparing dotted numeric components, because a string compare puts `1.10.0`
+ * before `1.9.0` and the symptom is a banner that never appears or never goes
+ * away.
+ */
+export const UpdateCheckSchema = z.object({
+    current: z.string(),
+    latest: z.string().nullable(),
+    /** Absolute https, validated server-side and again in Rust. */
+    download: z.string().nullable(),
+    outdated: z.boolean(),
+})
+
+export type UpdateCheckT = z.infer<typeof UpdateCheckSchema>
+
 export const PluginRecordSchema = z.object({
     id: z.string(),
     name: z.string(),

@@ -36,6 +36,7 @@ import {
     PluginPreviewSchema,
     PluginRecordSchema,
     TrustedKeySchema,
+    UpdateCheckSchema,
     PollOutcomeSchema,
     QueryOutcomeSchema,
     RunReportSchema,
@@ -179,6 +180,14 @@ export const ipc = {
     pluginList: () => call('plugin_list', z.array(PluginRecordSchema)),
     pluginInspect: (dir: string) =>
         call('plugin_inspect', PluginPreviewSchema, { dir }),
+
+    /**
+     * Ask the site whether this build is out of date.
+     *
+     * Answers with a version and a link, never with an artifact: the app does
+     * not update itself. See `commands/api.rs`.
+     */
+    updateCheck: () => call('update_check', UpdateCheckSchema),
 
     /** Every publishing key the user trusts. */
     pluginTrustedKeys: () => call('plugin_trusted_keys', z.array(TrustedKeySchema)),

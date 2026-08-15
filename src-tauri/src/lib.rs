@@ -172,6 +172,7 @@ pub fn run() {
             commands::api::api_get,
             commands::api::api_send,
             commands::api::api_env,
+            commands::api::update_check,
             commands::settings::settings_get,
             commands::settings::settings_patch,
             commands::settings::settings_set_game_dir,

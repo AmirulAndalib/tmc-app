@@ -198,6 +198,7 @@ genuinely need a window belongs on that side of the line.
 | `lib/external.ts` | Which content kinds are handed to the system browser |
 | `components/shell.tsx` | Sidebar ≥768px, bottom tabs below |
 | `components/titlebar.tsx` | The app's own window frame — see "Cross-platform" |
+| `components/update-banner.tsx` | "There is a newer version", and nothing more. Never installs anything |
 | `components/folder-picker.tsx` | The in-app folder chooser, over `commands/fs.rs` |
 | `components/game-icon.tsx` | A game's artwork, with a deterministic initials fallback |
 | `components/item-thumb.tsx` | An item's cover in a list, from the LOCAL library row |
@@ -280,7 +281,7 @@ Why a separate REST API rather than the website's tRPC:
 - Rust calls it too.
 
 Endpoints: `/auth/device`, `/auth/token`, `/auth/refresh`, `/auth/revoke`, `/me`
-(GET + PATCH), `/browse`, `/content/:kind/:id`, `/facets`.
+(GET + PATCH), `/browse`, `/content/:kind/:id`, `/facets`, `/version`.
 
 ### The browse filters mirror the website's, deliberately
 
@@ -1477,6 +1478,12 @@ changed it, and the lookup costs nothing.
   `QueryBool`). Guessing from shape is the obvious approach and it silently
   broke `?search=2024`, `?search=true` and — because every cursor is a numeric
   id — the second page of every listing.
+- **Version comparison is numeric per component, and refuses what it cannot
+  order.** `1.10.0` sorts BEFORE `1.9.0` as a string, so an update banner built
+  on a string compare either never appears or never goes away. `is_newer` in
+  `commands/api.rs` parses dotted components and returns false for anything
+  non-numeric — staying quiet beats nagging somebody toward a version they
+  already have.
 - **`z.coerce.boolean()` is `Boolean(value)`**, so the string `"false"` is
   `true`. Use `QueryBool` from the contract.
 - **`serde(rename_all = "SCREAMING_SNAKE_CASE")` turns `A2S` into `A2_S`.** It
@@ -1593,8 +1600,13 @@ changed it, and the lookup costs nothing.
 
 Honest list, so nothing here reads as finished when it is not:
 
-- **Auto-updates.** `autoUpdateCheck` is a stored setting with no updater behind
-  it. Needs `tauri-plugin-updater` and a signing key.
+- **Self-updating.** The app CHECKS — `/api/app/v1/version` against two
+  `SiteSetting` rows, once per launch when `autoUpdateCheck` is on, with a
+  banner offering the download page in the user's browser. It does not install
+  anything. A real updater needs `tauri-plugin-updater`, a signing key held by
+  whoever cuts releases, and a manifest endpoint; shipping the client half
+  against none of those would be a feature naming a capability it does not have,
+  with a silently-installed binary as the consequence.
 - **Writes.** The app is read-only against the API for publishing — no
   commenting or uploading. Reviews, review votes, reports, subscriptions and
   sandboxes DO write.

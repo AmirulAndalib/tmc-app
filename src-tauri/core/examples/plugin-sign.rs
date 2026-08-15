@@ -143,8 +143,11 @@ fn verify(dir: Option<&String>, public: Option<&String>) -> Result<(), String> {
         .try_into()
         .map_err(|_| "the signature is the wrong length")?;
 
-    key.verify(&canonical, &ed25519_dalek::Signature::from_bytes(&signature))
-        .map_err(|_| "the signature does NOT match this key and this manifest".to_string())?;
+    key.verify(
+        &canonical,
+        &ed25519_dalek::Signature::from_bytes(&signature),
+    )
+    .map_err(|_| "the signature does NOT match this key and this manifest".to_string())?;
 
     println!("ok — signed by this key, over this manifest");
 

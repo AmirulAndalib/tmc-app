@@ -20,6 +20,7 @@ import { useDeepLink } from '~/lib/hooks/use-deep-link'
 import { useIsCompact } from '~/lib/hooks/use-breakpoint'
 import { useIsDesktop } from '~/lib/hooks/use-platform'
 import Titlebar, { WindowResizeEdges } from './titlebar'
+import UpdateBanner from './update-banner'
 
 /**
  * The app's chrome.
@@ -222,6 +223,15 @@ export default function Shell() {
                 )}
 
                 <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
+                    {/*
+                     * Above the scrolling area rather than inside it, so it is
+                     * not something a user scrolls past and never sees on a
+                     * long browse page. It renders nothing at all unless the
+                     * check ran, found a newer version, and the user has not
+                     * dismissed that one.
+                     */}
+                    <UpdateBanner />
+
                     <div
                         className="min-h-0 flex-1 overflow-y-auto"
                         style={{
