@@ -55,7 +55,14 @@ export function ApiOk<S extends z.ZodTypeAny>(schema: S) {
 /** Self-reported client identity. Untrusted — a label for the approval screen. */
 export const ClientInfoSchema = z.object({
     name: z.string().min(1).max(64),
-    platform: z.enum(['windows', 'macos', 'linux', 'android', 'ios', 'unknown']),
+    platform: z.enum([
+        'windows',
+        'macos',
+        'linux',
+        'android',
+        'ios',
+        'unknown',
+    ]),
     version: z.string().min(1).max(32),
 })
 
@@ -609,7 +616,9 @@ export const FacetsResponseSchema = z.object({
      * nothing, and a filter that can only ever return an empty list is worse
      * than no filter.
      */
-    countries: z.array(RefSchema.extend({ count: z.number().int() })).default([]),
+    countries: z
+        .array(RefSchema.extend({ count: z.number().int() }))
+        .default([]),
 })
 
 export type FacetsResponseT = z.infer<typeof FacetsResponseSchema>
@@ -1023,10 +1032,7 @@ export const DeviceDownloadReportRequest = z.object({
      * a device list renders, and the items are for the one device somebody
      * opened.
      */
-    items: z
-        .array(DeviceDownloadItemSchema)
-        .max(MAX_REPORTED_DOWNLOADS)
-        .default([]),
+    items: z.array(DeviceDownloadItemSchema).max(MAX_REPORTED_DOWNLOADS).default([]),
 })
 
 export const DeviceDownloadSchema = z.object({
@@ -1070,6 +1076,16 @@ export const ReviewSchema = z.object({
     lastEdit: z.string().nullable(),
     /** Net helpful score, as the site counts it. */
     score: z.number().int(),
+    /** True when this review is the caller's own. */
+    mine: z.boolean().default(false),
+    /**
+     * The caller's own helpful vote, or null.
+     *
+     * Sent with the list rather than fetched per row: a page of twenty reviews
+     * would otherwise be twenty-one requests, and the button has to render in
+     * its correct state on first paint or it flickers.
+     */
+    myVote: z.boolean().nullable().default(null),
 })
 
 export type ReviewT = z.infer<typeof ReviewSchema>
@@ -1088,6 +1104,61 @@ export const ReviewListResponse = z.object({
     /** Mean, or null when nothing is scored. */
     average: z.number().nullable(),
     total: z.number().int().nonnegative(),
+})
+
+/**
+ * Leaving or editing a review.
+ *
+ * One per person per item, and a repeat call UPDATES — the model's
+ * `@@unique([ownerId, modId])` and its siblings make a second insert an error
+ * rather than a second review, so a create-only client would fail on every
+ * edit.
+ *
+ * `rating` and `content` are both optional and at least one must be present:
+ * the website allows a score with no words and words with no score, and
+ * refusing either here would make the app stricter than the site for no reason.
+ */
+export const ReviewWriteRequest = z
+    .object({
+        kind: ContentKindSchema,
+        id: z.coerce.number().int().positive(),
+        rating: z.number().int().min(1).max(5).nullable().optional(),
+        /**
+         * Markdown. The operator's configured length limit is enforced
+         * server-side by `AssertTextLimits`; this is only the hard ceiling.
+         */
+        content: z.string().max(20000).nullable().optional(),
+    })
+    .refine(
+        (input) =>
+            (input.rating ?? null) !== null ||
+            (input.content ?? '').trim().length > 0,
+        { message: 'Give it a score, some words, or both.' }
+    )
+
+export const ReviewWriteResponse = z.object({
+    saved: z.literal(true),
+    /** False for a first review, true for an edit. */
+    edited: z.boolean(),
+})
+
+export const ReviewDeleteRequest = z.object({
+    id: z.coerce.number().int().positive(),
+})
+
+/**
+ * Marking a review helpful, or taking it back.
+ *
+ * `null` removes the vote. A helpful button with no way to un-press it is one
+ * people press by accident once and resent forever.
+ */
+export const ReviewVoteRequest = z.object({
+    id: z.coerce.number().int().positive(),
+    positive: z.boolean().nullable(),
+})
+
+export const ReviewVoteResponse = z.object({
+    voted: z.boolean().nullable(),
 })
 
 export const ReviewQuerySchema = z.object({

@@ -11,6 +11,8 @@ import {
     MeResponseSchema,
     ReportCreateResponse,
     ReviewListResponse,
+    ReviewVoteResponse,
+    ReviewWriteResponse,
     SubscriptionSyncResponse,
     UserSettingsSchema,
     type BrowseQueryT,
@@ -151,6 +153,29 @@ export const api = {
             sort: options?.sort ?? 'recent',
             cursor: options?.cursor ?? undefined,
         }),
+
+    /**
+     * Leave or edit a review.
+     *
+     * One per person per item: a repeat call updates, because the model's
+     * unique constraint makes a second insert an error rather than a second
+     * review.
+     */
+    writeReview: (input: {
+        kind: ContentKindT
+        id: number
+        rating?: number | null
+        content?: string | null
+    }) => send('POST', '/reviews/write', ReviewWriteResponse, input),
+
+    deleteReview: (id: number) =>
+        send('DELETE', '/reviews/write', z.object({ deleted: z.literal(true) }), {
+            id,
+        }),
+
+    /** Mark a review helpful, or `null` to take the vote back. */
+    voteReview: (id: number, positive: boolean | null) =>
+        send('PUT', '/reviews/write', ReviewVoteResponse, { id, positive }),
 
     /** Report an item. Lands in the same moderation queue as the website's form. */
     report: (input: {
