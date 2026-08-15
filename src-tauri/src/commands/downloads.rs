@@ -14,6 +14,8 @@
 //! the frontend asks; as an event stream it is one message per changed row, and
 //! the webview coalesces them itself.
 
+use std::sync::atomic::{AtomicI64, Ordering};
+
 use serde::Serialize;
 use tauri::{Emitter, Manager, State};
 
@@ -21,6 +23,24 @@ use tmc_core::download::{DownloadEvent, DownloadState, Status};
 use tmc_core::error::AppResult;
 
 use crate::state::AppState;
+
+/// How often the queue is reported to the website, in milliseconds.
+///
+/// A heartbeat, not an action. Five seconds is faster than the numbers on the
+/// website's page move and slow enough that a busy queue is not a request per
+/// tick — a running download changes twice a second and eight of them would be
+/// sixteen POSTs a second otherwise.
+const REPORT_EVERY_MS: i64 = 5_000;
+
+/// Rows sent with a report. Matches `MAX_REPORTED_DOWNLOADS` in the contract.
+const MAX_REPORTED: usize = 25;
+
+/// When the queue was last reported, as epoch millis.
+///
+/// A process-global rather than state on `AppState`: the bridge is spawned once
+/// and is the only writer, and threading a clock through it would be ceremony
+/// for one integer.
+static LAST_REPORT_MS: AtomicI64 = AtomicI64::new(0);
 
 /// The event name the frontend listens on.
 pub const EVENT: &str = "tmc://download";
@@ -167,9 +187,21 @@ pub fn spawn_bridge(app: tauri::AppHandle) {
                     }
 
                     let _ = app.emit(EVENT, &*download);
+
+                    /*
+                     * A terminal transition is reported immediately; everything
+                     * else waits for the heartbeat. "It finished" is the one
+                     * update somebody watching from their phone is actually
+                     * waiting for, and making them wait five more seconds for
+                     * it is the difference between the page feeling live and
+                     * feeling stale.
+                     */
+                    report_soon(&app, download.status.is_finished()).await;
                 }
                 Ok(DownloadEvent::Idle) => {
                     let _ = app.emit(EVENT, serde_json::json!({ "type": "idle" }));
+
+                    report_soon(&app, true).await;
                 }
                 // Only when the manager is gone, which is process shutdown.
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
@@ -179,6 +211,139 @@ pub fn spawn_bridge(app: tauri::AppHandle) {
             }
         }
     });
+}
+
+/// Send the queue to the website, if it is time.
+///
+/// `now` forces it past the heartbeat interval — used for a terminal
+/// transition, which is the update somebody watching from another device is
+/// actually waiting for.
+///
+/// Every failure is swallowed. This is a courtesy to a screen on another
+/// device; a signed-out app, an offline laptop or a 500 from the API must not
+/// produce an error on the machine that is downloading perfectly well.
+async fn report_soon(app: &tauri::AppHandle, now: bool) {
+    let millis = tmc_core::logging::epoch_millis();
+
+    if !now {
+        let last = LAST_REPORT_MS.load(Ordering::Relaxed);
+
+        if millis - last < REPORT_EVERY_MS {
+            return;
+        }
+    }
+
+    LAST_REPORT_MS.store(millis, Ordering::Relaxed);
+
+    let state = app.state::<AppState>();
+
+    /*
+     * Nothing to report to. Checked on the REFRESH token as well as the access
+     * one: the access token lasts an hour and a laptop that has been asleep
+     * has none, but the API client will mint one on the first request — so
+     * skipping on a missing access token alone would stop reporting for
+     * exactly the session that has been running longest.
+     */
+    if state.auth.access_token().is_none() && !state.auth.has_refresh() {
+        return;
+    }
+
+    let downloads = state.downloads.list().await;
+
+    let active = downloads
+        .iter()
+        .filter(|d| d.status == Status::Running)
+        .count();
+    let queued = downloads
+        .iter()
+        .filter(|d| d.status == Status::Queued)
+        .count();
+    let paused = downloads
+        .iter()
+        .filter(|d| d.status == Status::Paused)
+        .count();
+    let failed = downloads
+        .iter()
+        .filter(|d| d.status == Status::Failed)
+        .count();
+    let finished = downloads
+        .iter()
+        .filter(|d| d.status == Status::Done)
+        .count();
+
+    /*
+     * An empty queue DELETES the row rather than reporting zeroes. A device
+     * with nothing to say should disappear from the website's list instead of
+     * sitting there at zero forever, which reads as a machine that is stuck.
+     */
+    if active + queued + paused + failed == 0 {
+        let _ = state
+            .api
+            .request(tmc_core::api::Method::DELETE, "/downloads", None, true)
+            .await;
+
+        return;
+    }
+
+    let remaining: u64 = downloads
+        .iter()
+        .filter(|d| d.status.is_active() || d.status == Status::Paused)
+        .map(|d| d.total.unwrap_or(0).saturating_sub(d.done))
+        .sum();
+
+    /*
+     * The rows worth SHOWING, not the whole queue. Running first, then paused
+     * and failed — a modpack is four hundred items and the website's page
+     * renders the summary counters above for the rest.
+     */
+    let mut interesting: Vec<&DownloadState> = downloads
+        .iter()
+        .filter(|d| matches!(d.status, Status::Running | Status::Paused | Status::Failed))
+        .collect();
+
+    interesting.sort_by_key(|d| match d.status {
+        Status::Running => 0,
+        Status::Failed => 1,
+        _ => 2,
+    });
+
+    let items: Vec<serde_json::Value> = interesting
+        .into_iter()
+        .take(MAX_REPORTED)
+        .map(|d| {
+            serde_json::json!({
+                "id": d.id,
+                "label": d.label,
+                "status": d.status.as_str(),
+                "done": d.done,
+                "total": d.total,
+                "speedBps": d.speed_bps,
+            })
+        })
+        .collect();
+
+    let body = serde_json::json!({
+        "active": active,
+        "queued": queued,
+        "paused": paused,
+        "failed": failed,
+        "finished": finished,
+        "speedBps": downloads
+            .iter()
+            .filter(|d| d.status == Status::Running)
+            .map(|d| d.speed_bps)
+            .sum::<u64>(),
+        "remainingBytes": remaining,
+        "items": items,
+    });
+
+    if let Err(err) = state
+        .api
+        .request(tmc_core::api::Method::POST, "/downloads", Some(body), true)
+        .await
+    {
+        tracing::debug!("could not report downloads: {}", err.detail());
+    }
 }
 
 /// Restore the queue from the last session and apply the saved limits.

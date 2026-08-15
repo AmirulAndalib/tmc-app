@@ -228,6 +228,19 @@ macro_rules! audit {
     };
 }
 
+/// Milliseconds since the epoch.
+///
+/// For throttling, never for a timestamp anybody reads — `now_rfc3339` is that.
+/// A clock that jumps backwards (an NTP correction, a laptop waking with a
+/// stale RTC) makes an interval check pass early, which is a wasted request
+/// rather than a wrong one.
+pub fn epoch_millis() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
 pub fn now_rfc3339() -> String {
     time::OffsetDateTime::now_utc()
         .format(&time::format_description::well_known::Rfc3339)
