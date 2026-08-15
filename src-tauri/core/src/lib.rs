@@ -16,6 +16,7 @@
 pub mod anchor;
 pub mod api;
 pub mod auth;
+pub mod deploy;
 pub mod error;
 pub mod launch;
 pub mod library;

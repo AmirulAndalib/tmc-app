@@ -1,0 +1,129 @@
+{
+    "manifestVersion": 1,
+    "label": "Minecraft sandboxes",
+    "description": "How Minecraft sandboxes deploy, the presets they can be created from, and the settings its launch rule understands.",
+
+    "sandbox": {
+        "deploy": {
+            "defaultStrategy": "symlink",
+            "supportedStrategies": ["symlink", "hardlink", "direct"],
+
+            "modTargets": [
+                { "type": "loader_mod", "relPath": "mods" },
+                { "type": "resource_pack", "relPath": "resourcepacks" },
+                { "type": "shader_pack", "relPath": "shaderpacks" },
+                { "type": "data_pack", "relPath": "datapacks" }
+            ],
+
+            "notes": [
+                "Symbolic links are the default because a Minecraft instance is a whole directory the launcher is pointed at with --workDir, so links compose one for free and the game never notices. Hard links are the fallback when the staging folder and the game share a drive; copying always works.",
+                "A client sandbox and a server sandbox need different builds of the same mod. Set the environment on the sandbox and the browser will only offer you mods that run on that side."
+            ]
+        },
+
+        "presets": [
+            {
+                "id": "vanilla",
+                "label": "Vanilla",
+                "description": "No loader. Resource packs and shaders only.",
+                "environment": "client",
+                "options": { "memoryMb": 2048 }
+            },
+            {
+                "id": "fabric-latest",
+                "label": "Fabric",
+                "description": "The lightweight loader most performance mods target.",
+                "environment": "client",
+                "loader": "fabric",
+                "options": { "memoryMb": 4096 }
+            },
+            {
+                "id": "quilt-latest",
+                "label": "Quilt",
+                "description": "Fabric-compatible, with its own module system.",
+                "environment": "client",
+                "loader": "quilt",
+                "options": { "memoryMb": 4096 }
+            },
+            {
+                "id": "forge-latest",
+                "label": "Forge",
+                "description": "The long-running loader most large modpacks are built on.",
+                "environment": "client",
+                "loader": "forge",
+                "options": { "memoryMb": 6144 }
+            },
+            {
+                "id": "neoforge-latest",
+                "label": "NeoForge",
+                "description": "Forge's successor, for 1.20.2 and later.",
+                "environment": "client",
+                "loader": "neoforge",
+                "options": { "memoryMb": 6144 }
+            },
+            {
+                "id": "neoforge-server",
+                "label": "NeoForge dedicated server",
+                "description": "A server sandbox. Client-only mods are hidden from it.",
+                "environment": "server",
+                "loader": "neoforge",
+                "strategy": "direct",
+                "options": { "memoryMb": 8192, "nogui": true }
+            }
+        ],
+
+        "options": [
+            {
+                "key": "memoryMb",
+                "label": "Memory",
+                "description": "Maximum heap the JVM may use. More is not always better — the garbage collector has to walk it.",
+                "type": "int",
+                "min": 512,
+                "max": 65536,
+                "step": 512,
+                "default": 4096,
+                "unit": "MB"
+            },
+            {
+                "key": "jvmArgs",
+                "label": "Additional JVM arguments",
+                "description": "Passed verbatim, before the game's own. One argument per space; nothing here goes through a shell.",
+                "type": "text"
+            },
+            {
+                "key": "gameArgs",
+                "label": "Additional game arguments",
+                "type": "text"
+            },
+            {
+                "key": "javaPath",
+                "label": "Java version",
+                "description": "Which of the launcher's bundled runtimes to use.",
+                "type": "select",
+                "choices": [
+                    { "value": "auto", "label": "Chosen by the launcher" },
+                    { "value": "17", "label": "Java 17" },
+                    { "value": "21", "label": "Java 21" }
+                ],
+                "default": "auto"
+            },
+            {
+                "key": "nogui",
+                "label": "No server GUI",
+                "description": "Run the dedicated server headless. Saves a few hundred megabytes.",
+                "type": "bool",
+                "default": true,
+                "environments": ["server"]
+            },
+            {
+                "key": "maxPlayers",
+                "label": "Player slots",
+                "type": "int",
+                "min": 1,
+                "max": 1000,
+                "unit": "players",
+                "environments": ["server"]
+            }
+        ]
+    }
+}

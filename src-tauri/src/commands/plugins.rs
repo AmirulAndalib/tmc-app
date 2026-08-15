@@ -202,12 +202,8 @@ pub async fn plugin_run(state: State<'_, AppState>, request: RunRequest) -> AppR
 
     let settings = state.settings.get();
 
-    let jail = tmc_core::plugins::jail_for(
-        &manifest,
-        &state.jail_roots(),
-        &settings,
-        request.app_id,
-    )?;
+    let jail =
+        tmc_core::plugins::jail_for(&manifest, &state.jail_roots(), &settings, request.app_id)?;
 
     audit!(
         state.audit,

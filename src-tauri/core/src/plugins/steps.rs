@@ -23,8 +23,8 @@ use sha2::{Digest, Sha256};
 use crate::audit;
 use crate::error::{AppError, AppResult};
 use crate::logging::Audit;
-use crate::plugins::manifest::{Manifest, PathRef, Step};
 use crate::plugins::jail::Jail;
+use crate::plugins::manifest::{Manifest, PathRef, Step};
 
 /// Hard cap on a single download, when the manifest does not set a smaller one.
 const DEFAULT_MAX_DOWNLOAD: u64 = 2 * 1024 * 1024 * 1024;
@@ -499,9 +499,7 @@ impl Executor<'_> {
             let kind = entry.header().entry_type();
 
             if !kind.is_file() && !kind.is_dir() {
-                return Err(AppError::jail(
-                    "Archive contains a link or special file.",
-                ));
+                return Err(AppError::jail("Archive contains a link or special file."));
             }
 
             if kind.is_dir() {

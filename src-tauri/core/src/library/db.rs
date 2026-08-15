@@ -41,7 +41,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::{AppError, AppResult};
 
 /// Schema version. Bumped whenever `migrate` gains a step.
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 
 /// One subscribed item as this device knows it.
 ///
@@ -191,7 +191,10 @@ impl LibraryDb {
         &self.path
     }
 
-    fn with<T>(&self, f: impl FnOnce(&Connection) -> rusqlite::Result<T>) -> AppResult<T> {
+    pub(crate) fn with<T>(
+        &self,
+        f: impl FnOnce(&Connection) -> rusqlite::Result<T>,
+    ) -> AppResult<T> {
         let conn = self
             .conn
             .lock()
@@ -206,16 +209,36 @@ impl LibraryDb {
     /// maintains, it costs no query to read, and it cannot itself be missing —
     /// which a migrations table can be, on exactly the databases that most need
     /// migrating.
+    ///
+    /// **Steps, not one batch.** Each step takes the database from `n-1` to `n`
+    /// and is applied only if it has not been. Re-running the whole batch
+    /// happens to be safe today because every statement is `IF NOT EXISTS`, and
+    /// it stops being safe the first time a step needs an `ALTER TABLE` — which
+    /// is the release where somebody discovers it, on a user's data.
     fn migrate(&self) -> AppResult<()> {
         self.with(|conn| {
-            let version: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+            let mut version: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
 
-            if version >= SCHEMA_VERSION {
-                return Ok(());
+            while version < SCHEMA_VERSION {
+                let next = version + 1;
+
+                match next {
+                    1 => conn.execute_batch(SCHEMA_V1)?,
+                    2 => conn.execute_batch(SCHEMA_V2)?,
+                    _ => break,
+                }
+
+                conn.pragma_update(None, "user_version", next)?;
+
+                version = next;
             }
 
-            conn.execute_batch(
-                r#"
+            Ok(())
+        })
+    }
+}
+
+const SCHEMA_V1: &str = r#"
                 CREATE TABLE IF NOT EXISTS subscription (
                     id                  TEXT PRIMARY KEY,
                     kind                TEXT NOT NULL,
@@ -283,15 +306,101 @@ impl LibraryDb {
                 );
 
                 CREATE INDEX IF NOT EXISTS install_app_idx ON install (app_id);
-                "#,
-            )?;
+"#;
 
-            conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+/// Sandboxes, their mods, and what the last deploy of each put on disk.
+///
+/// Separate from `install` rather than columns added to it, and the difference
+/// matters: `install` is a MIRROR of a cloud row and is rewritten wholesale by
+/// every sync, while `sandbox` is the device's own record and includes
+/// sandboxes the cloud has never heard of (see `cloud_sync`). Merging the two
+/// would mean a sync deleting a local-only sandbox because the server did not
+/// list it.
+const SCHEMA_V2: &str = r#"
+                CREATE TABLE IF NOT EXISTS sandbox (
+                    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                    /* `AppInstall.id`, or NULL for a sandbox kept off the cloud. */
+                    remote_id     INTEGER UNIQUE,
+                    app_id        INTEGER NOT NULL,
+                    app_slug      TEXT,
+                    app_name      TEXT,
+                    name          TEXT NOT NULL,
+                    description   TEXT,
+                    /* client | server | shared */
+                    environment   TEXT NOT NULL DEFAULT 'client',
+                    /* direct | hardlink | symlink | usvfs */
+                    strategy      TEXT NOT NULL DEFAULT 'hardlink',
+                    game_version  TEXT,
+                    loader        TEXT,
+                    preset        TEXT,
+                    is_default    INTEGER NOT NULL DEFAULT 0,
+                    /* Whether this sandbox's definition is mirrored to the account. */
+                    cloud_sync    INTEGER NOT NULL DEFAULT 1,
+                    /* The game folder on THIS machine. NULL = the app's configured one. */
+                    game_dir      TEXT,
+                    options       TEXT NOT NULL DEFAULT '{}',
+                    launch_args   TEXT NOT NULL DEFAULT '[]',
+                    launch_env    TEXT NOT NULL DEFAULT '{}',
+                    deployed_at   TEXT,
+                    /* The last deploy's report, for the UI. Advisory. */
+                    last_deploy   TEXT,
+                    created_at    TEXT NOT NULL,
+                    updated_at    TEXT NOT NULL
+                );
 
-            Ok(())
-        })
-    }
+                CREATE INDEX IF NOT EXISTS sandbox_app_idx ON sandbox (app_id);
 
+                CREATE TABLE IF NOT EXISTS sandbox_mod (
+                    sandbox_id  INTEGER NOT NULL
+                                REFERENCES sandbox (id) ON DELETE CASCADE,
+                    /* `mod:1234` / `asset:9` — what the merge tree and the ledger use. */
+                    mod_key     TEXT NOT NULL,
+                    kind        TEXT NOT NULL,
+                    item_id     INTEGER NOT NULL,
+                    name        TEXT NOT NULL,
+                    enabled     INTEGER NOT NULL DEFAULT 1,
+                    /* Higher wins a contested path. */
+                    priority    INTEGER NOT NULL DEFAULT 0,
+                    /* Which release is in staging, and where it came from. */
+                    release_id  INTEGER,
+                    version     TEXT,
+                    staged_at   TEXT,
+                    last_error  TEXT,
+
+                    PRIMARY KEY (sandbox_id, mod_key)
+                );
+
+                CREATE INDEX IF NOT EXISTS sandbox_mod_order_idx
+                    ON sandbox_mod (sandbox_id, priority);
+
+                /*
+                 * The deployment ledger: every file the last deploy put into
+                 * the game folder, and what it displaced to get there.
+                 *
+                 * The one table that must survive a crash intact, because it is
+                 * the only record of which files in somebody's game folder
+                 * belong to us. See `deploy::ledger` for why a rescan cannot
+                 * replace it.
+                 */
+                CREATE TABLE IF NOT EXISTS deployment (
+                    sandbox_id INTEGER NOT NULL
+                               REFERENCES sandbox (id) ON DELETE CASCADE,
+                    path       TEXT NOT NULL,
+                    kind       TEXT NOT NULL,
+                    mod_key    TEXT NOT NULL,
+                    source     TEXT NOT NULL,
+                    size       INTEGER NOT NULL,
+                    mtime_ms   INTEGER NOT NULL,
+                    backup     TEXT,
+
+                    PRIMARY KEY (sandbox_id, path)
+                );
+
+                CREATE INDEX IF NOT EXISTS deployment_mod_idx
+                    ON deployment (sandbox_id, mod_key);
+"#;
+
+impl LibraryDb {
     // ------------------------------------------------------------------ meta
 
     pub fn meta_get(&self, key: &str) -> AppResult<Option<String>> {

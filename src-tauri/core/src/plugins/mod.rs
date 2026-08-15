@@ -10,8 +10,8 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use crate::error::{AppError, AppResult};
-use crate::plugins::manifest::Manifest;
 use crate::plugins::jail::Jail;
+use crate::plugins::manifest::Manifest;
 use crate::settings::AppSettings;
 
 /// The directories a jail can be anchored to on this machine.
@@ -43,12 +43,33 @@ pub fn jail_for(
     settings: &AppSettings,
     app_id: Option<i64>,
 ) -> AppResult<Jail> {
+    jail_for_scoped(manifest, roots, settings, app_id, None)
+}
+
+/// [`jail_for`], with the plugin's private directory split by `scope`.
+///
+/// One rule staging the same mod for two sandboxes runs the same steps with the
+/// same `{fileName}` — so with one shared `pluginData` the second run's download
+/// lands on the first's, and a sandbox pinned to an older version quietly gets
+/// the newer file. `scope` is what keeps those apart; it is sanitised into a
+/// single path component here rather than trusted, because it is built from a
+/// mod key.
+pub fn jail_for_scoped(
+    manifest: &Manifest,
+    roots: &JailRoots,
+    settings: &AppSettings,
+    app_id: Option<i64>,
+    scope: Option<&str>,
+) -> AppResult<Jail> {
     let mut available: HashMap<&'static str, PathBuf> = HashMap::new();
 
-    available.insert(
-        "pluginData",
-        roots.data.join("plugin-data").join(&manifest.id),
-    );
+    let mut plugin_data = roots.data.join("plugin-data").join(&manifest.id);
+
+    if let Some(scope) = scope {
+        plugin_data = plugin_data.join(safe_scope(scope));
+    }
+
+    available.insert("pluginData", plugin_data);
 
     available.insert(
         "downloads",
@@ -80,6 +101,29 @@ pub fn jail_for(
     }
 
     Jail::build(manifest, &available)
+}
+
+/// One path component, from arbitrary text.
+fn safe_scope(raw: &str) -> String {
+    let cleaned: String = raw
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .take(64)
+        .collect();
+
+    let trimmed = cleaned.trim_matches('-').to_string();
+
+    if trimmed.is_empty() {
+        "scope".into()
+    } else {
+        trimmed
+    }
 }
 
 #[cfg(test)]
@@ -223,8 +267,7 @@ mod tests {
             write: true,
         }]);
 
-        let jail =
-            jail_for(&manifest, &roots, &AppSettings::default(), None).expect("builds");
+        let jail = jail_for(&manifest, &roots, &AppSettings::default(), None).expect("builds");
 
         let root = jail
             .root_path(manifest::FsRoot::PluginData)

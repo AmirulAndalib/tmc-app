@@ -467,9 +467,7 @@ mod tests {
 
         let jail = jail_with(vec![grant("mods", true)], dir.path());
 
-        assert!(jail
-            .resolve(&path_ref("saves/world.dat"), false)
-            .is_err());
+        assert!(jail.resolve(&path_ref("saves/world.dat"), false).is_err());
     }
 
     #[test]
@@ -481,9 +479,7 @@ mod tests {
 
         let jail = jail_with(vec![grant("mods", true)], dir.path());
 
-        assert!(jail
-            .resolve(&path_ref("mods-backup/a.jar"), true)
-            .is_err());
+        assert!(jail.resolve(&path_ref("mods-backup/a.jar"), true).is_err());
     }
 
     #[cfg(unix)]

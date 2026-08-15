@@ -9,7 +9,7 @@
 //! | Where | `plugins/<id>/plugin.json` | `plugins/app/<slug>/*.json\|yaml` |
 //! | Identified by | a reverse-DNS id the author picks | the GAME it handles |
 //! | Approved | per bundle, by fingerprint | per game, once |
-//! | Answers | "what can this plugin do?" | "where do this game's mods go?" |
+//! | Answers | "what can this plugin do?" | "where do this game's mods go, and how do its sandboxes work?" |
 //!
 //! A registry plugin is a thing a user chose to install. An app plugin is a
 //! *rule for a game* — "a Minecraft mod is a `.jar` that goes in `mods/`" — and
@@ -34,6 +34,7 @@
 //!     manage_mod.json
 //!     manage_asset.yaml
 //!     launch.json
+//!     sandbox.json                       ← presets, options, deploy strategies
 //!     resourcepacks/manage_asset.json    ← recursive; subdirectories are fine
 //!     disabled/manage_mod.json           ← IGNORED, entirely
 //!   gtav/
@@ -81,6 +82,10 @@ pub enum AppPluginKind {
     ManageAsset,
     ManageCollection,
     Launch,
+    /// `sandbox.json` — how this game's sandboxes behave: which deployment
+    /// strategies work for it, which presets it offers, and which options its
+    /// launch rule understands.
+    Sandbox,
 }
 
 impl AppPluginKind {
@@ -93,18 +98,28 @@ impl AppPluginKind {
             "manage_asset" => Some(Self::ManageAsset),
             "manage_collection" => Some(Self::ManageCollection),
             "launch" => Some(Self::Launch),
+            "sandbox" => Some(Self::Sandbox),
             _ => None,
         }
     }
 
-    /// The content kind this rule installs, or `None` for a launch spec.
+    /// The content kind this rule installs, or `None` for a file that installs
+    /// nothing.
     pub fn content_kind(self) -> Option<&'static str> {
         match self {
             Self::ManageMod => Some("mod"),
             Self::ManageAsset => Some("asset"),
             Self::ManageCollection => Some("collection"),
-            Self::Launch => None,
+            Self::Launch | Self::Sandbox => None,
         }
+    }
+
+    /// Does this file describe installing something?
+    pub fn is_manage(self) -> bool {
+        matches!(
+            self,
+            Self::ManageMod | Self::ManageAsset | Self::ManageCollection
+        )
     }
 
     pub fn as_str(self) -> &'static str {
@@ -113,6 +128,7 @@ impl AppPluginKind {
             Self::ManageAsset => "manage_asset",
             Self::ManageCollection => "manage_collection",
             Self::Launch => "launch",
+            Self::Sandbox => "sandbox",
         }
     }
 }
@@ -269,6 +285,368 @@ pub struct LaunchSpec {
     pub option_args: BTreeMap<String, Vec<String>>,
 }
 
+// ------------------------------------------------------------------ Sandbox
+
+/// How this game's sandboxes behave.
+///
+/// The declarative half of the mod manager. Everything a game needs to say
+/// about profiles that is not "where does a mod file go" lives here, in a file
+/// anybody can write, so supporting a new game is a JSON file rather than a
+/// release.
+///
+/// It is the PDF blueprint's "sandbox strategy matrix" plus two things that
+/// blueprint left implicit: the OPTIONS a game understands (a launcher that
+/// can set Minecraft's heap size but not a dedicated server's tick rate is
+/// hardcoded to one game) and the PRESETS that make a new sandbox one click
+/// instead of six fields.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SandboxSpec {
+    #[serde(default)]
+    pub deploy: DeploySpec,
+
+    /// Ready-made sandboxes, offered when creating one.
+    #[serde(default)]
+    pub presets: Vec<PresetSpec>,
+
+    /// The settings this game's launch rule understands, and how to edit them.
+    #[serde(default)]
+    pub options: Vec<OptionSpec>,
+}
+
+/// Which deployment strategies make sense for this game.
+///
+/// Advisory, not enforcement: the engine's own capability probe decides what
+/// is POSSIBLE on this machine, and this decides what is SENSIBLE for this
+/// game. Both have to agree before a strategy is offered.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DeploySpec {
+    /// `direct`, `hardlink`, `symlink` or `usvfs`. Absent means the app's own
+    /// default (hard links).
+    #[serde(default)]
+    pub default_strategy: Option<String>,
+
+    /// Empty means "any the machine supports".
+    #[serde(default)]
+    pub supported_strategies: Vec<String>,
+
+    /// The game's anti-cheat, when it has one that matters.
+    ///
+    /// `kernel` is the load-bearing value: EAC, BattlEye and Vanguard all watch
+    /// for API hooking and for a game folder whose files are not where they
+    /// should be. A game declaring it gets Direct as its default and a warning
+    /// on every other strategy, because the cost of guessing wrong here is
+    /// somebody's account, not a failed install.
+    #[serde(default)]
+    pub anti_cheat: Option<String>,
+
+    /// Where this game keeps mods, for the UI to show. Informational — the
+    /// install rules are what actually place files.
+    #[serde(default)]
+    pub mod_targets: Vec<ModTarget>,
+
+    /// Shown verbatim when this game's sandbox settings are opened.
+    #[serde(default)]
+    pub notes: Vec<String>,
+}
+
+impl DeploySpec {
+    /// Does this game permit `strategy`?
+    pub fn allows(&self, strategy: &str) -> bool {
+        self.supported_strategies.is_empty()
+            || self
+                .supported_strategies
+                .iter()
+                .any(|s| s.eq_ignore_ascii_case(strategy))
+    }
+
+    /// Does this game run kernel-level anti-cheat?
+    pub fn kernel_anti_cheat(&self) -> bool {
+        self.anti_cheat
+            .as_deref()
+            .is_some_and(|a| a.eq_ignore_ascii_case("kernel"))
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ModTarget {
+    /// Free text: `engine_plugin`, `archive_mod`, `resource_pack`.
+    pub r#type: String,
+    /// Relative to the game directory.
+    pub rel_path: String,
+}
+
+/// A ready-made sandbox.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PresetSpec {
+    /// Stable within one game. Recorded on the sandbox so the UI can say which
+    /// preset it came from.
+    pub id: String,
+    pub label: String,
+
+    #[serde(default)]
+    pub description: Option<String>,
+
+    /// `client`, `server` or `shared`.
+    #[serde(default)]
+    pub environment: Option<String>,
+
+    #[serde(default)]
+    pub game_version: Option<String>,
+    /// `forge`, `fabric`, `neoforge`, `quilt`, …
+    #[serde(default)]
+    pub loader: Option<String>,
+
+    #[serde(default)]
+    pub strategy: Option<String>,
+
+    /// Option values this preset sets. Merged over the option defaults.
+    #[serde(default)]
+    pub options: BTreeMap<String, serde_json::Value>,
+
+    #[serde(default)]
+    pub launch_args: Vec<String>,
+}
+
+/// How one setting is edited.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum OptionType {
+    Int,
+    Text,
+    Bool,
+    Select,
+}
+
+/// One setting a game's launch rule understands.
+///
+/// This is a *form description*, and deliberately nothing more. It cannot
+/// express a condition, a computation or a dependency between fields — a
+/// settings schema that can do those is a program, and the whole plugin model
+/// is built on plugins not being programs. A game needing one of those needs a
+/// second preset instead.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OptionSpec {
+    /// The placeholder name. `memoryMb` fills `{memoryMb}` and selects the
+    /// `memoryMb` entry in the launch rule's `optionArgs`.
+    pub key: String,
+    pub label: String,
+
+    #[serde(default)]
+    pub description: Option<String>,
+
+    pub r#type: OptionType,
+
+    #[serde(default)]
+    pub default: Option<serde_json::Value>,
+
+    /// `int` only.
+    #[serde(default)]
+    pub min: Option<i64>,
+    #[serde(default)]
+    pub max: Option<i64>,
+    #[serde(default)]
+    pub step: Option<i64>,
+    /// Suffix shown beside the field: `MB`, `FPS`.
+    #[serde(default)]
+    pub unit: Option<String>,
+
+    /// `select` only.
+    #[serde(default)]
+    pub choices: Vec<OptionChoice>,
+
+    /// Show only for these sandbox environments. Empty means all of them — a
+    /// dedicated server has no resolution and a client has no tick rate, and
+    /// showing both to both is how a settings screen becomes noise.
+    #[serde(default)]
+    pub environments: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OptionChoice {
+    pub value: String,
+    pub label: String,
+}
+
+/// Caps. These are hand-authored files describing a settings form, so the
+/// numbers are "more than any real game needs" rather than tuned.
+const MAX_PRESETS: usize = 128;
+const MAX_OPTIONS: usize = 64;
+const MAX_CHOICES: usize = 64;
+
+/// A placeholder name: what `{key}` can be.
+///
+/// Restricted to the alphabet a launch template can actually reference, so a
+/// key containing `{`, `}` or whitespace cannot produce a template that is
+/// unfillable in a way nobody can see.
+fn is_valid_option_key(key: &str) -> bool {
+    !key.is_empty()
+        && key.len() <= 48
+        && key.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
+        && key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+impl SandboxSpec {
+    fn validate(&self) -> AppResult<()> {
+        if self.presets.len() > MAX_PRESETS || self.options.len() > MAX_OPTIONS {
+            return Err(AppError::invalid(
+                "A sandbox file declares too many presets or options.",
+            ));
+        }
+
+        for strategy in self
+            .deploy
+            .supported_strategies
+            .iter()
+            .chain(self.deploy.default_strategy.iter())
+        {
+            if crate::deploy::Strategy::parse(strategy).is_none() {
+                return Err(AppError::invalid(format!(
+                    "'{strategy}' is not a deployment strategy this app knows."
+                )));
+            }
+        }
+
+        if let Some(default) = &self.deploy.default_strategy {
+            if !self.deploy.allows(default) {
+                return Err(AppError::invalid(format!(
+                    "'{default}' is the default strategy but is not in supportedStrategies."
+                )));
+            }
+        }
+
+        let mut seen: Vec<&str> = Vec::new();
+
+        for preset in &self.presets {
+            if preset.id.trim().is_empty() || preset.id.len() > 64 {
+                return Err(AppError::invalid("A preset needs a short, non-empty id."));
+            }
+
+            if seen.contains(&preset.id.as_str()) {
+                return Err(AppError::invalid(format!(
+                    "Two presets share the id '{}'.",
+                    preset.id
+                )));
+            }
+
+            seen.push(&preset.id);
+
+            if let Some(env) = &preset.environment {
+                if !matches!(env.as_str(), "client" | "server" | "shared") {
+                    return Err(AppError::invalid(format!(
+                        "'{env}' is not a sandbox environment (client, server or shared)."
+                    )));
+                }
+            }
+
+            if let Some(strategy) = &preset.strategy {
+                if crate::deploy::Strategy::parse(strategy).is_none() {
+                    return Err(AppError::invalid(format!(
+                        "'{strategy}' is not a deployment strategy this app knows."
+                    )));
+                }
+            }
+        }
+
+        for option in &self.options {
+            if !is_valid_option_key(&option.key) {
+                return Err(AppError::invalid(format!(
+                    "'{}' is not a usable option key — letters, digits and '_' only.",
+                    option.key
+                )));
+            }
+
+            if option.choices.len() > MAX_CHOICES {
+                return Err(AppError::invalid("An option declares too many choices."));
+            }
+
+            if option.r#type == OptionType::Select && option.choices.is_empty() {
+                return Err(AppError::invalid(format!(
+                    "Option '{}' is a select with no choices.",
+                    option.key
+                )));
+            }
+
+            if let (Some(min), Some(max)) = (option.min, option.max) {
+                if min > max {
+                    return Err(AppError::invalid(format!(
+                        "Option '{}' has a minimum above its maximum.",
+                        option.key
+                    )));
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// The option values a fresh sandbox starts with.
+    pub fn default_options(&self) -> BTreeMap<String, serde_json::Value> {
+        self.options
+            .iter()
+            .filter_map(|o| o.default.clone().map(|d| (o.key.clone(), d)))
+            .collect()
+    }
+
+    /// Clamp a set of option values to what the schema declares.
+    ///
+    /// Applied on every write. The values reach the cloud and come back, and a
+    /// sandbox's options are the one part of it a second client could have
+    /// written — so "the server said 900 GB of heap" is answered here rather
+    /// than by a game that refuses to start.
+    ///
+    /// An option the schema does not declare is DROPPED. That is deliberate:
+    /// the schema is what the game's launch rule reads, so a key not in it can
+    /// only ever be noise, and keeping it would mean the sandbox's options grow
+    /// forever as games change.
+    pub fn clamp_options(
+        &self,
+        values: &BTreeMap<String, serde_json::Value>,
+    ) -> BTreeMap<String, serde_json::Value> {
+        let mut out = BTreeMap::new();
+
+        for spec in &self.options {
+            let Some(value) = values.get(&spec.key) else {
+                continue;
+            };
+
+            let clamped = match spec.r#type {
+                OptionType::Int => value.as_i64().map(|n| {
+                    let n = spec.min.map_or(n, |min| n.max(min));
+                    let n = spec.max.map_or(n, |max| n.min(max));
+
+                    serde_json::Value::from(n)
+                }),
+                OptionType::Bool => value.as_bool().map(serde_json::Value::from),
+                OptionType::Text => value
+                    .as_str()
+                    .map(|s| serde_json::Value::from(s.chars().take(512).collect::<String>())),
+                OptionType::Select => value.as_str().and_then(|s| {
+                    spec.choices
+                        .iter()
+                        .find(|c| c.value == s)
+                        .map(|c| serde_json::Value::from(c.value.clone()))
+                }),
+            };
+
+            if let Some(clamped) = clamped {
+                out.insert(spec.key.clone(), clamped);
+            }
+        }
+
+        out
+    }
+
+    pub fn preset(&self, id: &str) -> Option<&PresetSpec> {
+        self.presets.iter().find(|p| p.id == id)
+    }
+}
+
 /// A manage rule: how to install and uninstall one content item for this game.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -305,6 +683,9 @@ pub struct AppPluginFile {
 
     #[serde(default)]
     pub launch: Option<LaunchSpec>,
+
+    #[serde(default)]
+    pub sandbox: Option<SandboxSpec>,
 
     // ---------------------------------------------------- Filled by the loader
     /// The kind, from the file name. `skip_deserializing` because it is not a
@@ -361,6 +742,13 @@ impl AppPluginFile {
                 if launch.args.len() > 64 {
                     return Err(AppError::invalid("Launch spec has too many arguments."));
                 }
+            }
+            AppPluginKind::Sandbox => {
+                let Some(sandbox) = &self.sandbox else {
+                    return Err(AppError::invalid("A sandbox file must declare `sandbox`."));
+                };
+
+                sandbox.validate()?;
             }
             _ => {
                 let Some(manage) = &self.manage else {
@@ -650,9 +1038,21 @@ impl AppPlugins {
     pub fn managed_slugs(&self) -> Vec<String> {
         self.by_slug
             .iter()
-            .filter(|(_, files)| files.iter().any(|f| f.kind != AppPluginKind::Launch))
+            .filter(|(_, files)| files.iter().any(|f| f.kind.is_manage()))
             .map(|(slug, _)| slug.clone())
             .collect()
+    }
+
+    /// How this game's sandboxes behave, if it says.
+    ///
+    /// A game with no `sandbox.json` is not unsupported — it gets the app's own
+    /// defaults, which is the right answer for the many games where "put the
+    /// file in `mods/` and hard-link it" is the whole story.
+    pub fn sandbox_spec(&self, slug: &str) -> Option<&SandboxSpec> {
+        self.for_slug(slug)
+            .iter()
+            .find(|f| f.kind == AppPluginKind::Sandbox)
+            .and_then(|f| f.sandbox.as_ref())
     }
 
     pub fn errors(&self) -> &[(String, String)] {
@@ -1030,6 +1430,46 @@ manage:
             "expected minecraft and gtav examples, found {slugs:?}"
         );
 
+        /*
+         * The sandbox examples are the reference for that format, and the one
+         * mistake they most invite is a strategy a preset names that the game's
+         * own `supportedStrategies` excludes — which loads fine and then
+         * refuses at deploy time, on somebody's machine rather than here.
+         */
+        for slug in ["minecraft", "gtav"] {
+            let spec = plugins
+                .sandbox_spec(slug)
+                .unwrap_or_else(|| panic!("{slug} should ship a sandbox.json"));
+
+            assert!(
+                !spec.presets.is_empty() && !spec.options.is_empty(),
+                "{slug}'s sandbox example should demonstrate both halves"
+            );
+
+            for preset in &spec.presets {
+                if let Some(strategy) = &preset.strategy {
+                    assert!(
+                        spec.deploy.allows(strategy),
+                        "{slug} preset '{}' wants {strategy}, which the game does not support",
+                        preset.id
+                    );
+                }
+            }
+
+            // Every option a preset sets must survive its own schema, or the
+            // preset silently produces a sandbox missing half its settings.
+            for preset in &spec.presets {
+                let clamped = spec.clamp_options(&preset.options);
+
+                assert_eq!(
+                    clamped.len(),
+                    preset.options.len(),
+                    "{slug} preset '{}' sets an option its schema drops",
+                    preset.id
+                );
+            }
+        }
+
         // The `disabled/` example must not have been loaded.
         assert!(
             !plugins
@@ -1091,6 +1531,181 @@ manage:
             | Step::WriteText { path, .. }
             | Step::PatchJson { path, .. } => vec![(path, true)],
         }
+    }
+
+    // ------------------------------------------------------------- Sandboxes
+
+    const SANDBOX_JSON: &str = r#"{
+        "manifestVersion": 1,
+        "label": "Minecraft sandboxes",
+        "sandbox": {
+            "deploy": {
+                "defaultStrategy": "symlink",
+                "supportedStrategies": ["direct", "symlink", "hardlink"],
+                "modTargets": [{ "type": "loader_mod", "relPath": "mods" }]
+            },
+            "presets": [
+                {
+                    "id": "fabric-1.21",
+                    "label": "Fabric 1.21",
+                    "environment": "client",
+                    "gameVersion": "1.21",
+                    "loader": "fabric",
+                    "options": { "memoryMb": 4096 }
+                },
+                {
+                    "id": "server-neoforge-1.21",
+                    "label": "NeoForge server 1.21",
+                    "environment": "server",
+                    "gameVersion": "1.21",
+                    "loader": "neoforge"
+                }
+            ],
+            "options": [
+                {
+                    "key": "memoryMb",
+                    "label": "Memory",
+                    "type": "int",
+                    "min": 512,
+                    "max": 32768,
+                    "default": 2048,
+                    "unit": "MB"
+                },
+                { "key": "jvmArgs", "label": "JVM arguments", "type": "text" },
+                {
+                    "key": "renderer",
+                    "label": "Renderer",
+                    "type": "select",
+                    "choices": [
+                        { "value": "gl", "label": "OpenGL" },
+                        { "value": "vk", "label": "Vulkan" }
+                    ]
+                }
+            ]
+        }
+    }"#;
+
+    fn spec_from(body: &str) -> Option<SandboxSpec> {
+        let tmp = tempfile::tempdir().expect("tempdir");
+
+        write(tmp.path(), "app/minecraft/sandbox.json", body);
+
+        AppPlugins::load(tmp.path())
+            .sandbox_spec("minecraft")
+            .cloned()
+    }
+
+    #[test]
+    fn a_sandbox_file_declares_presets_options_and_strategies() {
+        let spec = spec_from(SANDBOX_JSON).expect("loaded");
+
+        assert_eq!(spec.deploy.default_strategy.as_deref(), Some("symlink"));
+        assert!(spec.deploy.allows("direct"));
+        assert!(!spec.deploy.allows("usvfs"));
+        assert!(!spec.deploy.kernel_anti_cheat());
+
+        assert_eq!(spec.presets.len(), 2);
+        assert_eq!(
+            spec.preset("fabric-1.21").map(|p| p.loader.as_deref()),
+            Some(Some("fabric"))
+        );
+
+        // Defaults come from the option schema, not from a hardcoded table.
+        assert_eq!(
+            spec.default_options().get("memoryMb"),
+            Some(&serde_json::json!(2048))
+        );
+    }
+
+    /// A sandbox file is loaded alongside the game's manage rules rather than
+    /// replacing them, and it must not make the game look unsupported.
+    #[test]
+    fn a_sandbox_file_does_not_count_as_install_support() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+
+        write(tmp.path(), "app/minecraft/sandbox.json", SANDBOX_JSON);
+
+        let plugins = AppPlugins::load(tmp.path());
+
+        assert!(plugins.sandbox_spec("minecraft").is_some());
+        assert!(
+            plugins.managed_slugs().is_empty(),
+            "a game with no manage rule cannot install anything"
+        );
+
+        write(tmp.path(), "app/minecraft/manage_mod.json", MOD_JSON);
+
+        let plugins = AppPlugins::load(tmp.path());
+
+        assert_eq!(plugins.managed_slugs(), vec!["minecraft".to_string()]);
+        assert!(plugins.sandbox_spec("minecraft").is_some());
+    }
+
+    /// The clamp is the reason a hostile or stale cloud payload cannot hand a
+    /// game an absurd command line.
+    #[test]
+    fn option_values_are_clamped_to_the_schema() {
+        let spec = spec_from(SANDBOX_JSON).expect("loaded");
+
+        let clamped = spec.clamp_options(&BTreeMap::from([
+            ("memoryMb".into(), serde_json::json!(999_999_999i64)),
+            ("renderer".into(), serde_json::json!("not-a-choice")),
+            ("jvmArgs".into(), serde_json::json!("-XX:+UseG1GC")),
+            ("unknownKey".into(), serde_json::json!("whatever")),
+        ]));
+
+        assert_eq!(clamped.get("memoryMb"), Some(&serde_json::json!(32768)));
+        assert_eq!(
+            clamped.get("jvmArgs"),
+            Some(&serde_json::json!("-XX:+UseG1GC"))
+        );
+        // A value outside the declared choices is dropped, not passed through.
+        assert!(!clamped.contains_key("renderer"));
+        // And so is a key the game never declared.
+        assert!(!clamped.contains_key("unknownKey"));
+
+        let low = spec.clamp_options(&BTreeMap::from([("memoryMb".into(), serde_json::json!(1))]));
+
+        assert_eq!(low.get("memoryMb"), Some(&serde_json::json!(512)));
+    }
+
+    #[test]
+    fn a_sandbox_file_naming_an_unknown_strategy_is_refused() {
+        for bad in [
+            r#"{"deploy":{"supportedStrategies":["telepathy"]}}"#,
+            r#"{"deploy":{"defaultStrategy":"symlink","supportedStrategies":["direct"]}}"#,
+            r#"{"presets":[{"id":"a","label":"A","environment":"somewhere"}]}"#,
+            r#"{"presets":[{"id":"a","label":"A"},{"id":"a","label":"B"}]}"#,
+            r#"{"options":[{"key":"1bad","label":"L","type":"int"}]}"#,
+            r#"{"options":[{"key":"pick","label":"L","type":"select"}]}"#,
+            r#"{"options":[{"key":"n","label":"L","type":"int","min":10,"max":1}]}"#,
+        ] {
+            let body = format!(r#"{{ "manifestVersion": 1, "sandbox": {bad} }}"#);
+
+            assert!(spec_from(&body).is_none(), "{bad} should not have loaded");
+        }
+    }
+
+    /// A game with kernel anti-cheat has to be able to say so. Getting this
+    /// wrong costs somebody an account, not an install.
+    #[test]
+    fn kernel_anti_cheat_is_declarable() {
+        let spec = spec_from(
+            r#"{
+                "manifestVersion": 1,
+                "sandbox": {
+                    "deploy": {
+                        "antiCheat": "kernel",
+                        "defaultStrategy": "direct",
+                        "supportedStrategies": ["direct"]
+                    }
+                }
+            }"#,
+        )
+        .expect("loaded");
+
+        assert!(spec.deploy.kernel_anti_cheat());
+        assert!(!spec.deploy.allows("hardlink"));
     }
 
     #[test]

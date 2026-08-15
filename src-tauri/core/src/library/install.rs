@@ -150,7 +150,7 @@ fn context_for(entry: &LibraryEntry, ctx: &InstallCtx<'_>) -> RunContext {
 /// Falls back to `<kind>-<itemId>.bin` when there is nothing usable, because an
 /// empty `{fileName}` produces a step that writes to a directory — which fails
 /// with an error nobody can read.
-fn safe_file_name(entry: &LibraryEntry) -> String {
+pub(crate) fn safe_file_name(entry: &LibraryEntry) -> String {
     let raw = entry
         .file_name
         .as_deref()

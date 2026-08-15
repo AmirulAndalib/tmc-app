@@ -14,7 +14,9 @@
 //! `install` executes it, and only the second one needs a filesystem.
 
 pub mod db;
+pub mod deploy;
 pub mod install;
+pub mod sandbox;
 pub mod sync;
 
 pub use db::{LibraryDb, LibraryEntry};

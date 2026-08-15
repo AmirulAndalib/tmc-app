@@ -367,12 +367,120 @@ pub async fn sync_installs(api: &ApiClient, db: &LibraryDb) -> AppResult<usize> 
             payload: &install.to_string(),
         })?;
 
+        /*
+         * And the sandbox the mod manager works from.
+         *
+         * The raw payload above is kept as well as this, not instead of it: the
+         * payload is what the UI parses with the contract's own zod schema, and
+         * re-deriving it from these columns would be a second shape that can
+         * drift. This is the structured half the deployment engine needs.
+         */
+        if let Err(e) = mirror_sandbox(db, install, id, app_id, app_slug, name, is_default) {
+            tracing::warn!("could not mirror install {id} as a sandbox: {}", e.detail());
+        }
+
         keep.push(id);
     }
 
     db.retain_installs(&keep)?;
+    db.sandbox_retain_remote(&keep)?;
 
     Ok(keep.len())
+}
+
+/// Turn one cloud install payload into a sandbox row.
+#[allow(clippy::too_many_arguments)]
+fn mirror_sandbox(
+    db: &LibraryDb,
+    payload: &serde_json::Value,
+    remote_id: i64,
+    app_id: i64,
+    app_slug: Option<&str>,
+    name: &str,
+    is_default: bool,
+) -> AppResult<()> {
+    use crate::deploy::Strategy;
+    use crate::library::sandbox::{Environment, RemoteItem, RemoteSandbox};
+
+    let text = |key: &str| payload.get(key).and_then(serde_json::Value::as_str);
+
+    let json = |key: &str| {
+        payload
+            .get(key)
+            .map(|v| v.to_string())
+            .unwrap_or_else(|| "{}".into())
+    };
+
+    /*
+     * `environment` and `strategy` are read with a fallback rather than
+     * required. An installed app talks to whatever version of the API is
+     * deployed, and a server that predates these fields must produce a working
+     * sandbox rather than none — the defaults are the same ones a locally
+     * created sandbox gets.
+     */
+    let environment = text("environment")
+        .and_then(Environment::parse)
+        .unwrap_or_default();
+
+    let strategy = text("strategy")
+        .and_then(Strategy::parse)
+        .unwrap_or_default();
+
+    let items: Vec<RemoteItem> = payload
+        .get("items")
+        .and_then(serde_json::Value::as_array)
+        .map(|list| {
+            list.iter()
+                .filter_map(|item| {
+                    Some(RemoteItem {
+                        kind: item.get("kind")?.as_str()?.to_string(),
+                        item_id: item.get("itemId")?.as_i64()?,
+                        name: item
+                            .get("name")
+                            .and_then(serde_json::Value::as_str)
+                            .unwrap_or("Item")
+                            .to_string(),
+                        enabled: item
+                            .get("enabled")
+                            .and_then(serde_json::Value::as_bool)
+                            .unwrap_or(true),
+                        order: item
+                            .get("order")
+                            .and_then(serde_json::Value::as_i64)
+                            .unwrap_or(0),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let app_name = payload
+        .get("app")
+        .and_then(|a| a.get("name"))
+        .and_then(serde_json::Value::as_str);
+
+    db.sandbox_upsert_remote(&RemoteSandbox {
+        remote_id,
+        app_id,
+        app_slug,
+        app_name,
+        name,
+        description: text("description"),
+        environment,
+        strategy,
+        game_version: text("gameVersion"),
+        loader: text("loader"),
+        is_default,
+        options: json("options"),
+        launch_args: payload
+            .get("launchArgs")
+            .map(|v| v.to_string())
+            .unwrap_or_else(|| "[]".into()),
+        launch_env: json("launchEnv"),
+        items: &items,
+    })?;
+
+    Ok(())
 }
 
 /// Percent-encode a watermark for a query string.
