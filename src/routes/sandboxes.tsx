@@ -20,6 +20,9 @@ import { api } from '~/lib/api/client'
 import { ipc } from '~/lib/ipc/commands'
 import { isIpcError } from '~/lib/ipc'
 import { appLabel } from '~/lib/api/labels'
+import { GameIcon } from '~/components/game-icon'
+import { ItemThumb } from '~/components/item-thumb'
+import { useAppIcons } from '~/lib/hooks/use-app-icons'
 import { useAuth } from '~/lib/auth/provider'
 import { useLibrary } from '~/lib/library/provider'
 import type {
@@ -79,6 +82,7 @@ export default function SandboxesRoute() {
     const { id } = useParams<{ id?: string }>()
     const navigate = useNavigate()
     const { status } = useAuth()
+    const iconFor = useAppIcons()
 
     const [sandboxes, setSandboxes] = useState<SandboxRowT[]>([])
     const [error, setError] = useState<string | null>(null)
@@ -170,6 +174,14 @@ export default function SandboxesRoute() {
                                 }`}
                             >
                                 <div className="flex items-center gap-2">
+                                    <GameIcon
+                                        app={{
+                                            id: sandbox.appId,
+                                            name: sandbox.appName ?? '',
+                                            icon: iconFor(sandbox.appId),
+                                        }}
+                                        size="sm"
+                                    />
                                     <span className="truncate text-sm font-medium">
                                         {sandbox.name}
                                     </span>
@@ -579,6 +591,22 @@ function SandboxDetail({
                                             )
                                         )
                                     }
+                                />
+
+                                {/*
+                                 * The item's own cover, from the LOCAL library
+                                 * row with the same key — a sandbox mod and a
+                                 * subscription are both `kind:itemId`, so this
+                                 * is a map hit rather than a request per row.
+                                 */}
+                                <ItemThumb
+                                    image={
+                                        library.rows.find(
+                                            (r) => r.id === mod.modKey
+                                        )?.image
+                                    }
+                                    kind={mod.kind}
+                                    size="sm"
                                 />
 
                                 <div className="min-w-0 flex-1">

@@ -186,6 +186,7 @@ genuinely need a window belongs on that side of the line.
 | `lib/api/env.ts` | Which site this build talks to, for display and for the site's own links |
 | `lib/auth/provider.tsx` | Login state and the poll loop |
 | `lib/settings/provider.tsx` | App settings + account settings, kept apart |
+| `lib/hooks/use-app-icons.ts` | Game artwork for screens whose data is local |
 | `lib/hooks/use-breakpoint.ts` | Layout decisions, keyed on the window |
 | `lib/hooks/use-platform.ts` | The few decisions that genuinely are per-OS, not per-window |
 | `lib/hooks/use-live-query.tsx` | The live-server registry: one timer, one batch |
@@ -196,6 +197,9 @@ genuinely need a window belongs on that side of the line.
 | `components/shell.tsx` | Sidebar ≥768px, bottom tabs below |
 | `components/titlebar.tsx` | The app's own window frame — see "Cross-platform" |
 | `components/folder-picker.tsx` | The in-app folder chooser, over `commands/fs.rs` |
+| `components/game-icon.tsx` | A game's artwork, with a deterministic initials fallback |
+| `components/item-thumb.tsx` | An item's cover in a list, from the LOCAL library row |
+| `components/launch-dialog.tsx` | The confirmation shown before anything starts, shared by both launchers |
 | `components/markdown.tsx` | The safe renderer for untrusted bodies |
 | `components/select.tsx` | **The app's own dropdown.** A native `<select>`'s popup cannot be themed |
 | `components/speed-graph.tsx` | A download's recent speed, hand-rolled SVG |
@@ -1280,6 +1284,46 @@ that every option a preset sets survives its own schema.
 3. An arm in `step_label` and in `required_roots`.
 4. A test. **If the step can write, test that it cannot write outside the jail.**
 
+## Artwork
+
+Every list that names a game shows the game, and every list that names an item
+shows the item. That is not decoration on this app in the way it would be on the
+website: the site's chrome is built around one chosen game, so a mod card there
+is unambiguous without a picture. Here the browse grid mixes Minecraft mods with
+Rust servers, the sandbox list holds six games, and the download queue is forty
+rows of similar text.
+
+Two components, and the split between them is where the picture comes from:
+
+  * **`GameIcon`** — a game's artwork. `ContentSummary.app.icon`, `facets.apps[]
+    .icon` and `Install.app.icon` all carry it; a screen whose data is LOCAL
+    (sandboxes, the library, anything out of SQLite) gets it from
+    `useAppIcons()`, which shares a React Query key with the browse filters so
+    it usually costs no request at all.
+  * **`ItemThumb`** — an item's own cover, from `LibraryRow.image`. Never from a
+    request: every row in a sandbox's mod list or the download queue is
+    something the user subscribed to, so the picture is already on this device,
+    and a lookup is a map hit rather than forty fetches in a list that redraws
+    every second. `SandboxMod.modKey`, `Download.meta.item` and `LibraryRow.id`
+    are all `kind:itemId`, which is what makes the lookup a one-liner.
+
+**Both fall back to something rather than to nothing.** `GameIcon` draws the
+game's initials on a tint hashed from its name — the same game is the same
+colour in the browser, the sandbox list and the filter picker, because the hash
+does not depend on the list's order or contents. `ItemThumb` draws the kind's
+glyph. A blank space is worse than no picture: a list where some rows are
+indented by an image and some are not reads as broken, not as sparse.
+
+**Neither is ever the only thing carrying the name.** Every caller puts the
+label beside it, and both render `aria-hidden` with `alt=""` — the name is
+already in the row as text, so announcing it again makes a screen reader read
+every row twice. An icon on its own is a guess, and a wrong guess about which
+game a mod is for is how somebody installs it into the wrong folder.
+
+**The local database does not cache artwork URLs**, deliberately. It mirrors
+what the user owns; a CDN link cached in it would outlive every sync that
+changed it, and the lookup costs nothing.
+
 ## Gotchas
 
 - **A native `<select>`'s popup is drawn by the OS and cannot be styled.** The
@@ -1348,6 +1392,13 @@ that every option a preset sets survives its own schema.
   `every_protocol_round_trips_under_its_wire_name` checks all eighteen against a
   hardcoded list. Reading the enum will not catch this: the variant names look
   identical to the wire names.
+- **Tailwind 4 generates a utility only for a token that EXISTS.** `bg-surface-2`
+  was written in seven places and produced no background at all, because the
+  shared theme calls it `--surface-secondary` — a bug that looks exactly like a
+  design choice, since the panel simply sits flat against its parent.
+  `app.css`'s `@theme inline` block aliases `--color-surface-2` to it. Before
+  inventing a colour name, check it against `@modcommunity/shared`'s
+  `src/styles/theme.css`.
 - **Unlayered CSS in `app.css` beats Tailwind's `@layer utilities`,** whatever
   the specificity — that is the cascade's layer rule, not a specificity contest.
   A `button { text-transform: inherit }` added to fix one header silently

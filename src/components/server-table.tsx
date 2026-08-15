@@ -10,6 +10,7 @@ import {
 
 import type { BrowseSortT, ContentSummaryT } from '~/lib/api/contract'
 import { appLabel } from '~/lib/api/labels'
+import { GameIcon } from '~/components/game-icon'
 import { requestFor, useLiveQuery, useLiveServer } from '~/lib/hooks/use-live-query'
 import { LatencyChart, LatencyValue } from './latency-graph'
 import { latencyState } from './server-live'
@@ -349,8 +350,9 @@ function ServerRow({
                         )}
                     </div>
                     {item.app && (
-                        <span className="truncate text-xs text-accent">
-                            {appLabel(item.app)}
+                        <span className="flex min-w-0 items-center gap-1.5 text-xs text-accent">
+                            <GameIcon app={item.app} size="sm" />
+                            <span className="truncate">{appLabel(item.app)}</span>
                         </span>
                     )}
                 </td>

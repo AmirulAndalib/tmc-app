@@ -64,6 +64,11 @@ pub struct RunReport {
 pub struct RunContext(pub HashMap<String, String>);
 
 impl RunContext {
+    /// One value, when the context has it.
+    fn get(&self, key: &str) -> Option<&String> {
+        self.0.get(key)
+    }
+
     /// Replace `{key}` occurrences. An unknown key is left as-is rather than
     /// erroring — the URL check afterwards is what decides whether the result
     /// is acceptable, and a literal `{foo}` is never a valid host.
@@ -194,7 +199,7 @@ impl Executor<'_> {
                 let target = self.resolve(to, ctx, true)?;
                 let resolved = ctx.fill(url);
 
-                self.download(&resolved, &target, sha256.as_deref(), *max_bytes)
+                self.download(&resolved, &target, sha256.as_deref(), *max_bytes, ctx)
                     .await?;
 
                 applied.push(display(&target));
@@ -305,6 +310,7 @@ impl Executor<'_> {
         target: &Path,
         expect_sha: Option<&str>,
         max_bytes: Option<u64>,
+        ctx: &RunContext,
     ) -> AppResult<()> {
         let parsed = url::Url::parse(url)
             .map_err(|_| AppError::jail(format!("'{url}' is not a valid URL.")))?;
@@ -362,18 +368,45 @@ impl Executor<'_> {
                     id,
                     url: url.to_string(),
                     dest: target.to_path_buf(),
-                    label: target
-                        .file_name()
-                        .map(|n| n.to_string_lossy().into_owned())
+                    /*
+                     * The ITEM's name, not the file's. A queue row reading
+                     * `a1b2c3d4.zip` is one the user cannot connect to
+                     * anything they asked for — release files are frequently
+                     * named by hash or by build number, and the queue is the
+                     * screen where somebody looks to find out what is taking
+                     * so long.
+                     */
+                    label: ctx
+                        .get("itemName")
+                        .cloned()
+                        .or_else(|| target.file_name().map(|n| n.to_string_lossy().into_owned()))
                         .unwrap_or_else(|| self.manifest.name.clone()),
                     sha256: expect_sha.map(str::to_string),
                     size_hint: None,
                     priority: 0,
                     limit_bps: None,
-                    meta: std::collections::BTreeMap::from([(
-                        "plugin".to_string(),
-                        self.manifest.id.clone(),
-                    )]),
+                    meta: {
+                        let mut meta = std::collections::BTreeMap::from([(
+                            "plugin".to_string(),
+                            self.manifest.id.clone(),
+                        )]);
+
+                        /*
+                         * The subscription's key, so the queue can find the
+                         * item's own artwork in the local library rather than
+                         * asking the network for a picture per row. It is the
+                         * same `kind:itemId` a sandbox mod is keyed by.
+                         */
+                        if let Some(id) = ctx.get("id") {
+                            meta.insert("item".to_string(), id.clone());
+                        }
+
+                        if let Some(kind) = ctx.get("kind") {
+                            meta.insert("kind".to_string(), kind.clone());
+                        }
+
+                        meta
+                    },
                 })
                 .await;
         }

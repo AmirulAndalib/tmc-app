@@ -18,6 +18,8 @@ import {
 } from '~/lib/downloads/provider'
 import { type DownloadT } from '~/lib/ipc/schemas'
 import Select from '~/components/select'
+import { ItemThumb } from '~/components/item-thumb'
+import { useLibrary } from '~/lib/library/provider'
 import SpeedGraph from '~/components/speed-graph'
 
 /**
@@ -163,6 +165,7 @@ export default function DownloadsRoute() {
 
 function DownloadCard({ download }: { download: DownloadT }) {
     const queue = useDownloads()
+    const library = useLibrary()
     const [open, setOpen] = useState(false)
 
     const percent =
@@ -183,6 +186,22 @@ function DownloadCard({ download }: { download: DownloadT }) {
             <div className="flex items-start gap-3">
                 <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
+                        {/*
+                         * The item's cover, found in the LOCAL library by the
+                         * key Rust put in `meta.item`. A queue row is always
+                         * something the user subscribed to, so the picture is
+                         * already on this device — no request per row, in a
+                         * list that redraws every second.
+                         */}
+                        <ItemThumb
+                            image={
+                                library.rows.find(
+                                    (r) => r.id === download.meta.item
+                                )?.image
+                            }
+                            kind={download.meta.kind}
+                            size="sm"
+                        />
                         {done && (
                             <FiCheck
                                 aria-hidden

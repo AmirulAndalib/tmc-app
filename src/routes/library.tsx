@@ -14,6 +14,9 @@ import {
 } from 'react-icons/fi'
 
 import { useLibrary } from '~/lib/library/provider'
+import { useAppIcons } from '~/lib/hooks/use-app-icons'
+import { GameIcon } from '~/components/game-icon'
+import { ItemThumb } from '~/components/item-thumb'
 import { useAuth } from '~/lib/auth/provider'
 import type { LibraryRowT } from '~/lib/ipc/schemas'
 
@@ -92,6 +95,7 @@ function statusOf(row: LibraryRowT): { text: string; tone: string } {
 }
 
 function LibraryRow({ row }: { row: LibraryRowT }) {
+    const iconFor = useAppIcons()
     const { install, uninstall, busy } = useLibrary()
 
     const status = statusOf(row)
@@ -107,16 +111,16 @@ function LibraryRow({ row }: { row: LibraryRowT }) {
 
     return (
         <div className="flex items-start gap-3 border-b border-border px-3 py-3 last:border-b-0">
-            <div className="h-12 w-12 shrink-0 overflow-hidden rounded-lg bg-surface-2">
-                {row.image ? (
-                    <img
-                        src={row.image}
-                        alt=""
-                        loading="lazy"
-                        className="h-full w-full object-cover"
-                    />
-                ) : null}
-            </div>
+            {/*
+             * The empty box this replaces was a real gap: an item with no
+             * card image left a blank square, which in a list of rows that
+             * mostly HAVE one reads as a picture that failed to load.
+             */}
+            <ItemThumb
+                image={row.image}
+                kind={row.kind}
+                className="h-12 w-12 rounded-lg"
+            />
 
             <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-center gap-2">
@@ -132,7 +136,15 @@ function LibraryRow({ row }: { row: LibraryRowT }) {
                     </span>
 
                     {row.appName ? (
-                        <span className="text-[11px] text-muted">
+                        <span className="flex items-center gap-1.5 text-[11px] text-muted">
+                            <GameIcon
+                                app={{
+                                    id: row.appId ?? 0,
+                                    name: row.appName,
+                                    icon: iconFor(row.appId),
+                                }}
+                                size="sm"
+                            />
                             {row.appName}
                         </span>
                     ) : null}

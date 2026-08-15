@@ -18,6 +18,7 @@ import {
     type ContentSummaryT,
 } from '~/lib/api/contract'
 import { appLabel } from '~/lib/api/labels'
+import { GameIcon } from '~/components/game-icon'
 import { opensExternally } from '~/lib/external'
 import Markdown from '~/components/markdown'
 import ServerPanel from '~/components/server-panel'
@@ -112,7 +113,8 @@ export default function ViewRoute() {
                 <header className="flex flex-col gap-2">
                     <div className="flex flex-wrap items-center gap-2">
                         {summary.app && (
-                            <span className="text-xs font-medium text-accent">
+                            <span className="flex items-center gap-1.5 text-xs font-medium text-accent">
+                                <GameIcon app={summary.app} size="sm" />
                                 {appLabel(summary.app)}
                             </span>
                         )}

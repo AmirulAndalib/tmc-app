@@ -148,6 +148,23 @@ export const RefSchema = z.object({
     url: z.string().nullable(),
 })
 
+/**
+ * A game, with its artwork.
+ *
+ * A plain [`RefSchema`] plus `icon`, because the app draws one flat grid across
+ * every game in the catalogue — a row's game is not implied by the surrounding
+ * chrome the way it is on a site built around one chosen game.
+ *
+ * `icon` is optional with a null default so a build talking to a server that
+ * predates it renders text-only rather than failing to parse the whole browse
+ * response.
+ */
+export const AppRefSchema = RefSchema.extend({
+    icon: z.string().nullable().default(null),
+})
+
+export type AppRefT = z.infer<typeof AppRefSchema>
+
 export const UserRefSchema = z.object({
     id: z.string(),
     name: z.string().nullable(),
@@ -273,7 +290,7 @@ export const ContentSummarySchema = z.object({
 
     images: ImageSetSchema,
 
-    app: RefSchema.nullable(),
+    app: AppRefSchema.nullable(),
     owner: UserRefSchema.nullable(),
     community: RefSchema.nullable(),
 

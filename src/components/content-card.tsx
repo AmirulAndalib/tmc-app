@@ -4,6 +4,7 @@ import { FiDownload, FiExternalLink, FiEye, FiHeart, FiStar } from 'react-icons/
 
 import type { ContentSummaryT } from '~/lib/api/contract'
 import { appLabel } from '~/lib/api/labels'
+import { GameIcon } from '~/components/game-icon'
 import { requestFor, useLiveServer } from '~/lib/hooks/use-live-query'
 import { opensExternally, openExternally } from '~/lib/external'
 import { useSettings } from '~/lib/settings/provider'
@@ -151,11 +152,17 @@ export default function ContentCard({ item }: { item: ContentSummaryT }) {
                 </div>
 
                 {item.app && (
-                    <p className="truncate text-xs text-accent">
-                        {appLabel(item.app)}
-                        {live.result?.map && (
-                            <span className="text-muted"> · {live.result.map}</span>
-                        )}
+                    <p className="flex min-w-0 items-center gap-1.5 text-xs text-accent">
+                        <GameIcon app={item.app} size="sm" />
+                        <span className="truncate">
+                            {appLabel(item.app)}
+                            {live.result?.map && (
+                                <span className="text-muted">
+                                    {' · '}
+                                    {live.result.map}
+                                </span>
+                            )}
+                        </span>
                     </p>
                 )}
 

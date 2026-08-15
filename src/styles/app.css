@@ -21,6 +21,18 @@
     --color-app-chrome: var(--app-chrome);
     --color-app-chrome-border: var(--app-chrome-border);
 
+    /*
+     * `surface-2` — the app's name for the shared theme's `surface-secondary`.
+     *
+     * An alias rather than a new colour. The app has a lot of small inset
+     * panels the website does not (a console transcript, a resolved command
+     * line, a queue row), and every one of them was written as `bg-surface-2`
+     * because that is the obvious name. Tailwind 4 generates a utility only for
+     * a token that exists, so those classes silently produced no background at
+     * all — a bug that looks exactly like a design choice.
+     */
+    --color-surface-2: var(--surface-secondary);
+
     --color-lat-good: var(--lat-good);
     --color-lat-fair: var(--lat-fair);
     --color-lat-poor: var(--lat-poor);

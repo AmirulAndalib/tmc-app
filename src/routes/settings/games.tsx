@@ -4,6 +4,7 @@ import { FiAlertTriangle, FiCheck, FiFolder, FiSearch, FiX } from 'react-icons/f
 
 import { api } from '~/lib/api/client'
 import { appLabel } from '~/lib/api/labels'
+import { GameIcon } from '~/components/game-icon'
 import { isIpcError } from '~/lib/ipc'
 import { useSettings } from '~/lib/settings/provider'
 import { ipc } from '~/lib/ipc/commands'
@@ -103,11 +104,15 @@ export default function GamesRoute() {
                             key={game.id}
                             className="flex items-center justify-between gap-3 px-3 py-2.5"
                         >
-                            <div className="min-w-0">
-                                <p className="text-sm">{label}</p>
-                                <p className="selectable truncate text-xs text-muted">
-                                    {current ?? 'Not set'}
-                                </p>
+                            <div className="flex min-w-0 items-center gap-2.5">
+                                <GameIcon app={game} />
+
+                                <div className="min-w-0">
+                                    <p className="text-sm">{label}</p>
+                                    <p className="selectable truncate text-xs text-muted">
+                                        {current ?? 'Not set'}
+                                    </p>
+                                </div>
                             </div>
 
                             <div className="flex shrink-0 items-center gap-1">

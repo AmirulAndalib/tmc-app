@@ -18,6 +18,7 @@ import { useAuth } from '~/lib/auth/provider'
 import { useLibrary } from '~/lib/library/provider'
 import { InstallSchema, type InstallT } from '~/lib/api/contract'
 import { appLabel } from '~/lib/api/labels'
+import { GameIcon } from '~/components/game-icon'
 import Select from '~/components/select'
 import { LaunchDialog } from '~/components/launch-dialog'
 import type { LaunchPreviewT } from '~/lib/ipc/schemas'
@@ -143,7 +144,9 @@ function InstallCard({
     return (
         <div className="rounded-xl border border-border p-3">
             <div className="flex flex-wrap items-start justify-between gap-2">
-                <div className="min-w-0">
+                <GameIcon app={install.app} size="lg" className="mt-0.5" />
+
+                <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
                         <h2 className="truncate text-sm font-semibold">
                             {install.name}
