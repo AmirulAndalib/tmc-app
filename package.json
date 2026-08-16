@@ -10,6 +10,7 @@
         "check": "npm run check:web && npm run check:rust",
         "check:web": "tsc --noEmit && eslint . && vitest run --silent",
         "check:rust": "bash scripts/cargo.sh clippy --workspace --all-targets -- -D warnings",
+        "audit:rust": "cd src-tauri && cargo audit --deny warnings",
         "lint": "eslint .",
         "fmt": "prettier --write \"src/**/*.{ts,tsx,css}\" && cargo fmt --manifest-path src-tauri/Cargo.toml --all",
         "test": "npm run test:web && npm run test:rust",

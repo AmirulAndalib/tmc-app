@@ -1327,6 +1327,30 @@ runtime libraries still come from the system where it has them.
 - New privileged capability → new `#[tauri::command]` in `commands.rs`, with the
   policy check *in* the command, not in the caller.
 
+### Supply chain: `npm run audit:rust`
+
+`cargo audit --deny warnings`, against `src-tauri/Cargo.lock`. Deliberately
+**not** part of `npm run check`: `cargo-audit` is a separate `cargo install`
+and is not in the toolchain `check` assumes, so wiring it in would make the
+definition of done depend on a tool a fresh clone does not have. Install it
+with `cargo install cargo-audit --locked`.
+
+**Deny-on-warning, with a reviewed allow-list** in `src-tauri/.cargo/audit.toml`.
+An unfiltered run reports the same 17 advisories every time, which trains
+everyone to stop reading it — and then a real one lands unnoticed. Filtered, the
+command is silent until something new appears. Ignores are per **advisory id**,
+not per crate, so a genuine new advisory against `gtk` still fails the run.
+
+None of the 17 is a vulnerability; `cargo audit` reports zero of those across
+576 crates. All are `unmaintained` or `unsound`, and all arrive through Tauri's
+own tree — 12 from the gtk-rs GTK3 bindings behind the Linux WebKitGTK webview
+(Linux-only; absent from the Windows, macOS, Android and iOS builds), and 5
+from `urlpattern` inside `tauri-build`, which runs at compile time and is not
+linked into the app. `audit.toml` says which is which and why.
+
+**Re-check the list whenever Tauri is upgraded.** An entry that stopped
+appearing should be deleted from `audit.toml`, not left behind as a comment.
+
 ### Tests on the frontend side
 
 `vitest`, node environment, `src/**/*.test.ts`. It runs inside `check:web`, so
