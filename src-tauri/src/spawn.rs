@@ -1,10 +1,11 @@
-//! Starting a game from a [`LaunchPlan`].
+//! Starting a game from a [`LaunchPlan`], and keeping track of it afterwards.
 //!
 //! One place, shared by the install launcher and the sandbox launcher, because
 //! there are two ways to start a game and they must not drift:
 //!
-//!   * **Ordinarily** — `Command::spawn` with an argv vector, or the OS opener
-//!     for a `steam://`-style hand-off.
+//!   * **Ordinarily** — an argv vector handed to the session registry, which
+//!     spawns it and watches it, or the OS opener for a `steam://`-style
+//!     hand-off.
 //!   * **With a virtual filesystem** — `tmc_usvfs::inject`, which creates the
 //!     process suspended, loads the hook DLL into it and only then lets it run.
 //!
@@ -16,14 +17,41 @@
 //! vector, checked for control characters where they were built; there is no
 //! shell in either path, so `;`, backticks and `$(…)` are inert bytes to the
 //! child.
+//!
+//! WHY THIS RETURNS A SESSION
+//! -------------------------
+//! It used to `Command::spawn` and drop the handle, with a comment explaining
+//! that the game outlives the launcher. The first half of that is right and the
+//! conclusion was not: dropping the handle also dropped every fact about the
+//! launch, which is why the account was told `playedSeconds: 0` on every start,
+//! why the Library could not say whether a game was already open, and why a
+//! game that died in two seconds left nothing to read.
+//!
+//! [`tmc_core::session::Sessions`] keeps the handle on a supervisor thread
+//! instead. The game still outlives the launcher — closing the app does not
+//! kill it, because nothing waits on the child from the UI's thread and the
+//! child is not in this process's job object.
+//!
+//! A URI hand-off gets a session too, and it is recorded as a
+//! [`SessionKind::Handoff`] with no duration. That is the honest record: Steam
+//! started the game, we never saw a process, and a launcher that invents a play
+//! session out of a URI it fired is a launcher whose statistics are fiction.
 
 use tauri::AppHandle;
 
 use tmc_core::error::{AppError, AppResult};
 use tmc_core::launch::LaunchPlan;
+use tmc_core::session::{Session, SessionSpec};
 
-/// Start whatever the plan describes.
-pub fn run(app: &AppHandle, plan: &LaunchPlan) -> AppResult<()> {
+use crate::state::AppState;
+
+/// Start whatever the plan describes, and open a session for it.
+pub fn run(
+    app: &AppHandle,
+    state: &AppState,
+    plan: &LaunchPlan,
+    spec: SessionSpec,
+) -> AppResult<Session> {
     if let Some(uri) = &plan.uri {
         /*
          * Handed to the OS opener, which is what resolves a `steam://` link to
@@ -34,10 +62,11 @@ pub fn run(app: &AppHandle, plan: &LaunchPlan) -> AppResult<()> {
          */
         use tauri_plugin_opener::OpenerExt;
 
-        return app
-            .opener()
+        app.opener()
             .open_url(uri.clone(), None::<&str>)
-            .map_err(|e| AppError::internal(format!("could not open {uri}: {e}")));
+            .map_err(|e| AppError::internal(format!("could not open {uri}: {e}")))?;
+
+        return Ok(state.sessions.record_handoff(spec));
     }
 
     let Some(program) = &plan.program else {
@@ -47,7 +76,20 @@ pub fn run(app: &AppHandle, plan: &LaunchPlan) -> AppResult<()> {
     };
 
     if let Some(vfs) = &plan.vfs {
-        return launch_with_vfs(program, plan, vfs);
+        launch_with_vfs(program, plan, vfs)?;
+
+        /*
+         * The injector creates the process itself, so there is no `Child` to
+         * hand the registry — it returns once the suspended process has been
+         * resumed. Recorded as a hand-off for that reason and not because
+         * nothing of ours started it: what is missing is the HANDLE, and
+         * without one there is no exit to observe and no duration to measure.
+         *
+         * Making this measurable means teaching `inject::launch` to return its
+         * process handle, which is a change inside the one part of the tree
+         * that has never been run against a game. It is listed as not built.
+         */
+        return Ok(state.sessions.record_handoff(spec));
     }
 
     let mut command = std::process::Command::new(program);
@@ -64,17 +106,7 @@ pub fn run(app: &AppHandle, plan: &LaunchPlan) -> AppResult<()> {
         command.env(key, value);
     }
 
-    /*
-     * Spawned and let go, deliberately: the game outlives the launcher, and
-     * holding the handle would make closing the app kill it. The zombie that
-     * leaves on unix is reaped by init once this process exits, and by `wait`
-     * never being called it costs one PID meanwhile.
-     */
-    command
-        .spawn()
-        .map_err(|e| AppError::internal(format!("could not start the game: {e}")))?;
-
-    Ok(())
+    state.sessions.spawn(command, spec)
 }
 
 /// Start the game with the sandbox's virtual filesystem loaded into it.

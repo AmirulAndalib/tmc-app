@@ -30,4 +30,5 @@ pub mod plugins;
 pub mod rcon;
 pub mod sandbox;
 pub mod servers;
+pub mod sessions;
 pub mod settings;

@@ -29,6 +29,7 @@ pub mod net;
 pub mod plugins;
 pub mod rcon;
 pub mod secure;
+pub mod session;
 pub mod settings;
 
 pub use error::{AppError, AppResult};

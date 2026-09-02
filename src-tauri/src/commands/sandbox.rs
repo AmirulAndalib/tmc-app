@@ -687,7 +687,11 @@ pub fn sandbox_launch_preview(state: State<'_, AppState>, id: i64) -> AppResult<
     let plan = sandbox_plan(&state, id)?;
     let command = describe(&plan);
 
-    Ok(LaunchPreview { plan, command })
+    Ok(LaunchPreview {
+        plan,
+        command,
+        session: None,
+    })
 }
 
 /// Start the game with this sandbox in front of it.
@@ -701,6 +705,11 @@ pub fn sandbox_launch(
     state: State<'_, AppState>,
     id: i64,
 ) -> AppResult<LaunchPreview> {
+    let sandbox = state
+        .library
+        .sandbox_get(id)?
+        .ok_or_else(|| AppError::invalid("That sandbox does not exist."))?;
+
     let plan = sandbox_plan(&state, id)?;
     let command = describe(&plan);
 
@@ -713,9 +722,44 @@ pub fn sandbox_launch(
         plugin = plan.rule
     );
 
-    crate::spawn::run(&app, &plan)?;
+    /*
+     * A sandbox already running must not be started twice.
+     *
+     * Not a nicety: the second copy of a game opens the same files the first
+     * has mapped, and on Windows that is a game that fails to start with an
+     * error naming a file the user has never heard of. It also makes the play
+     * clock for that sandbox the sum of two overlapping sessions, which is a
+     * number that can exceed wall-clock time.
+     */
+    if state.sessions.running_for_sandbox(id) {
+        return Err(AppError::invalid(
+            "That sandbox is already running. Close the game first, or stop it from the Library.",
+        ));
+    }
 
-    Ok(LaunchPreview { plan, command })
+    let session = crate::spawn::run(
+        &app,
+        &state,
+        &plan,
+        tmc_core::session::SessionSpec {
+            app_id: Some(sandbox.app_id),
+            app_slug: sandbox.app_slug.clone(),
+            label: sandbox.name.clone(),
+            sandbox_id: Some(id),
+            /*
+             * The cloud install id, which is what playtime is reported against.
+             * A sandbox with `cloudSync` off has none — its play time stays on
+             * this device, which is the whole meaning of that switch.
+             */
+            install_id: sandbox.remote_id,
+        },
+    )?;
+
+    Ok(LaunchPreview {
+        plan,
+        command,
+        session: Some(session),
+    })
 }
 
 fn sandbox_plan(state: &State<'_, AppState>, id: i64) -> AppResult<LaunchPlan> {

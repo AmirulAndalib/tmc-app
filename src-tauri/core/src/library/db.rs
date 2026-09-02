@@ -41,7 +41,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::{AppError, AppResult};
 
 /// Schema version. Bumped whenever `migrate` gains a step.
-const SCHEMA_VERSION: i64 = 6;
+const SCHEMA_VERSION: i64 = 7;
 
 /// One subscribed item as this device knows it.
 ///
@@ -229,6 +229,7 @@ impl LibraryDb {
                     4 => conn.execute_batch(SCHEMA_V4)?,
                     5 => conn.execute_batch(SCHEMA_V5)?,
                     6 => conn.execute_batch(SCHEMA_V6)?,
+                    7 => conn.execute_batch(SCHEMA_V7)?,
                     _ => break,
                 }
 
@@ -525,6 +526,279 @@ const SCHEMA_V2: &str = r#"
                 CREATE INDEX IF NOT EXISTS deployment_mod_idx
                     ON deployment (sandbox_id, mod_key);
 "#;
+
+const SCHEMA_V7: &str = r#"
+                /*
+                 * Every launch this device has made, and how long it lasted.
+                 *
+                 * Durable rather than in-memory because the two questions it
+                 * answers outlive a process: "how long have I played this" is a
+                 * running total, and "what did I play last" is what orders the
+                 * Library. `session::Sessions` holds the LIVE half; this is
+                 * where a finished one lands.
+                 *
+                 * NO foreign key to `sandbox`, deliberately. A sandbox is
+                 * deleted when somebody is done with a mod list, and cascading
+                 * would erase the record of having played it — so `sandbox_id`
+                 * is allowed to dangle and every reader treats a missing
+                 * sandbox as "a profile that no longer exists" rather than as a
+                 * broken row.
+                 *
+                 * `seconds` is stored rather than derived from the two
+                 * timestamps because it is not always their difference: a
+                 * handoff launch has no measurable duration at all and stores
+                 * 0, and reconstructing that rule at every read is how one
+                 * reader eventually gets it wrong. See `session::SessionKind`.
+                 */
+                CREATE TABLE IF NOT EXISTS game_session (
+                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                    kind            TEXT    NOT NULL,
+                    app_id          INTEGER,
+                    app_slug        TEXT,
+                    label           TEXT    NOT NULL,
+                    sandbox_id      INTEGER,
+                    install_id      INTEGER,
+                    started_ms      INTEGER NOT NULL,
+                    ended_ms        INTEGER,
+                    seconds         INTEGER NOT NULL DEFAULT 0,
+                    exit_code       INTEGER,
+                    stopped_by_user INTEGER NOT NULL DEFAULT 0,
+                    /* Whether the account has been told about this session. */
+                    reported        INTEGER NOT NULL DEFAULT 0
+                );
+
+                CREATE INDEX IF NOT EXISTS game_session_app_idx
+                    ON game_session (app_id, started_ms DESC);
+
+                CREATE INDEX IF NOT EXISTS game_session_sandbox_idx
+                    ON game_session (sandbox_id, started_ms DESC);
+
+                CREATE INDEX IF NOT EXISTS game_session_unreported_idx
+                    ON game_session (reported, install_id);
+"#;
+
+/// One finished launch, as the database holds it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionRow {
+    pub id: i64,
+    pub kind: String,
+    pub app_id: Option<i64>,
+    pub app_slug: Option<String>,
+    pub label: String,
+    pub sandbox_id: Option<i64>,
+    pub install_id: Option<i64>,
+    pub started_ms: i64,
+    pub ended_ms: Option<i64>,
+    /// Measured seconds. Always 0 for a launch whose duration is unknowable.
+    pub seconds: i64,
+    pub exit_code: Option<i32>,
+    pub stopped_by_user: bool,
+}
+
+/// Play totals for one game or one sandbox.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlayTotals {
+    pub seconds: i64,
+    pub launches: i64,
+    /// When it was last started, or null for something never played here.
+    pub last_played_ms: Option<i64>,
+}
+
+impl LibraryDb {
+    // -------------------------------------------------------------- sessions
+
+    /// Write a finished session.
+    ///
+    /// Takes the already-computed `seconds` rather than deriving it, for the
+    /// reason the schema comment gives: a handoff's timestamps are a
+    /// millisecond apart and mean nothing.
+    #[allow(clippy::too_many_arguments)]
+    pub fn session_record(&self, row: &SessionRow) -> AppResult<i64> {
+        self.with(|conn| {
+            conn.execute(
+                "INSERT INTO game_session
+                     (kind, app_id, app_slug, label, sandbox_id, install_id,
+                      started_ms, ended_ms, seconds, exit_code, stopped_by_user)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                params![
+                    row.kind,
+                    row.app_id,
+                    row.app_slug,
+                    row.label,
+                    row.sandbox_id,
+                    row.install_id,
+                    row.started_ms,
+                    row.ended_ms,
+                    row.seconds,
+                    row.exit_code,
+                    row.stopped_by_user as i64,
+                ],
+            )?;
+
+            Ok(conn.last_insert_rowid())
+        })
+    }
+
+    /// Recent launches, newest first, optionally for one game.
+    pub fn session_history(&self, app_id: Option<i64>, limit: usize) -> AppResult<Vec<SessionRow>> {
+        let limit = limit.clamp(1, 500) as i64;
+
+        self.with(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT id, kind, app_id, app_slug, label, sandbox_id, install_id,
+                        started_ms, ended_ms, seconds, exit_code, stopped_by_user
+                   FROM game_session
+                  WHERE (?1 IS NULL OR app_id = ?1)
+                  ORDER BY started_ms DESC
+                  LIMIT ?2",
+            )?;
+
+            let rows = stmt
+                .query_map(params![app_id, limit], session_from_row)?
+                .collect::<Result<Vec<_>, _>>()?;
+
+            Ok(rows)
+        })
+    }
+
+    /// Total play time for every game this device has launched.
+    ///
+    /// One grouped query rather than one per row: the Library draws a total on
+    /// every game card, and a query per card is a query per frame on a screen
+    /// that redraws while a download runs.
+    pub fn playtime_by_app(&self) -> AppResult<std::collections::BTreeMap<i64, PlayTotals>> {
+        self.with(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT app_id, SUM(seconds), COUNT(*), MAX(started_ms)
+                   FROM game_session
+                  WHERE app_id IS NOT NULL
+                  GROUP BY app_id",
+            )?;
+
+            let mut out = std::collections::BTreeMap::new();
+
+            let rows = stmt.query_map([], |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    PlayTotals {
+                        seconds: r.get::<_, Option<i64>>(1)?.unwrap_or(0),
+                        launches: r.get::<_, i64>(2)?,
+                        last_played_ms: r.get::<_, Option<i64>>(3)?,
+                    },
+                ))
+            })?;
+
+            for row in rows {
+                let (id, totals) = row?;
+
+                out.insert(id, totals);
+            }
+
+            Ok(out)
+        })
+    }
+
+    /// Total play time per sandbox, for the sandbox list.
+    pub fn playtime_by_sandbox(&self) -> AppResult<std::collections::BTreeMap<i64, PlayTotals>> {
+        self.with(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT sandbox_id, SUM(seconds), COUNT(*), MAX(started_ms)
+                   FROM game_session
+                  WHERE sandbox_id IS NOT NULL
+                  GROUP BY sandbox_id",
+            )?;
+
+            let mut out = std::collections::BTreeMap::new();
+
+            let rows = stmt.query_map([], |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    PlayTotals {
+                        seconds: r.get::<_, Option<i64>>(1)?.unwrap_or(0),
+                        launches: r.get::<_, i64>(2)?,
+                        last_played_ms: r.get::<_, Option<i64>>(3)?,
+                    },
+                ))
+            })?;
+
+            for row in rows {
+                let (id, totals) = row?;
+
+                out.insert(id, totals);
+            }
+
+            Ok(out)
+        })
+    }
+
+    /// Sessions the account has not been told about yet.
+    ///
+    /// The report is a separate step from the record for one reason: a launch
+    /// happens while the device may be offline, and playtime that only counts
+    /// when the network happened to be up is playtime that quietly goes
+    /// missing. Rows are marked reported only once the API has accepted them.
+    pub fn sessions_unreported(&self, limit: usize) -> AppResult<Vec<SessionRow>> {
+        let limit = limit.clamp(1, 200) as i64;
+
+        self.with(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT id, kind, app_id, app_slug, label, sandbox_id, install_id,
+                        started_ms, ended_ms, seconds, exit_code, stopped_by_user
+                   FROM game_session
+                  WHERE reported = 0 AND install_id IS NOT NULL AND seconds > 0
+                  ORDER BY started_ms ASC
+                  LIMIT ?1",
+            )?;
+
+            let rows = stmt
+                .query_map(params![limit], session_from_row)?
+                .collect::<Result<Vec<_>, _>>()?;
+
+            Ok(rows)
+        })
+    }
+
+    /// Mark sessions as reported to the account.
+    pub fn sessions_mark_reported(&self, ids: &[i64]) -> AppResult<()> {
+        if ids.is_empty() {
+            return Ok(());
+        }
+
+        self.with(|conn| {
+            let tx = conn.unchecked_transaction()?;
+
+            for id in ids {
+                tx.execute(
+                    "UPDATE game_session SET reported = 1 WHERE id = ?1",
+                    params![id],
+                )?;
+            }
+
+            tx.commit()?;
+
+            Ok(())
+        })
+    }
+}
+
+fn session_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<SessionRow> {
+    Ok(SessionRow {
+        id: r.get(0)?,
+        kind: r.get(1)?,
+        app_id: r.get(2)?,
+        app_slug: r.get(3)?,
+        label: r.get(4)?,
+        sandbox_id: r.get(5)?,
+        install_id: r.get(6)?,
+        started_ms: r.get(7)?,
+        ended_ms: r.get(8)?,
+        seconds: r.get(9)?,
+        exit_code: r.get(10)?,
+        stopped_by_user: r.get::<_, i64>(11)? != 0,
+    })
+}
 
 impl LibraryDb {
     // ------------------------------------------------------------------ meta

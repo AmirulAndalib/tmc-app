@@ -2,6 +2,8 @@ import { z } from 'zod'
 
 import { call } from '~/lib/ipc'
 import {
+    AppListQuerySchema,
+    AppListResponseSchema,
     BrowseQuerySchema,
     BrowseResponseSchema,
     ContentDetailSchema,
@@ -9,15 +11,19 @@ import {
     InstallListResponse,
     InstallSchema,
     MeResponseSchema,
+    PlayLaunchResponseSchema,
     ReportCreateResponse,
     ReviewListResponse,
     ReviewVoteResponse,
     ReviewWriteResponse,
     SubscriptionSyncResponse,
     UserSettingsSchema,
+    type AppListQueryT,
     type BrowseQueryT,
     type ContentKindT,
     type InstallOptionsT,
+    type PlayModeT,
+    type PlayOptionValuesT,
     type SubKindT,
     type UserSettingsT,
 } from './contract'
@@ -130,6 +136,43 @@ export const api = {
         ),
 
     facets: (kind: ContentKindT) => get('/facets', FacetsResponseSchema, { kind }),
+
+    // ------------------------------------------------------------------ Apps
+    /**
+     * The whole app catalogue — the Apps tab's only source.
+     *
+     * Public, like `/browse`: signing in changes nothing about which games
+     * exist. It is a separate endpoint from `/facets` because facets answer
+     * "which games have assets", scoped to one kind and counted per kind, while
+     * this answers "which games are there" and carries the play vocabulary
+     * `/facets` has no reason to know about.
+     */
+    apps: (query: AppListQueryT = {}) =>
+        get('/apps', AppListResponseSchema, AppListQuerySchema.parse(query)),
+
+    /**
+     * Resolve a launch, server-side.
+     *
+     * Answers `null` for every refusal, which is the whole point of asking: the
+     * app never decides whether a game can be started by reading columns off a
+     * catalogue row, so the button that is drawn and the launch that happens
+     * agree by construction.
+     *
+     * This covers only the modes the SERVER owns. Starting a copy of the game
+     * installed on this machine is the device's own business and never comes
+     * through here — see `ipc.playLaunchNative`.
+     */
+    playLaunch: (input: {
+        appId: number
+        mode: PlayModeT
+        serverId?: number
+        locale?: string
+        options?: PlayOptionValuesT
+    }) =>
+        send('POST', '/play/launch', PlayLaunchResponseSchema, {
+            locale: 'en',
+            ...input,
+        }),
 
     /**
      * What people said about one item.

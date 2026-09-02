@@ -340,6 +340,15 @@ pub struct LaunchPreview {
     /// A readable one-liner. Display only — nothing consumes it, and it must
     /// never be fed to a shell.
     pub command: String,
+
+    /// The session that was opened, on the paths that actually start something.
+    ///
+    /// Absent from a PREVIEW, which is the point of a preview. Present on a
+    /// launch so the caller can watch that session rather than guess which of
+    /// the running ones it just created — two launches of the same game a
+    /// second apart are indistinguishable by app id.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session: Option<tmc_core::session::Session>,
 }
 
 /// Resolve what launching an install would run, WITHOUT running it.
@@ -352,7 +361,11 @@ pub fn launch_preview(state: State<'_, AppState>, install_id: i64) -> AppResult<
     let plan = state.launch_plan(install_id)?;
     let command = describe(&plan);
 
-    Ok(LaunchPreview { plan, command })
+    Ok(LaunchPreview {
+        plan,
+        command,
+        session: None,
+    })
 }
 
 /// Start the game.
@@ -370,6 +383,24 @@ pub async fn launch_install(
     let plan = state.launch_plan(install_id)?;
     let command = describe(&plan);
 
+    /*
+     * Read for the SESSION's label and game, not for the launch — the plan is
+     * already resolved and nothing below changes it. A payload that has gone
+     * missing simply files the session under no game, which is a worse history
+     * entry and not a failed launch.
+     */
+    let payload = state.install_payload(install_id);
+
+    let str_at = |path: &[&str]| -> Option<String> {
+        let mut node = payload.as_ref()?;
+
+        for key in path {
+            node = node.get(key)?;
+        }
+
+        node.as_str().map(str::to_owned)
+    };
+
     audit!(
         state.audit,
         Security,
@@ -379,11 +410,37 @@ pub async fn launch_install(
         plugin = plan.rule
     );
 
-    crate::spawn::run(&app, &plan)?;
+    let session = crate::spawn::run(
+        &app,
+        &state,
+        &plan,
+        tmc_core::session::SessionSpec {
+            app_id: payload
+                .as_ref()
+                .and_then(|p| p.get("appId"))
+                .and_then(serde_json::Value::as_i64),
+            app_slug: str_at(&["app", "slug"]),
+            label: str_at(&["name"])
+                .or_else(|| str_at(&["app", "name"]))
+                .unwrap_or_else(|| "Game".to_string()),
+            sandbox_id: None,
+            install_id: Some(install_id),
+        },
+    )?;
 
-    // Report the play session so the account's install shows a last-played
-    // time on every device. Best effort — a failed report is not a failed
-    // launch.
+    /*
+     * The account is told the install was STARTED, not how long it ran — that
+     * is not known yet, and will not be until the game exits.
+     *
+     * `playedSeconds: 0` is therefore correct here rather than a placeholder:
+     * the field is "time since the last report", and no time has passed. The
+     * duration is sent later by `sessions_flush`, from the row the supervisor
+     * writes when the process ends. Before sessions existed this was the ONLY
+     * report, which is why every install on every account read zero.
+     *
+     * Best effort — a failed report is not a failed launch, and the session row
+     * survives to be reported on the next flush regardless.
+     */
     let payload = serde_json::json!({ "id": install_id, "playedSeconds": 0 });
 
     if let Err(err) = state
@@ -399,7 +456,11 @@ pub async fn launch_install(
         tracing::warn!("could not report launch: {}", err.detail());
     }
 
-    Ok(LaunchPreview { plan, command })
+    Ok(LaunchPreview {
+        plan,
+        command,
+        session: Some(session),
+    })
 }
 
 /// Does this game have a launch rule at all? Drives whether the button exists.

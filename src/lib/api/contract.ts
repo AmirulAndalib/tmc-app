@@ -55,7 +55,14 @@ export function ApiOk<S extends z.ZodTypeAny>(schema: S) {
 /** Self-reported client identity. Untrusted — a label for the approval screen. */
 export const ClientInfoSchema = z.object({
     name: z.string().min(1).max(64),
-    platform: z.enum(['windows', 'macos', 'linux', 'android', 'ios', 'unknown']),
+    platform: z.enum([
+        'windows',
+        'macos',
+        'linux',
+        'android',
+        'ios',
+        'unknown',
+    ]),
     version: z.string().min(1).max(32),
 })
 
@@ -470,7 +477,12 @@ export type ServerOsT = (typeof ServerOsVals)[number]
  * A CLAIM by the community's owner, never an enforced gate — nothing verifies
  * anybody's age. Any surface rendering it must read as "this community says".
  */
-export const CommunityAgeVals = ['NONE', 'ADULT_18', 'ADULT_21'] as const
+export const CommunityAgeVals = [
+    'NONE',
+    'ADULT_18',
+    'ADULT_21',
+    'ADULT_25',
+] as const
 export const CommunityAgeSchema = z.enum(CommunityAgeVals)
 export type CommunityAgeT = (typeof CommunityAgeVals)[number]
 
@@ -626,7 +638,9 @@ export const FacetsResponseSchema = z.object({
      * nothing, and a filter that can only ever return an empty list is worse
      * than no filter.
      */
-    countries: z.array(RefSchema.extend({ count: z.number().int() })).default([]),
+    countries: z
+        .array(RefSchema.extend({ count: z.number().int() }))
+        .default([]),
 })
 
 export type FacetsResponseT = z.infer<typeof FacetsResponseSchema>
@@ -1040,10 +1054,7 @@ export const DeviceDownloadReportRequest = z.object({
      * a device list renders, and the items are for the one device somebody
      * opened.
      */
-    items: z
-        .array(DeviceDownloadItemSchema)
-        .max(MAX_REPORTED_DOWNLOADS)
-        .default([]),
+    items: z.array(DeviceDownloadItemSchema).max(MAX_REPORTED_DOWNLOADS).default([]),
 })
 
 export const DeviceDownloadSchema = z.object({
@@ -1232,3 +1243,322 @@ export const AppVersionResponse = z.object({
 })
 
 export type AppVersionResponseT = z.infer<typeof AppVersionResponse>
+
+/* ========================================================================== */
+/*  Apps, and playing them                                                    */
+/* ========================================================================== */
+
+/**
+ * THE APP CATALOGUE, AND WHAT THE APP MAY DO WITH IT.
+ *
+ * Everything below backs two screens the website has no equivalent of. The site
+ * is built around ONE chosen game — its chrome names it, its browser is scoped
+ * to it — so it has never needed to answer "what games are there, and which of
+ * them can I actually start right now". The app opens on a flat list across the
+ * whole catalogue and that IS its front door, so the question is unavoidable.
+ *
+ * Two endpoints:
+ *
+ *   * **`GET /apps`** — the catalogue. Every published app, with its artwork,
+ *     what it is, how deeply it is wired into TMC, and — when it is playable —
+ *     the launch vocabulary below.
+ *   * **`POST /play/launch`** — resolve one launch, server-side. The app never
+ *     decides whether something can be started by reading columns; it asks, and
+ *     a refusal is `null` rather than an error, exactly as `play.launch` does
+ *     for the website's own player.
+ *
+ * The duplication with `~/types/play/*` is deliberate and matches the rule at
+ * the top of this file: the contract imports nothing but zod, because it is
+ * copied verbatim into a repository that has no `~/types/play` to import from.
+ * Every enum here is checked against its source by a test.
+ */
+
+/** Mirrors `AppType` in `prisma/models/app.prisma`. */
+export const AppTypeVals = [
+    'GAME',
+    'GAME_SINGLEPLAYER',
+    'GAME_ENGINE',
+    'VOIP',
+    'OTHER',
+] as const
+
+export const AppTypeSchema = z.enum(AppTypeVals)
+export type AppTypeT = (typeof AppTypeVals)[number]
+
+/**
+ * Mirrors `AppIntegrationType`. Capability CLAIMS, not switches.
+ *
+ * The app reads two of them. `TMC_APP_MANAGE` is what puts a game in the "you
+ * can mod this here" half of the Apps tab; `TMC_APP_WEB` is half of the `app`
+ * play mode. Nothing here unlocks anything on its own — the launch endpoint
+ * re-derives every decision from the columns that actually gate it.
+ */
+export const AppIntegrationVals = [
+    'TMC_APP_MANAGE',
+    'TMC_APP_TRACK',
+    'TMC_APP_SRV_TRACK',
+    'TMC_APP_SRV_AUTH',
+    'TMC_APP_WEB',
+    'TMC_APP_SRV_MANAGE',
+] as const
+
+export const AppIntegrationSchema = z.enum(AppIntegrationVals)
+export type AppIntegrationT = (typeof AppIntegrationVals)[number]
+
+/**
+ * How a game can be launched. Mirrors `PlayModeT` in `~/types/play/mode.ts`.
+ *
+ * `web` is a JavaScript loader the app runs in an isolated window; `app` is a
+ * deep link the WEBSITE hands to an installed copy of this app. The second is
+ * listed here for completeness — the app itself never follows one, because the
+ * URI's destination is the process already reading it.
+ *
+ * A third mode exists only on the device and deliberately is not here:
+ * launching a copy of the game that is installed on this machine. The server
+ * cannot know whether that is possible, so it is not the server's to declare.
+ */
+export const PlayModeVals = ['web', 'app'] as const
+export const PlayModeSchema = z.enum(PlayModeVals)
+export type PlayModeT = (typeof PlayModeVals)[number]
+
+/** Mirrors `PlayOptionKindT`. */
+export const PlayOptionKindVals = ['bool', 'select', 'int', 'text'] as const
+export const PlayOptionKindSchema = z.enum(PlayOptionKindVals)
+
+/**
+ * One launch option an app declares.
+ *
+ * A FORM DESCRIPTION and nothing more — see `~/types/play/option.ts` for why it
+ * cannot express a condition or a computation. The same reasoning as
+ * `sandbox.json`'s `options`: a settings schema that can do those is a program,
+ * and neither the site nor the app is willing to evaluate somebody else's.
+ */
+export const PlayOptionSchema = z.discriminatedUnion('kind', [
+    z.object({
+        key: z.string(),
+        label: z.string(),
+        help: z.string().optional(),
+        modes: z.array(PlayModeSchema).optional(),
+        kind: z.literal('bool'),
+        def: z.boolean(),
+    }),
+    z.object({
+        key: z.string(),
+        label: z.string(),
+        help: z.string().optional(),
+        modes: z.array(PlayModeSchema).optional(),
+        kind: z.literal('select'),
+        def: z.string(),
+        choices: z.array(z.object({ value: z.string(), label: z.string() })),
+    }),
+    z.object({
+        key: z.string(),
+        label: z.string(),
+        help: z.string().optional(),
+        modes: z.array(PlayModeSchema).optional(),
+        kind: z.literal('int'),
+        def: z.number().int(),
+        min: z.number().int(),
+        max: z.number().int(),
+    }),
+    z.object({
+        key: z.string(),
+        label: z.string(),
+        help: z.string().optional(),
+        modes: z.array(PlayModeSchema).optional(),
+        kind: z.literal('text'),
+        def: z.string(),
+        maxLen: z.number().int().optional(),
+    }),
+])
+
+export type PlayOptionT = z.infer<typeof PlayOptionSchema>
+
+export const PlayOptionValueSchema = z.union([
+    z.string(),
+    z.number(),
+    z.boolean(),
+])
+
+export const PlayOptionValuesSchema = z.record(
+    z.string(),
+    PlayOptionValueSchema
+)
+
+export type PlayOptionValuesT = z.infer<typeof PlayOptionValuesSchema>
+
+/**
+ * What an app declares about being played, or null when it declares nothing.
+ *
+ * `directPlay` is the field the Apps tab exists to respect. It answers a
+ * different question from `modes`: a game can be perfectly launchable and still
+ * only make sense with a server chosen, in which case pressing Play on the GAME
+ * has nowhere to go. The server enforces it in `/play/launch` as well — this
+ * field only decides what is drawn, and a client that ignores it gets a `null`.
+ */
+export const AppPlaySchema = z.object({
+    /** In preference order. Never empty — a null `play` means "no modes". */
+    modes: z.array(PlayModeSchema),
+    directPlay: z.boolean(),
+    /** Operator-written note, shown above the launch options. */
+    help: z.string().nullable(),
+    options: z.array(PlayOptionSchema).default([]),
+})
+
+export type AppPlayT = z.infer<typeof AppPlaySchema>
+
+/**
+ * Counts, per app, for the catalogue grid.
+ *
+ * Whole numbers with a zero default rather than nullable: "we did not count" and
+ * "there are none" are the same fact to a card that has to draw a number, and a
+ * nullable count means every caller writes the same `?? 0`.
+ */
+export const AppCountsSchema = z.object({
+    mods: z.number().int().nonnegative().default(0),
+    assets: z.number().int().nonnegative().default(0),
+    servers: z.number().int().nonnegative().default(0),
+    /** Players on those servers right now, summed. */
+    players: z.number().int().nonnegative().default(0),
+})
+
+/** One row in the Apps tab. */
+export const AppSummarySchema = z.object({
+    id: z.number().int(),
+    name: z.string(),
+    /** URL slug, when it has a usable one. */
+    slug: z.string().nullable(),
+    description: z.string().nullable(),
+    type: AppTypeSchema,
+    images: ImageSetSchema,
+    isOfficial: z.boolean(),
+    /** Every integration the app claims. */
+    integrations: z.array(AppIntegrationSchema).default([]),
+    /** True for `GAME`, `GAME_ENGINE` and `VOIP` — see `AppHasServers`. */
+    hasServers: z.boolean(),
+    /** The engine this app is built on, when it names one. */
+    engine: RefSchema.nullable().default(null),
+    counts: AppCountsSchema,
+    /** Null when the app is not playable at all. */
+    play: AppPlaySchema.nullable().default(null),
+    webUrl: z.string(),
+})
+
+export type AppSummaryT = z.infer<typeof AppSummarySchema>
+
+/** How the Apps tab orders and narrows the catalogue. */
+export const AppSortVals = ['players', 'servers', 'content', 'name'] as const
+export const AppSortSchema = z.enum(AppSortVals)
+export type AppSortT = (typeof AppSortVals)[number]
+
+export const AppListQuerySchema = z.object({
+    search: z.string().max(120).optional(),
+    type: AppTypeSchema.optional(),
+    /** Only apps that can be launched from here. */
+    playable: QueryBool.optional(),
+    /** Only apps the app can install mods for (`TMC_APP_MANAGE`). */
+    managed: QueryBool.optional(),
+    sort: AppSortSchema.default('players'),
+    cursor: z.string().max(64).optional(),
+    limit: z.coerce.number().int().min(1).max(100).default(50),
+})
+
+export type AppListQueryT = z.input<typeof AppListQuerySchema>
+
+export const AppListResponseSchema = z.object({
+    apps: z.array(AppSummarySchema),
+    nextCursor: z.string().nullable(),
+    total: z.number().int().nonnegative().nullable(),
+    /**
+     * Whether the play centre is switched on at all.
+     *
+     * Separate from "no app on this page is playable", exactly as the website's
+     * `anyPlayable` is: an operator switching the feature off must not present
+     * to a user as every game having lost its Play button.
+     */
+    playEnabled: z.boolean().default(false),
+})
+
+export type AppListResponseT = z.infer<typeof AppListResponseSchema>
+
+// ----------------------------------------------------------- Launching one
+
+/**
+ * The descriptor a web loader is handed. Mirrors `GameBootDescriptorT`.
+ *
+ * Passed to the loader by assignment to a global rather than on the script's
+ * query string — the app inherits that decision from the website's player, and
+ * for the same reason: a server address on a URL ends up in every cache and
+ * history entry that URL touches.
+ */
+export const GameBootServerSchema = z.object({
+    id: z.number().int(),
+    name: z.string().nullable(),
+    host: z.string().nullable(),
+    ip4: z.string().nullable(),
+    ip6: z.string().nullable(),
+    port: z.number().int().nullable(),
+    portQuery: z.number().int().nullable(),
+    hostName: z.string().nullable(),
+    map: z.string().nullable(),
+    gameMode: z.string().nullable(),
+    connectUrl: z.string().nullable(),
+})
+
+export const GameBootSchema = z.object({
+    version: z.literal(1),
+    app: z.object({
+        id: z.number().int(),
+        name: z.string(),
+        appId: z.string().nullable(),
+        gameType: z.string().nullable(),
+    }),
+    server: GameBootServerSchema.nullable(),
+    party: z
+        .object({
+            id: z.string(),
+            name: z.string().nullable(),
+            maxUsers: z.number().int(),
+        })
+        .nullable(),
+    locale: z.string(),
+    options: PlayOptionValuesSchema.default({}),
+})
+
+export type GameBootT = z.infer<typeof GameBootSchema>
+
+export const PlayLaunchRequestSchema = z.object({
+    appId: z.number().int().positive(),
+    mode: PlayModeSchema,
+    serverId: z.number().int().positive().optional(),
+    locale: z.string().max(16).default('en'),
+    options: PlayOptionValuesSchema.optional(),
+})
+
+/**
+ * A resolved launch, or `null` when there is not one.
+ *
+ * `null` is the whole refusal vocabulary and it covers every reason: the app is
+ * hidden, the feature is off, the mode is not available, the server belongs to
+ * another game, or `directPlay` is off and no server was named. Naming which
+ * would tell a caller which columns to probe, and none of them changes what the
+ * app does — it says the game cannot be started from here and points at its
+ * page, which is where the servers are.
+ */
+export const PlayLaunchResponseSchema = z
+    .discriminatedUnion('mode', [
+        z.object({
+            mode: z.literal('web'),
+            /** The loader script. Absolute, and same-origin with the site. */
+            loaderUrl: z.string(),
+            boot: GameBootSchema,
+        }),
+        z.object({
+            mode: z.literal('app'),
+            /** The resolved deep link, tokens already substituted. */
+            uri: z.string(),
+        }),
+    ])
+    .nullable()
+
+export type PlayLaunchResponseT = z.infer<typeof PlayLaunchResponseSchema>

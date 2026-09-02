@@ -17,6 +17,7 @@ use tmc_core::plugins::registry::Registry;
 use tmc_core::plugins::{jail_for, JailRoots};
 use tmc_core::rcon::RconPool;
 use tmc_core::secure::SecureStore;
+use tmc_core::session::{Session, SessionKind, Sessions};
 use tmc_core::settings::{AppSettings, SettingsStore};
 
 use crate::paths::AppPaths;
@@ -50,6 +51,15 @@ pub struct AppState {
     /// Open RCON sessions, pooled so a console is a conversation rather than a
     /// reconnect per line.
     pub rcon: RconPool,
+
+    /// Games this process has started, live and recent.
+    ///
+    /// An `Arc` because the supervisor thread that waits on each child holds
+    /// one — see [`tmc_core::session::Sessions::spawn`]. One registry per
+    /// process, like the download queue and for the same reason: two would each
+    /// know about half the running games, and the half a deploy checked would
+    /// be the wrong half.
+    pub sessions: Arc<Sessions>,
 
     /// The key that encrypts RCON passwords.
     ///
@@ -139,6 +149,45 @@ impl AppState {
         let downloads = DownloadManager::new(file_http, Arc::clone(&audit));
         let rcon = RconPool::new(Arc::clone(&audit));
 
+        let sessions = Arc::new(Sessions::new(paths.logs.join("sessions")));
+
+        /*
+         * A finished session is WRITTEN, not reported.
+         *
+         * The hook runs on the supervisor thread the moment a game exits, and
+         * that thread has no runtime, no network and nowhere to put a failure.
+         * More importantly a game is very often played offline — a laptop on a
+         * train is the case this feature is for — and playtime that only counts
+         * when the network happened to be up is playtime that silently goes
+         * missing. So the row lands in the database marked unreported and
+         * `sessions_flush` sends it whenever the device next has an API to talk
+         * to.
+         */
+        {
+            let db = Arc::clone(&library);
+            let audit = Arc::clone(&audit);
+
+            sessions.on_end(Arc::new(move |session: &Session| {
+                let row = session_row(session);
+
+                if let Err(err) = db.session_record(&row) {
+                    tracing::warn!("could not record play session: {}", err.detail());
+                }
+
+                tmc_core::audit!(
+                    audit,
+                    Info,
+                    App,
+                    "session.end",
+                    format!(
+                        "{} ran for {}s",
+                        session.label,
+                        session.seconds(tmc_core::session::now_ms()).unwrap_or(0)
+                    )
+                );
+            }));
+        }
+
         Ok(Self {
             paths,
             settings,
@@ -151,6 +200,7 @@ impl AppState {
             version,
             downloads,
             rcon,
+            sessions,
             cipher: std::sync::OnceLock::new(),
             library,
             app_plugins: RwLock::new(Arc::new(app_plugins)),
@@ -308,7 +358,14 @@ impl AppState {
     // ------------------------------------------------------------- Installs
 
     /// One mirrored install's payload, parsed.
-    fn install_payload(&self, id: i64) -> Option<serde_json::Value> {
+    /// The account's own record of one install, as it was last synced.
+    ///
+    /// `pub(crate)` rather than private because the launcher needs the same
+    /// three facts — the game, its slug and the install's name — to label a
+    /// play session, and re-deriving them from the library's item rows gets a
+    /// different answer: a library row is a subscribed MOD, and an install with
+    /// no mods in it has no row at all.
+    pub(crate) fn install_payload(&self, id: i64) -> Option<serde_json::Value> {
         self.library
             .install_payloads()
             .ok()?
@@ -520,5 +577,39 @@ fn program_data_dir() -> Option<PathBuf> {
     #[cfg(not(windows))]
     {
         None
+    }
+}
+
+/// Turn a live session into the row the database stores.
+///
+/// The `seconds` conversion is the whole reason this is a function rather than
+/// a `From` impl on the core type: `Session::seconds` answers `None` for a
+/// launch whose duration is unknowable (a `steam://` handoff), and the column
+/// stores `0` for exactly that case. Collapsing `None` to `0` is right HERE and
+/// wrong at every other call site, where the difference between "did not play"
+/// and "cannot say" is the thing being displayed.
+fn session_row(session: &Session) -> tmc_core::library::SessionRow {
+    let kind = match session.kind {
+        SessionKind::Process => "process",
+        SessionKind::Handoff => "handoff",
+        SessionKind::Web => "web",
+    };
+
+    tmc_core::library::SessionRow {
+        // Assigned by SQLite on insert.
+        id: 0,
+        kind: kind.to_string(),
+        app_id: session.app_id,
+        app_slug: session.app_slug.clone(),
+        label: session.label.clone(),
+        sandbox_id: session.sandbox_id,
+        install_id: session.install_id,
+        started_ms: session.started_ms,
+        ended_ms: session.ended_ms,
+        seconds: session
+            .seconds(session.ended_ms.unwrap_or_else(tmc_core::session::now_ms))
+            .unwrap_or(0),
+        exit_code: session.exit_code,
+        stopped_by_user: session.stopped_by_user,
     }
 }

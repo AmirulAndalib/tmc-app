@@ -21,6 +21,6 @@ pub mod install;
 pub mod sandbox;
 pub mod sync;
 
-pub use db::{LibraryDb, LibraryEntry};
+pub use db::{LibraryDb, LibraryEntry, PlayTotals, SessionRow};
 pub use install::{InstallCtx, InstallOutcome};
 pub use sync::{sync_installs, sync_once, SyncReport, FULL_SYNC_EVERY};
