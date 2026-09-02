@@ -940,14 +940,19 @@ impl AppPluginFile {
 /// whatever program claimed a scheme — `file:` would open a local executable,
 /// `http:` a browser, and a bare word could be anything. These four are game
 /// clients and nothing else.
-const LAUNCH_SCHEMES: [&str; 4] = [
+///
+/// Exported because `commands::play` applies the same list to a SERVER's
+/// `connectUrl`. That string comes from the API rather than from a plugin, and
+/// it is opened by the same OS call with the same consequences — a second,
+/// private copy of this rule is how the two end up disagreeing about `file:`.
+pub const LAUNCH_SCHEMES: [&str; 4] = [
     "steam://",
     "com.epicgames.launcher://",
     "uplay://",
     "origin://",
 ];
 
-fn is_allowed_launch_uri(uri: &str) -> bool {
+pub fn is_allowed_launch_uri(uri: &str) -> bool {
     let lower = uri.to_ascii_lowercase();
 
     if lower.len() > 512 {

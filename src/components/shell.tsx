@@ -4,6 +4,7 @@ import {
     FiBox,
     FiPackage,
     FiServer,
+    FiCompass,
     FiGrid,
     FiSettings,
     FiUser,
@@ -69,6 +70,16 @@ type Tab = {
 }
 
 const TABS: Tab[] = [
+    {
+        // The front door, and the app's own answer to a question the website
+        // cannot ask: what is there, and which of it can I start right now.
+        // First because a flat catalogue across every game is what this app
+        // opens on — the site has to make you choose a game before it can show
+        // you anything.
+        to: '/apps',
+        label: 'Apps',
+        icon: FiGrid,
+    },
     { to: '/browse/mod', label: 'Mods', icon: FiPackage, match: ['/view/mod'] },
     { to: '/browse/asset', label: 'Assets', icon: FiBox, match: ['/view/asset'] },
     {
@@ -80,7 +91,7 @@ const TABS: Tab[] = [
     {
         to: '/browse/community',
         label: 'Discover',
-        icon: FiGrid,
+        icon: FiCompass,
         match: [
             '/browse/article',
             '/browse/collection',

@@ -519,6 +519,53 @@ export const ipc = {
     detectApplyMany: (games: [slug: string, path: string][]) =>
         call('detect_apply_many', z.array(ApplyOutcomeSchema), { games }),
 
+    // ------------------------------------------------------------------ Play
+    //
+    // The webview names IDS. It never names a loader URL: that string becomes a
+    // `<script src>` on the SITE's origin, so Rust resolves the launch through
+    // `/play/launch` itself — the same rule `downloadRelease` follows.
+
+    /**
+     * Open the game in a window of its own.
+     *
+     * The window is a REMOTE page, which is the isolation the feature rests on:
+     * Tauri exposes commands to the app's own origin only, so a loader running
+     * there has no `invoke` at all. See `commands/play.rs`.
+     */
+    playOpenWeb: (request: {
+        appId: number
+        serverId?: number
+        options?: Record<string, string | number | boolean>
+        title?: string
+        appSlug?: string
+    }) => call('play_open_web', SessionSchema, { request }),
+
+    /** Resolve the site's `playAppUri` and hand it to the OS. */
+    playHandoff: (request: {
+        appId: number
+        serverId?: number
+        options?: Record<string, string | number | boolean>
+        title?: string
+        appSlug?: string
+    }) => call('play_handoff', SessionSchema, { request }),
+
+    /**
+     * Hand a server's own connect link to the installed game client.
+     *
+     * Takes a server ID, never a URL: "open this URI" hands a string to
+     * whatever program claimed a scheme, so Rust reads the link from the API
+     * and checks it against the same closed scheme list a plugin's launch rule
+     * is held to. It cannot go through `openUrl` — that capability is scoped to
+     * `https://*`, which is exactly what keeps the webview from opening a
+     * `steam://` link on its own.
+     */
+    playConnect: (serverId: number) =>
+        call('play_connect', SessionSchema, { serverId }),
+
+    playClose: () => call('play_close', z.void()),
+
+    playState: () => call('play_state', z.object({ open: z.boolean() })),
+
     // -------------------------------------------------------------- Sessions
     //
     // Nothing here STARTS anything. A launch goes through `launchInstall` or

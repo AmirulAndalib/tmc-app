@@ -10,6 +10,7 @@ import { LiveQueryProvider } from '~/lib/hooks/use-live-query'
 import { LibraryProvider } from '~/lib/library/provider'
 import { DownloadsProvider } from '~/lib/downloads/provider'
 import Shell from '~/components/shell'
+import AppsRoute from '~/routes/apps'
 import BrowseRoute from '~/routes/browse'
 import LibraryRoute from '~/routes/library'
 import InstallsRoute from '~/routes/installs'
@@ -38,7 +39,8 @@ const router = createHashRouter([
         path: '/',
         element: <Shell />,
         children: [
-            { index: true, element: <Navigate to="/browse/mod" replace /> },
+            { index: true, element: <Navigate to="/apps" replace /> },
+            { path: 'apps', element: <AppsRoute /> },
             { path: 'browse/:kind', element: <BrowseRoute /> },
             { path: 'view/:kind/:id', element: <ViewRoute /> },
             { path: 'library', element: <LibraryRoute /> },
@@ -60,7 +62,7 @@ const router = createHashRouter([
                     { path: 'logging', element: <LoggingRoute /> },
                 ],
             },
-            { path: '*', element: <Navigate to="/browse/mod" replace /> },
+            { path: '*', element: <Navigate to="/apps" replace /> },
         ],
     },
 ])

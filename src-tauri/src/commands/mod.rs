@@ -26,6 +26,7 @@ pub mod downloads;
 pub mod fs;
 pub mod library;
 pub mod logs;
+pub mod play;
 pub mod plugins;
 pub mod rcon;
 pub mod sandbox;

@@ -17,8 +17,13 @@
  *
  * WHAT IS PERSISTED, AND WHY IT IS AN ALLOW-LIST
  * ---------------------------------------------
- * Only [`PERSISTED`] — browse pages, item details, facets and reviews. All four
- * are public catalogue data that the server would hand to anybody.
+ * Only [`PERSISTED`] — browse pages, item details, facets, reviews and the app
+ * catalogue. All five are public catalogue data that the server would hand to
+ * anybody.
+ *
+ * `apps` earns its place more than most: it is the FIRST screen, so a cold
+ * launch with no network shows the games it saw last time instead of an empty
+ * grid, and the catalogue changes on the scale of weeks.
  *
  * An allow-list rather than "everything except the sensitive ones", because the
  * failure modes are not symmetrical: forgetting to exclude a new query that
@@ -46,7 +51,7 @@ import type { QueryClient } from '@tanstack/react-query'
 const STORAGE_KEY = 'tmc.offline-cache.v1'
 
 /** Query-key prefixes that may be written to disk. Public data only. */
-const PERSISTED = ['browse', 'content', 'facets', 'reviews'] as const
+const PERSISTED = ['browse', 'content', 'facets', 'reviews', 'apps'] as const
 
 /**
  * How old a stored entry may be and still be worth showing.
