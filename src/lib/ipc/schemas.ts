@@ -758,6 +758,52 @@ export const QuickInstallReportSchema = z.object({
 
 export type QuickInstallReportT = z.infer<typeof QuickInstallReportSchema>
 
+// ----------------------------------------------------------------- Sharing
+
+/**
+ * A sandbox as it travels between machines.
+ *
+ * Note what is NOT in it: no game directory, no launch environment, no
+ * deployment ledger, no staging paths. All four describe one computer, and a
+ * code is by definition going to a different one — see `library::share`.
+ */
+export const SharedSandboxSchema = z.object({
+    v: z.number(),
+    appId: z.number(),
+    appSlug: z.string().nullable(),
+    appName: z.string().nullable(),
+    name: z.string(),
+    description: z.string().nullable(),
+    environment: SandboxEnvironmentSchema,
+    strategy: DeployStrategySchema,
+    gameVersion: z.string().nullable(),
+    loader: z.string().nullable(),
+    preset: z.string().nullable(),
+    options: z.record(z.string(), z.unknown()),
+    launchArgs: z.array(z.string()),
+    mods: z.array(
+        z.object({
+            kind: z.string(),
+            itemId: z.number(),
+            /** The name AS EXPORTED. Display only — somebody else chose it. */
+            name: z.string(),
+            enabled: z.boolean(),
+            priority: z.number(),
+        })
+    ),
+})
+
+export type SharedSandboxT = z.infer<typeof SharedSandboxSchema>
+
+export const ImportReportSchema = z.object({
+    sandbox: SandboxRowSchema.nullable(),
+    added: z.number(),
+    /** Items that could not be added, one readable line each. */
+    skipped: z.array(z.string()),
+})
+
+export type ImportReportT = z.infer<typeof ImportReportSchema>
+
 
 /** One setting a game's launch rule understands — `apps::OptionSpec`. */
 export const OptionSpecSchema = z.object({

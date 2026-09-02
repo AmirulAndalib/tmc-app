@@ -134,6 +134,23 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
 
                 if (updates && updates.updated.length > 0)
                     setLastUpdate({ at: Date.now(), report: updates })
+
+                /*
+                 * Outstanding play time, sent on the same pass.
+                 *
+                 * A finished session is written to the device and marked
+                 * unreported rather than posted when the game exits, because a
+                 * game is very often played offline — a laptop on a train is
+                 * the case the feature is for. This loop is the device's own
+                 * "am I online now?" heartbeat, so it is the right place to
+                 * drain that queue.
+                 *
+                 * Swallowed like the auto-update above and for the same reason:
+                 * a report that could not be sent stays queued and goes out on
+                 * the next pass, so there is nothing for a user to act on and a
+                 * banner would be reporting a non-problem.
+                 */
+                void ipc.sessionsFlush().catch(() => null)
             } catch (err) {
                 setError(messageOf(err))
             } finally {

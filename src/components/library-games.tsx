@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import {
@@ -9,6 +9,7 @@ import {
     FiPlay,
     FiPlus,
     FiSearch,
+    FiShare2,
     FiSquare,
     FiTerminal,
 } from 'react-icons/fi'
@@ -23,6 +24,10 @@ import SandboxEditor from '~/components/sandbox-editor'
 import ScanDialog from '~/components/scan-dialog'
 import PlayDialog, { type PlayTargetT } from '~/components/play-dialog'
 import SessionHistory from '~/components/session-history'
+import {
+    ExportSandbox,
+    ImportSandbox,
+} from '~/components/sandbox-share'
 import type { SandboxRowT, SessionT } from '~/lib/ipc/schemas'
 
 /**
@@ -242,13 +247,20 @@ function GameCard({
                                 </span>
                             )}
 
-                            <button
-                                type="button"
-                                onClick={() => onEdit(sandbox)}
-                                className="ml-auto shrink-0 rounded-lg border border-border px-2 py-0.5 text-[11px]"
-                            >
-                                Edit
-                            </button>
+                            <div className="ml-auto flex shrink-0 items-center gap-1">
+                                <ExportSandbox
+                                    id={sandbox.id}
+                                    name={sandbox.name}
+                                />
+
+                                <button
+                                    type="button"
+                                    onClick={() => onEdit(sandbox)}
+                                    className="rounded-lg border border-border px-2 py-0.5 text-[11px]"
+                                >
+                                    Edit
+                                </button>
+                            </div>
                         </li>
                     ))}
                 </ul>
@@ -263,6 +275,7 @@ export default function LibraryGames() {
 
     const [search, setSearch] = useState('')
     const [scanning, setScanning] = useState(false)
+    const [importing, setImporting] = useState(false)
     const [editing, setEditing] = useState<{
         appId: number
         appSlug: string | null
@@ -302,6 +315,22 @@ export default function LibraryGames() {
         queryFn: () => api.apps({ limit: 100 }),
         staleTime: 5 * 60 * 1000,
     })
+
+    /*
+     * Play totals move only when a session ends, and the running poll is the
+     * only thing that notices — the supervisor closes a session on a thread
+     * with no webview to notify, so there is no event to listen for. Keying off
+     * the COUNT catches both ends of a launch and costs one query per change
+     * rather than one per poll.
+     */
+    const runningCount = running.data?.length ?? 0
+
+    useEffect(() => {
+        void playtime.refetch()
+        // `playtime` is a stable query object; depending on it would re-run
+        // this on its own result.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [runningCount])
 
     const refresh = useCallback(() => {
         void sandboxes.refetch()
@@ -416,6 +445,15 @@ export default function LibraryGames() {
                     Find games
                 </button>
 
+                <button
+                    type="button"
+                    onClick={() => setImporting(true)}
+                    className="flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs"
+                >
+                    <FiShare2 className="size-3.5" />
+                    Import a code
+                </button>
+
                 <Link
                     to="/rcon"
                     className="flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs"
@@ -495,6 +533,13 @@ export default function LibraryGames() {
                  * and the launch that failed is the row above this one.
                  */
                 <SessionHistory />
+            )}
+
+            {importing && (
+                <ImportSandbox
+                    onClose={() => setImporting(false)}
+                    onImported={refresh}
+                />
             )}
 
             {scanning && (

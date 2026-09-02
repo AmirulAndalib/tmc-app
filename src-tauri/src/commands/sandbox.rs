@@ -533,6 +533,227 @@ pub fn sandbox_reorder(
     state.library.sandbox_mods(id)
 }
 
+/// Turn a sandbox into a code somebody can paste.
+///
+/// Read-only, and it carries item ids rather than files — see
+/// `tmc_core::library::share` for what a code holds and, more importantly, what
+/// it deliberately does not.
+#[tauri::command]
+pub fn sandbox_export(state: State<'_, AppState>, id: i64) -> AppResult<String> {
+    let sandbox = state
+        .library
+        .sandbox_get(id)?
+        .ok_or_else(|| AppError::invalid("That sandbox does not exist."))?;
+
+    tmc_core::library::share::export(&sandbox)
+}
+
+/// What importing a code WOULD do, without doing any of it.
+///
+/// The same split every other risky operation here has: a code is a string from
+/// somebody else, and pressing Import on one should show what is in it before
+/// forty subscriptions are made on the account.
+#[tauri::command]
+pub fn sandbox_import_preview(
+    code: String,
+) -> AppResult<tmc_core::library::share::SharedSandbox> {
+    tmc_core::library::share::import(&code)
+}
+
+/// What an import actually did.
+#[derive(Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportReport {
+    pub sandbox: Option<SandboxRow>,
+    pub added: usize,
+    /// Items that could not be added, with the reason, one line each.
+    pub skipped: Vec<String>,
+}
+
+/// Create a sandbox from a code.
+///
+/// **The items are subscribed, not downloaded.** Each one goes through the
+/// account's own `/subscriptions` endpoint and then through `sandbox_add_mod`,
+/// which is what keeps the imported profile updating like any other and what
+/// stops this becoming a way to put an arbitrary item list on a device without
+/// the account ever asking for it.
+///
+/// **Staging is NOT done here.** A modpack of two hundred mods is two hundred
+/// downloads, and starting them inside a command the UI is awaiting would give
+/// somebody a frozen dialog and no queue to look at. The sandbox is created and
+/// the user presses Deploy, which is the same path every other sandbox takes.
+///
+/// **An item that cannot be added does not stop the rest.** A code shared by
+/// somebody with access to something this account does not, or a mod that has
+/// since been withdrawn, is a line in `skipped` — not a failed import of the
+/// other hundred and ninety.
+#[tauri::command]
+pub async fn sandbox_import(
+    state: State<'_, AppState>,
+    code: String,
+    name: Option<String>,
+) -> AppResult<ImportReport> {
+    let shared = tmc_core::library::share::import(&code)?;
+
+    let mut report = ImportReport::default();
+
+    let created = sandbox_create(
+        state.clone(),
+        tmc_core::library::sandbox::NewSandbox {
+            app_id: shared.app_id,
+            app_slug: shared.app_slug.clone(),
+            app_name: shared.app_name.clone(),
+            name: name
+                .map(|n| n.trim().to_string())
+                .filter(|n| !n.is_empty())
+                .unwrap_or_else(|| shared.name.clone()),
+            description: shared.description.clone(),
+            environment: shared.environment,
+            strategy: shared.strategy,
+            game_version: shared.game_version.clone(),
+            loader: shared.loader.clone(),
+            preset: shared.preset.clone(),
+            /*
+             * Never from the code. A game folder is an answer about one machine
+             * and a jail anchor — `share` does not export one, and refusing to
+             * accept one here is the second half of that.
+             */
+            game_dir: None,
+            options: shared.options.clone(),
+            /*
+             * Both default ON for a fresh sandbox and are NOT taken from the
+             * code. They are the importer's preferences about their own
+             * account, not the exporter's: whether somebody's mod list leaves
+             * their machine, and whether it tracks new releases, are decisions
+             * that belong to whoever pressed Import.
+             */
+            cloud_sync: true,
+            auto_update: true,
+        },
+        None,
+    )?;
+
+    let id = created.sandbox.id;
+
+    /*
+     * Items whose subscription failed, so the add loop below does not report
+     * the same one twice. Without this a withdrawn mod produces two lines —
+     * "could not subscribe" and then "subscribe to this item first" — which
+     * reads as two problems with one item.
+     */
+    let mut failed: std::collections::BTreeSet<(String, i64)> =
+        std::collections::BTreeSet::new();
+
+    for item in &shared.mods {
+        /*
+         * Subscribed first when the account is not already, exactly as the
+         * one-click install does and for the same reason: `sandbox_add_mod`
+         * refuses an unsubscribed item, and an import that worked around that
+         * would be putting items on a device the account never asked for.
+         */
+        if state.library.find_item(&item.kind, item.item_id)?.is_some() {
+            continue;
+        }
+
+        let payload = serde_json::json!({
+            "kind": item.kind,
+            "itemId": item.item_id,
+            "subscribed": true,
+        });
+
+        if let Err(err) = state
+            .api
+            .request(
+                tmc_core::api::Method::POST,
+                "/subscriptions",
+                Some(payload),
+                true,
+            )
+            .await
+        {
+            report.skipped.push(format!("{}: {}", item.name, err));
+            failed.insert((item.kind.clone(), item.item_id));
+        }
+    }
+
+    /*
+     * ONE sync for the whole code rather than one per item. Two hundred items
+     * is two hundred subscriptions, and syncing after each would be two hundred
+     * round trips for a watermark that moves once.
+     */
+    if let Err(err) = tmc_core::library::sync_once(&state.api, &state.library, false).await {
+        report
+            .skipped
+            .push(format!("Could not refresh the library: {}", err.detail()));
+    }
+
+    for item in &shared.mods {
+        if failed.contains(&(item.kind.clone(), item.item_id)) {
+            continue;
+        }
+
+        match sandbox_add_mod(state.clone(), id, item.kind.clone(), item.item_id).await {
+            Ok(_) => {
+                report.added += 1;
+
+                // The exporter's own ordering, which is the load order — a
+                // modpack whose mods arrive in a different order is a modpack
+                // that behaves differently.
+                let _ = state.library.sandbox_set_mod_enabled(
+                    id,
+                    &format!("{}:{}", item.kind, item.item_id),
+                    item.enabled,
+                );
+            }
+            Err(err) => report.skipped.push(format!("{}: {}", item.name, err)),
+        }
+    }
+
+    /*
+     * The load order, applied in one pass once every member exists. Doing it
+     * per item would reorder a list that is still being built, and the merge
+     * tree reads priority — so a wrong order here is a different set of files
+     * in the game folder, not a cosmetic difference.
+     */
+    let keys: Vec<String> = {
+        let mut ordered: Vec<_> = shared
+            .mods
+            .iter()
+            .filter(|m| !failed.contains(&(m.kind.clone(), m.item_id)))
+            .collect();
+
+        ordered.sort_by_key(|m| -m.priority);
+
+        ordered
+            .iter()
+            .map(|m| format!("{}:{}", m.kind, m.item_id))
+            .collect()
+    };
+
+    if let Err(err) = state.library.sandbox_reorder(id, &keys) {
+        report
+            .skipped
+            .push(format!("Could not apply the load order: {}", err.detail()));
+    }
+
+    audit!(
+        state.audit,
+        Info,
+        Install,
+        "sandbox.import",
+        format!(
+            "{} ({} added, {} skipped)",
+            created.sandbox.name,
+            report.added,
+            report.skipped.len()
+        )
+    );
+
+    report.sandbox = state.library.sandbox_get(id)?.map(|s| row(s, &state)).transpose()?;
+
+    Ok(report)
+}
+
 /// What a one-click install did, step by step.
 #[derive(Debug, Default, Serialize)]
 #[serde(rename_all = "camelCase")]

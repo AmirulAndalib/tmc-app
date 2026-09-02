@@ -25,6 +25,8 @@ import {
     SandboxSpecSchema,
     StageOutcomeSchema,
     QuickInstallReportSchema,
+    SharedSandboxSchema,
+    ImportReportSchema,
     StrategyReportSchema,
     VerifyReportSchema,
     AppSettingsSchema,
@@ -350,6 +352,34 @@ export const ipc = {
             isDefault?: boolean
         }
     ) => call('sandbox_patch', SandboxRowSchema, { id, patch }),
+
+    /**
+     * Turn a sandbox into a code somebody can paste.
+     *
+     * A code, not a file. A file export needs a path to write to and a file
+     * import needs a path to read from, and the webview names neither — trading
+     * that guarantee for a save dialog is not a trade worth making. It is also
+     * what people actually do with an exported profile: put it in a message.
+     *
+     * It carries item IDS, never files. Shipping the files would make this a
+     * redistribution channel for other people's work, with no download counted,
+     * no licence respected and no update path.
+     */
+    sandboxExport: (id: number) => call('sandbox_export', z.string(), { id }),
+
+    /** What importing a code would do, without doing any of it. */
+    sandboxImportPreview: (code: string) =>
+        call('sandbox_import_preview', SharedSandboxSchema, { code }),
+
+    /**
+     * Create a sandbox from a code.
+     *
+     * Subscribes each item on the account and adds it; it does NOT stage. Two
+     * hundred mods is two hundred downloads, and starting them inside a command
+     * the UI is awaiting is a frozen dialog with no queue to look at.
+     */
+    sandboxImport: (code: string, name?: string) =>
+        call('sandbox_import', ImportReportSchema, { code, name }),
 
     /** Undeploys first — the ledger goes with the row, so it has to. */
     sandboxDelete: (id: number, keepFiles = false) =>
