@@ -23,7 +23,7 @@
 use serde::Serialize;
 use tauri::State;
 
-use tmc_core::error::{AppError, AppResult};
+use tmc_core::error::AppResult;
 use tmc_core::library::{PlayTotals, SessionRow};
 use tmc_core::session::Session;
 
@@ -74,37 +74,6 @@ pub fn session_stop(state: State<'_, AppState>, id: u64) -> AppResult<()> {
     );
 
     state.sessions.stop(id)
-}
-
-/// Close a session the app itself is holding open.
-///
-/// The web player's window closing, and nothing else — a supervised process
-/// closes its own session when it exits, and letting the webview close one
-/// would let a script mark a running game as finished and bank its playtime.
-/// So this refuses anything that is not a [`tmc_core::session::SessionKind::Web`]
-/// session.
-#[tauri::command]
-pub fn session_close_web(state: State<'_, AppState>, id: u64) -> AppResult<()> {
-    let kind = state
-        .sessions
-        .running()
-        .into_iter()
-        .find(|s| s.id == id)
-        .map(|s| s.kind);
-
-    match kind {
-        Some(tmc_core::session::SessionKind::Web) => {
-            state.sessions.end(id, false);
-
-            Ok(())
-        }
-        // Already closed. Idempotent on purpose: a window-closed event can
-        // arrive after the window was closed by `player_close`.
-        None => Ok(()),
-        Some(_) => Err(AppError::invalid(
-            "That session is a running process and cannot be closed from here.",
-        )),
-    }
 }
 
 /// The last lines a session's process printed.

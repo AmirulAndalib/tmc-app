@@ -633,15 +633,6 @@ export const ipc = {
     /** Kill a running game. See `Sessions::stop` for why there is no polite ask. */
     sessionStop: (id: number) => call('session_stop', z.void(), { id }),
 
-    /**
-     * Close a session the app is holding open.
-     *
-     * The web player's window, and nothing else: a supervised process closes
-     * its own session when it exits, and letting the webview close one would
-     * let a script mark a running game as finished and bank its playtime.
-     */
-    sessionCloseWeb: (id: number) => call('session_close_web', z.void(), { id }),
-
     /** The last lines a session's process printed. The crash report. */
     sessionLog: (id: number, lines?: number) =>
         call('session_log', z.string(), { id, lines }),

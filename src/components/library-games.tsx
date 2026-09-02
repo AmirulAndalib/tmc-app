@@ -104,7 +104,7 @@ function GameCard({
     onEdit: (sandbox: SandboxRowT) => void
     onCreate: () => void
     onPlay: () => void
-    onStop: (id: number) => void
+    onStop: (session: SessionT) => void
 }) {
     return (
         <article className="rounded-xl border border-border bg-surface">
@@ -170,7 +170,7 @@ function GameCard({
                     {running ? (
                         <button
                             type="button"
-                            onClick={() => onStop(running.id)}
+                            onClick={() => onStop(running)}
                             className="flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1 text-[11px] text-danger"
                         >
                             <FiSquare className="size-3" />
@@ -402,11 +402,21 @@ export default function LibraryGames() {
             })
     }, [sandboxes.data, app?.gameDirs, refFor, search, playtime.data])
 
-    const stop = async (id: number) => {
+    /**
+     * End a running session, by whichever means actually ends it.
+     *
+     * A web session has no process to signal — `Sessions::stop` would close the
+     * session record and leave the player WINDOW open, which is a game still
+     * running with the app convinced it is not. The window is the thing to
+     * close, and Rust ends the session when it is destroyed.
+     */
+    const stop = async (session: SessionT) => {
         setError(null)
 
         try {
-            await ipc.sessionStop(id)
+            if (session.kind === 'web') await ipc.playClose()
+            else await ipc.sessionStop(session.id)
+
             await running.refetch()
         } catch (err) {
             setError(messageOf(err))
@@ -524,7 +534,7 @@ export default function LibraryGames() {
                                 })
                             }
                             onPlay={() => play(row)}
-                            onStop={(id) => void stop(id)}
+                            onStop={(session) => void stop(session)}
                         />
                     ))}
                 </div>

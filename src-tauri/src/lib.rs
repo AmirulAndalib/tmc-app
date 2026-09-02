@@ -191,7 +191,6 @@ pub fn run() {
             commands::sessions::session_running,
             commands::sessions::session_history,
             commands::sessions::session_stop,
-            commands::sessions::session_close_web,
             commands::sessions::session_log,
             commands::sessions::playtime_summary,
             commands::sessions::sessions_flush,
