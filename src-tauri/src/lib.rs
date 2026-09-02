@@ -199,6 +199,7 @@ pub fn run() {
             commands::detect::detect_scan_cancel,
             commands::detect::detect_scan_running,
             commands::detect::detect_apply_many,
+            commands::sandbox::sandbox_install_item,
             commands::play::play_open_web,
             commands::play::play_handoff,
             commands::play::play_connect,

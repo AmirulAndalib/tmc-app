@@ -24,6 +24,7 @@ import {
     SandboxRowSchema,
     SandboxSpecSchema,
     StageOutcomeSchema,
+    QuickInstallReportSchema,
     StrategyReportSchema,
     VerifyReportSchema,
     AppSettingsSchema,
@@ -359,6 +360,31 @@ export const ipc = {
 
     sandboxAddMod: (id: number, kind: string, itemId: number) =>
         call('sandbox_add_mod', SandboxRowSchema, { id, kind, itemId }),
+
+    /**
+     * Install one mod or asset into one sandbox, in a single operation.
+     *
+     * Subscribe if needed, sync, add, stage, deploy — as ONE Rust command
+     * rather than five calls from here. The plan is executed in Rust because a
+     * frontend that orchestrates it is a frontend an injected script can run
+     * four fifths of, leaving a game folder half-modded with nothing on screen
+     * saying so.
+     *
+     * A mod and an asset take the identical path: they differ only in which app
+     * rule matches them, and that selection already happens inside the executor.
+     */
+    sandboxInstallItem: (
+        id: number,
+        kind: string,
+        itemId: number,
+        deploy = true
+    ) =>
+        call('sandbox_install_item', QuickInstallReportSchema, {
+            id,
+            kind,
+            itemId,
+            deploy,
+        }),
 
     sandboxRemoveMod: (id: number, modKey: string) =>
         call('sandbox_remove_mod', SandboxRowSchema, { id, modKey }),

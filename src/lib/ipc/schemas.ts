@@ -744,6 +744,21 @@ export const StageOutcomeSchema = z.object({
 
 export type StageOutcomeT = z.infer<typeof StageOutcomeSchema>
 
+/** What a one-click install did, step by step. */
+export const QuickInstallReportSchema = z.object({
+    /** The account was subscribed to the item as part of this. */
+    subscribed: z.boolean(),
+    /** It was already in the sandbox and nothing was added. */
+    alreadyPresent: z.boolean(),
+    staged: StageOutcomeSchema.nullable(),
+    deployed: DeployReportSchema.nullable(),
+    /** Steps that did not run, and why. Never fatal on their own. */
+    warnings: z.array(z.string()),
+})
+
+export type QuickInstallReportT = z.infer<typeof QuickInstallReportSchema>
+
+
 /** One setting a game's launch rule understands — `apps::OptionSpec`. */
 export const OptionSpecSchema = z.object({
     key: z.string(),

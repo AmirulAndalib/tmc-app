@@ -533,6 +533,192 @@ pub fn sandbox_reorder(
     state.library.sandbox_mods(id)
 }
 
+/// What a one-click install did, step by step.
+#[derive(Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuickInstallReport {
+    /// The account was subscribed to the item as part of this.
+    pub subscribed: bool,
+    /// It was already in the sandbox and nothing was added.
+    pub already_present: bool,
+    pub staged: Option<StageOutcome>,
+    pub deployed: Option<tmc_core::deploy::DeployReport>,
+    /// Steps that did not run, and why. Never fatal on its own.
+    pub warnings: Vec<String>,
+}
+
+/// **Install one mod or asset into one sandbox**, in a single operation.
+///
+/// The whole flow a user means by "install this": subscribe if they are not
+/// already, wait for the library to know about it, add it to the sandbox, stage
+/// its files, and deploy them into the game.
+///
+/// WHY IT IS ONE COMMAND AND NOT FIVE
+/// ---------------------------------
+/// Because the alternative is the webview orchestrating it, and the rule this
+/// architecture rests on is that the PLAN is executed in Rust. Five commands
+/// called in sequence from the frontend is a plan the frontend owns — an
+/// injected script in a rendered mod description could run four of them, or run
+/// them against a different sandbox, or stop between the stage and the deploy
+/// and leave a game folder half-modded with nothing on screen saying so.
+///
+/// It also makes the audit trail one entry describing one intent rather than
+/// five entries somebody has to reassemble.
+///
+/// EVERY STEP KEEPS ITS OWN CHECKS
+/// ------------------------------
+/// Nothing is bypassed by being called from here. `sandbox_add_mod` still
+/// refuses an item the account is not subscribed to and still refuses one
+/// belonging to another game; staging still goes through the game's own rule
+/// and the plugin jail; deploying still goes through the ledger. This composes
+/// them, it does not shortcut them.
+///
+/// ASSETS AND MODS ARE THE SAME PATH
+/// --------------------------------
+/// Deliberately. A resource pack and a jar mod differ only in which app rule
+/// matches them (`manage_asset` versus `manage_mod`), and that selection
+/// already happens inside the executor. A second command for assets would be a
+/// second place for the two to drift.
+#[tauri::command]
+pub async fn sandbox_install_item(
+    state: State<'_, AppState>,
+    id: i64,
+    kind: String,
+    item_id: i64,
+    deploy: Option<bool>,
+) -> AppResult<QuickInstallReport> {
+    let mut report = QuickInstallReport::default();
+
+    let sandbox = state
+        .library
+        .sandbox_get(id)?
+        .ok_or_else(|| AppError::invalid("That sandbox does not exist."))?;
+
+    /*
+     * Subscribing first, when the account has not already.
+     *
+     * `sandbox_add_mod` refuses an unsubscribed item on purpose — the app only
+     * materialises what the account asked it to keep — so a one-click install
+     * has to make that true rather than work around it. Subscribing is also the
+     * thing that makes the mod follow the user to their other devices, which is
+     * what somebody pressing Install on a sandbox almost always wants.
+     */
+    if state.library.find_item(&kind, item_id)?.is_none() {
+        let payload = serde_json::json!({
+            "kind": kind,
+            "itemId": item_id,
+            "subscribed": true,
+        });
+
+        state
+            .api
+            .request(
+                tmc_core::api::Method::POST,
+                "/subscriptions",
+                Some(payload),
+                true,
+            )
+            .await?;
+
+        report.subscribed = true;
+
+        /*
+         * A sync, because the subscription is the SERVER's fact and the local
+         * row is a mirror of it. Without this the row does not exist yet and
+         * every step below fails on an item that was just subscribed — which
+         * reads as the button not working.
+         */
+        if let Err(err) =
+            tmc_core::library::sync_once(&state.api, &state.library, false).await
+        {
+            report
+                .warnings
+                .push(format!("Could not refresh the library: {}", err.detail()));
+        }
+    }
+
+    if state.library.find_item(&kind, item_id)?.is_none() {
+        return Err(AppError::invalid(
+            "The subscription has not reached this device yet. Try again in a moment.",
+        ));
+    }
+
+    let already = sandbox
+        .mods
+        .iter()
+        .any(|m| m.kind == kind && m.item_id == item_id);
+
+    report.already_present = already;
+
+    if !already {
+        sandbox_add_mod(state.clone(), id, kind.clone(), item_id).await?;
+    }
+
+    // Re-read: `sandbox_add_mod` wrote a row, and staging needs the member it
+    // created rather than the snapshot taken before it existed.
+    let sandbox = state
+        .library
+        .sandbox_get(id)?
+        .ok_or_else(|| AppError::invalid("That sandbox disappeared mid-install."))?;
+
+    let Some(member) = sandbox
+        .mods
+        .iter()
+        .find(|m| m.kind == kind && m.item_id == item_id)
+    else {
+        return Err(AppError::internal("the item was not added to the sandbox"));
+    };
+
+    let entry = state
+        .library
+        .find_item(&kind, item_id)?
+        .ok_or_else(|| AppError::internal("the library row vanished mid-install"))?;
+
+    {
+        let plugins = state.app_plugins();
+        let settings = state.settings.get();
+        let roots = state.jail_roots();
+        let staging = state.paths.staging_dir();
+        let backups = state.paths.backup_dir();
+
+        let ctx = state.sandbox_ctx(&plugins, &settings, &roots, &staging, &backups);
+
+        report.staged =
+            Some(stage_mod(&state.library, &sandbox, member, &entry, &ctx).await);
+    }
+
+    let staged_ok = report.staged.as_ref().is_some_and(|s| s.ok);
+
+    /*
+     * Deploying only when the staging actually produced files.
+     *
+     * A deploy after a failed stage writes the sandbox's OTHER mods into the
+     * game folder and reports success, which is the worst possible outcome of
+     * pressing Install on one mod: the folder changed, the thing asked for is
+     * missing, and the report says it worked.
+     */
+    if deploy.unwrap_or(true) && staged_ok {
+        match sandbox_deploy(state.clone(), id, Some(false)) {
+            Ok(deployed) => report.deployed = Some(deployed),
+            Err(err) => report.warnings.push(err.to_string()),
+        }
+    } else if deploy.unwrap_or(true) && !staged_ok {
+        report
+            .warnings
+            .push("Nothing was deployed, because the files could not be staged.".into());
+    }
+
+    audit!(
+        state.audit,
+        Info,
+        Install,
+        "sandbox.quick_install",
+        format!("{} → {}", entry.name, sandbox.name)
+    );
+
+    Ok(report)
+}
+
 // -------------------------------------------------------------------- Staging
 
 /// Download and unpack everything in a sandbox that is not staged yet.

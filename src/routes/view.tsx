@@ -26,6 +26,7 @@ import { opensExternally } from '~/lib/external'
 import Markdown from '~/components/markdown'
 import ServerPanel from '~/components/server-panel'
 import InstallButton from '~/components/install-button'
+import QuickInstall from '~/components/quick-install'
 import SubscribeButton from '~/components/subscribe-button'
 import Dependencies from '~/components/dependencies'
 import Gallery from '~/components/gallery'
@@ -302,6 +303,14 @@ export default function ViewRoute() {
 
                     {(summary.kind === 'mod' || summary.kind === 'asset') && (
                         <InstallButton summary={summary} releases={releases} />
+                    )}
+
+                    {/* The mod-manager action, and the only one of the three
+                        that does not write to the copy of the game everything
+                        else shares. Mods and assets take the identical path —
+                        they differ only in which app rule matches them. */}
+                    {(summary.kind === 'mod' || summary.kind === 'asset') && (
+                        <QuickInstall summary={summary} />
                     )}
 
                     {/*
