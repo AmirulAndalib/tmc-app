@@ -1970,6 +1970,52 @@ manage:
             }
         }
 
+        /*
+         * The config example, with the same teeth the sandbox one has.
+         *
+         * The mistake it most invites is a location naming a single FILE, which
+         * parses perfectly and then has `Jail::build` create a DIRECTORY there —
+         * destroying the settings file it was meant to expose. So every shipped
+         * location is asserted to be a folder-shaped path, and the files are
+         * asserted to be named in `files`.
+         */
+        {
+            let spec = plugins
+                .config_spec("minecraft")
+                .expect("minecraft should ship a config.json");
+
+            assert!(
+                !spec.locations.is_empty(),
+                "the config example should declare somewhere to look"
+            );
+
+            let mut names = 0;
+
+            for location in &spec.locations {
+                assert!(
+                    !location.path.contains('.'),
+                    "'{}' looks like a file — a location names a FOLDER, and the \
+                     file goes in `files`",
+                    location.path
+                );
+
+                names += location.files.len();
+
+                for file in &location.files {
+                    assert!(
+                        !file.contains('/') && !file.contains('\\'),
+                        "'{file}' is a path, not a file name"
+                    );
+                }
+            }
+
+            assert!(
+                names > 0,
+                "the example should demonstrate `files`, which is the only way \
+                 to offer a single file"
+            );
+        }
+
         // The `disabled/` example must not have been loaded.
         assert!(
             !plugins

@@ -39,6 +39,7 @@ import { LaunchDialog } from '~/components/launch-dialog'
 import Select from '~/components/select'
 import FolderPicker from '~/components/folder-picker'
 import { Toggle } from '~/components/form'
+import ConfigEditor from '~/components/config-editor'
 
 /**
  * **Sandboxes** — a named set of mods, pointed at one game.
@@ -552,6 +553,8 @@ function SandboxDetail({
                     }}
                 />
             )}
+
+            <ConfigSection sandbox={sandbox} />
 
             {/* -------------------------------------------------------- Mods */}
             <section className="rounded-xl border border-border bg-surface">
@@ -1444,6 +1447,69 @@ function CreateSandbox({
 }
 
 // ------------------------------------------------------------------- Bits
+
+/**
+ * The game-settings editor, when this game describes where its settings live.
+ *
+ * Absent rather than empty for a game that does not. `config_available` is a
+ * separate command precisely so this can decide not to render — a game with no
+ * `config.json` is the common case, and a section that opens onto "this game
+ * does not describe its settings" is a section that trains people to skip it.
+ *
+ * Collapsed by default. Somebody on this screen is usually here to reorder mods
+ * or deploy; the editor is what they come back for, and an open text pane above
+ * the load order pushes the thing they wanted off the screen.
+ */
+function ConfigSection({ sandbox }: { sandbox: SandboxRowT }) {
+    const [available, setAvailable] = useState<boolean | null>(null)
+    const [open, setOpen] = useState(false)
+
+    useEffect(() => {
+        let live = true
+
+        setAvailable(null)
+
+        void ipc
+            .configAvailable(sandbox.id)
+            .then((ok) => {
+                if (live) setAvailable(ok)
+            })
+            .catch(() => {
+                if (live) setAvailable(false)
+            })
+
+        return () => {
+            live = false
+        }
+    }, [sandbox.id])
+
+    if (available !== true) return null
+
+    return (
+        <section className="rounded-xl border border-border bg-surface">
+            <button
+                type="button"
+                onClick={() => setOpen((v) => !v)}
+                aria-expanded={open}
+                className="flex w-full items-center justify-between border-b border-border px-3 py-2 text-left"
+            >
+                <h2 className="text-sm font-semibold">
+                    Game settings
+                    <span className="ml-2 text-xs font-normal text-muted">
+                        the files this game&rsquo;s mods read
+                    </span>
+                </h2>
+                <span className="text-xs text-muted">{open ? 'Hide' : 'Edit'}</span>
+            </button>
+
+            {open && (
+                <div className="flex p-3">
+                    <ConfigEditor sandboxId={sandbox.id} />
+                </div>
+            )}
+        </section>
+    )
+}
 
 function DeploySummary({ report }: { report: DeployReportT }) {
     return (

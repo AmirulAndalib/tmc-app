@@ -87,6 +87,15 @@ export const AppSettingsSchema = z.object({
 
     requireSignedPlugins: z.boolean(),
     confirmEveryRun: z.boolean(),
+    /**
+     * Whether the app may open a game's own settings files.
+     *
+     * ON by default — editing a loader's `.cfg` is ordinary work for a mod
+     * manager. It exists because it is the one feature that lets the webview
+     * name a file to be written, and it removes exactly those commands and
+     * nothing else.
+     */
+    allowConfigEditing: z.boolean(),
 })
 
 export type AppSettingsT = z.infer<typeof AppSettingsSchema>
@@ -794,6 +803,44 @@ export const SharedSandboxSchema = z.object({
 })
 
 export type SharedSandboxT = z.infer<typeof SharedSandboxSchema>
+
+// ----------------------------------------------------- Game settings files
+
+/** Which root a config file lives under. Half of its address. */
+export const FsRootSchema = z.enum(['gameDir', 'pluginData', 'downloads'])
+export type FsRootT = z.infer<typeof FsRootSchema>
+
+export const ConfigFileSchema = z.object({
+    /** The declaring location's label, so the UI groups without a lookup. */
+    group: z.string(),
+    root: FsRootSchema,
+    /**
+     * Path relative to the ROOT, not to the location — that is what the Rust
+     * side resolves, so sending anything else would need the location's own
+     * path added back somewhere.
+     */
+    path: z.string(),
+    name: z.string(),
+    size: z.number(),
+    modifiedMs: z.number().nullable(),
+    /**
+     * False for a file that is listed but cannot be opened here — too large,
+     * or not text. Listed anyway, because "it is not here" and "it is here and
+     * cannot be edited" are different answers.
+     */
+    editable: z.boolean(),
+    reason: z.string().nullable(),
+})
+
+export type ConfigFileT = z.infer<typeof ConfigFileSchema>
+
+export const SaveReportSchema = z.object({
+    bytes: z.number(),
+    /** Where the previous contents went. Null when the file was new. */
+    backup: z.string().nullable(),
+})
+
+export type SaveReportT = z.infer<typeof SaveReportSchema>
 
 export const ImportReportSchema = z.object({
     sandbox: SandboxRowSchema.nullable(),

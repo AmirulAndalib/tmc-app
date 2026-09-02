@@ -21,6 +21,7 @@
 
 pub mod api;
 pub mod auth;
+pub mod config;
 pub mod detect;
 pub mod downloads;
 pub mod fs;

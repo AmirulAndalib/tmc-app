@@ -26,6 +26,8 @@ import {
     StageOutcomeSchema,
     QuickInstallReportSchema,
     SharedSandboxSchema,
+    ConfigFileSchema,
+    SaveReportSchema,
     ImportReportSchema,
     StrategyReportSchema,
     VerifyReportSchema,
@@ -55,6 +57,7 @@ import {
     type LogLevelT,
     type RustQueryProtocolT,
     type WalkLimitsT,
+    type FsRootT,
 } from './schemas'
 
 /**
@@ -569,6 +572,37 @@ export const ipc = {
      */
     detectApplyMany: (games: [slug: string, path: string][]) =>
         call('detect_apply_many', z.array(ApplyOutcomeSchema), { games }),
+
+    // --------------------------------------------------- Game settings files
+    //
+    // The webview names a file, which is the one thing the rest of this surface
+    // avoids — so it is bounded twice: the GAME declares which files exist
+    // (`plugins/app/<slug>/config.json`), and Rust re-runs those rules on every
+    // read and write on top of the jail. `allowConfigEditing` removes all three
+    // commands.
+
+    /** Does this sandbox's game describe where it keeps its settings? */
+    configAvailable: (sandboxId: number) =>
+        call('config_available', z.boolean(), { sandboxId }),
+
+    configList: (sandboxId: number) =>
+        call('config_list', z.array(ConfigFileSchema), { sandboxId }),
+
+    configRead: (sandboxId: number, root: FsRootT, path: string) =>
+        call('config_read', z.string(), { sandboxId, root, path }),
+
+    configWrite: (
+        sandboxId: number,
+        root: FsRootT,
+        path: string,
+        contents: string
+    ) =>
+        call('config_write', SaveReportSchema, {
+            sandboxId,
+            root,
+            path,
+            contents,
+        }),
 
     // ------------------------------------------------------------------ Play
     //

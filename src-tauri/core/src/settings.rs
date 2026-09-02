@@ -84,6 +84,22 @@ pub struct AppSettings {
     pub require_signed_plugins: bool,
     /// Ask before every install/uninstall run, even for an approved plugin.
     pub confirm_every_run: bool,
+
+    /// Allow the app to open a game's own settings files for editing.
+    ///
+    /// ON, because it is a mod manager and editing a loader's `.cfg` is
+    /// ordinary work. It is here at all — rather than being unconditional —
+    /// because it is the one feature that lets the WEBVIEW name a file to be
+    /// written, and somebody who would rather that surface did not exist on
+    /// their machine should be able to say so.
+    ///
+    /// What turning it off buys is bounded and worth stating plainly: it
+    /// removes those three commands, and nothing else. It does not sandbox the
+    /// process, which plainly writes to game folders — the deployment engine is
+    /// what that is for. Every game's config locations are still declared by
+    /// its own plugin and still resolved through the jail whether this is on or
+    /// off; this only decides whether the door exists.
+    pub allow_config_editing: bool,
 }
 
 impl Default for AppSettings {
@@ -108,6 +124,7 @@ impl Default for AppSettings {
             download_keep_history: true,
             require_signed_plugins: false,
             confirm_every_run: true,
+            allow_config_editing: true,
         }
     }
 }

@@ -130,8 +130,9 @@ genuinely need a window belongs on that side of the line.
 | `plugins/manifest.rs` | The manifest format and its validation |
 | `plugins/jail.rs` | **The path jail.** Called a jail, not a sandbox — see below |
 | `plugins/steps.rs` | The install/uninstall executor |
-| `plugins/apps.rs` | Per-game rules: where mods go, how to launch, sandbox presets |
+| `plugins/apps.rs` | Per-game rules: where mods go, how to launch, sandbox presets, where its settings live |
 | `plugins/query.rs` | The declarative parser for Server Live Query plugins |
+| `plugins/config.rs` | **A game's own settings files.** Listing, reading and replacing what its `config.json` declares |
 | `plugins/theme.rs` | Theme token validation |
 | `plugins/registry.rs` | Installed plugins, approvals, fingerprint drift, the signature gate |
 | `plugins/signature.rs` | **Who vouched for a plugin.** Ed25519 over the canonical manifest, against the user's own trust store |
@@ -182,6 +183,7 @@ genuinely need a window belongs on that side of the line.
 | `commands/rcon.rs` | Consoles. No command returns a password |
 | `commands/library.rs` | Sync, install, uninstall, launch |
 | `commands/play.rs` | The three ways a game starts. Names IDS, never a loader URL or a connect link |
+| `commands/config.rs` | The game-settings editor's three commands, behind one setting |
 | `commands/sessions.rs` | What is running, what ran, and the log it printed |
 | `spawn.rs` | The only place in the app that starts a process. Which mechanism is the PLAN's decision, not the caller's |
 | `state.rs` | `AppState`, assembled once — shared locks and caches depend on that |
@@ -235,6 +237,7 @@ genuinely need a window belongs on that side of the line.
 | `components/sandbox-editor.tsx` | Create, edit and delete one sandbox |
 | `components/sandbox-share.tsx` | Export a sandbox to a code; import one from a code |
 | `components/session-history.tsx` | Recent launches, and the log a crashed game printed |
+| `components/config-editor.tsx` | Editing the settings files a game declares |
 | `components/quick-install.tsx` | One-click install of a mod or asset INTO a sandbox |
 | `routes/sandboxes.tsx` | The mod manager: what is in a sandbox, and whether it is applied |
 | `routes/downloads.tsx` | The queue, and everything to do when one is stuck |
@@ -695,6 +698,7 @@ deleting it.
 | `manage_mod.json` / `manage_asset.yaml` | Install and uninstall steps for one content kind |
 | `launch.json` | How to start the game |
 | `sandbox.json` | Deployment strategies, presets, the game's own options, and detection hints |
+| `config.json` | Where this game keeps the files a player edits by hand |
 
 **The safety model is unchanged.** Each file compiles to a synthetic `Manifest`
 and runs through the same jail and the same executor, so it can express nothing
@@ -1151,6 +1155,97 @@ starting them inside a command the UI is awaiting is a frozen dialog with no
 queue to look at. `cloudSync` and `autoUpdate` come from the importer's own
 defaults: whether somebody's mod list leaves their machine is their decision,
 not the exporter's.
+
+## Editing a game's own settings
+
+Every mod manager studied for this has a config editor, and every one exists for
+the same moment: a loader wrote `BepInEx/config/com.author.mod.cfg` the first
+time the game ran, one value in it is wrong, and fixing it meant leaving the
+manager.
+
+### What the jail is for here, and what it is not
+
+Worth stating exactly, because it is easy to overstate in both directions.
+
+**The app process has the user's filesystem permissions and must.**
+`deploy::link` writes into game folders; the plugin executor unpacks archives
+into them. Nothing about a config editor changes that and nothing needed to.
+
+What these commands add is the ability for the **webview** to name a file to be
+read or written — the rule at the top of `commands/mod.rs`, and the reason a mod
+description rendered next to `invoke` is a nuisance rather than a problem. So
+the surface is bounded the way every other privileged surface here is, and the
+cost is nothing anybody wanted: a config editor that could open `/etc/shadow` is
+not a better config editor.
+
+### Two bounds, not one
+
+| Bound | Catches |
+| --- | --- |
+| The declared locations compile to jail grants | A path outside the game's folders entirely |
+| `config::locate` re-runs the spec's own rules on every read and write | A path inside a granted root that the game never offered |
+
+The second is not redundant. A location naming the game's ROOT — which
+`{ path: "", files: ["options.txt"] }` legitimately does — grants the jail the
+whole game folder, so the jail alone would happily resolve `saves/world.dat`.
+The listing's own matching rules are therefore re-run on the requested path,
+which means the only files that can be opened are ones the list would have
+shown.
+
+### `config.json`
+
+```json
+{
+  "manifestVersion": 1,
+  "config": {
+    "locations": [
+      { "label": "Mod settings", "root": "gameDir", "path": "config",
+        "extensions": ["toml", "cfg"], "recursive": true },
+      { "label": "Game options", "root": "gameDir", "path": "",
+        "files": ["options.txt"] }
+    ]
+  }
+}
+```
+
+  * **A location is a FOLDER, never a single file.** Not a limitation — it is
+    what stops the grant it compiles into destroying the thing it exposes.
+    `Jail::build` pre-creates every writable grant's prefix, so a location
+    naming `options.txt` would create a *directory* called `options.txt` where
+    the game's settings file belongs. Name the folder; list the file in `files`.
+  * **`files` replaces the extension test rather than adding to it.** A location
+    naming both would be asking two questions with one answer.
+  * **Grants are DERIVED from the locations**, not declared beside them. An
+    author who adds a location and forgets a matching grant would otherwise get
+    a folder that lists nothing, with no error anywhere.
+
+### Why the editor is a plain text box
+
+Gale has a schema-driven form with typed fields, and it is genuinely nicer where
+it works. It works by understanding BepInEx's own config dialect — and the
+moment a game uses TOML, an INI, a properties file or something bespoke, a form
+either cannot render it or renders it wrongly and writes back something the
+loader will not parse.
+
+A text box round-trips every format exactly. The safety is elsewhere and is
+real: the previous contents are copied into the app's backup folder on every
+save, the write goes to a temporary file and is renamed (a half-written config
+is a game that will not start), and a file whose bytes are not UTF-8 is refused
+rather than mangled — reading one as lossy UTF-8 and writing it back replaces
+every invalid byte, which is an editor that destroys the file it was opened to
+fix.
+
+The backup goes under the app's own directory rather than beside the file: a
+`.bak` next to a config is a file the game's own loader may try to parse, and
+one studied loader does exactly that.
+
+### `allowConfigEditing`
+
+ON by default — editing a loader's `.cfg` is ordinary work for a mod manager.
+It exists because this is the one feature that lets the webview name a file to
+be written, and **what it buys is bounded and is stated on the settings row
+itself**: it removes those three commands and nothing else. It does not sandbox
+the process, which writes to game folders whenever it deploys.
 
 ## Downloads
 
@@ -1618,7 +1713,10 @@ all read `ServerQueryResult`.
 2. `plugins/app/<slug>/launch.json` — how to start it, if it can be started.
 3. `plugins/app/<slug>/sandbox.json` — which deployment strategies suit it, its
    presets, its options, and how to FIND it (`detect`).
-4. Nothing in Rust. If something needs adding in Rust, the file format is
+4. `plugins/app/<slug>/config.json` — where its settings files live, if it has
+   any worth editing. Optional; a game without one has no config editor, which
+   is the honest answer rather than a guess.
+5. Nothing in Rust. If something needs adding in Rust, the file format is
    missing a field rather than the game being special.
 
 The shipped examples under `examples/plugins/app/` are validated by a test that
@@ -1911,14 +2009,11 @@ Honest list, so nothing here reads as finished when it is not:
   `inject::launch` does not return the process handle, so there is no exit to
   observe and no duration to measure. Fixing that means a change inside the one
   part of the tree that has never been run against a game.
-- **A mod config editor.** Every manager studied for this has one — editing a
-  mod's own config files from inside the app rather than in a text editor
-  alongside it. It is the largest single feature still missing, and it is not
-  free: it needs a bounded read/write path into the game folder, which is a
-  deliberate widening of the rule that no command takes a path from the webview.
-  The shape that would work is a game declaring its config locations in
-  `sandbox.json` and everything resolving through `plugins::jail`, exactly as an
-  installer's steps do.
+- **A schema-driven config form.** The config editor is a text box, which
+  round-trips every format exactly — see "Editing a game's own settings" for
+  why that is the version that is never wrong. A typed form per config dialect
+  would be nicer where it worked, and would need one implementation per dialect
+  and a story for what happens when a file does not match the one it assumed.
 - **USVFS injection, proven.** The strategy is implemented end to end and gated
   behind `usvfs-hooks`, off by default. The tree and the blob are tested on
   every platform; the two hundred lines that patch an import table in somebody

@@ -230,6 +230,26 @@ export default function AppSettingsRoute() {
                         />
                     }
                 />
+
+                <Row
+                    label="Edit game settings in the app"
+                    /*
+                     * Honest about what turning it off buys, because a switch
+                     * that implies more than it does is worse than no switch.
+                     * It removes three commands. It does not sandbox the app,
+                     * which writes to game folders whenever it deploys.
+                     */
+                    hint="Opens the settings files a game declares, from its sandbox. Turning this off removes those commands; it does not change what the app can do when it installs or deploys."
+                    control={
+                        <Toggle
+                            label="Edit game settings in the app"
+                            checked={app.allowConfigEditing}
+                            onChange={(allowConfigEditing) =>
+                                void setApp({ allowConfigEditing })
+                            }
+                        />
+                    }
+                />
             </Section>
 
             <Section
