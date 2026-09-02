@@ -37,3 +37,34 @@ export function useAppIcons(): (appId: number | null | undefined) => string | nu
         return facets.data?.apps.find((a) => a.id === appId)?.icon ?? null
     }
 }
+
+/**
+ * The whole reference for a game — id, name and artwork — from the same cache.
+ *
+ * `useAppIcons` answers half the question, and every caller that needs the
+ * other half was pulling the name off a local row instead. That works for a
+ * sandbox (which stores `appName`) and not for a game the user has only pointed
+ * a FOLDER at: `settings.gameDirs` is keyed by app id and carries nothing else,
+ * so the Library's game list would have had rows reading "Game 271590".
+ *
+ * Same query key as above, so the two share one request.
+ */
+export function useAppRefs(): (
+    appId: number | null | undefined
+) => { id: number; name: string; icon: string | null } | null {
+    const facets = useQuery({
+        queryKey: ['facets', 'mod'],
+        queryFn: () => api.facets('mod'),
+        staleTime: STALE_MS,
+    })
+
+    return (appId) => {
+        if (appId === null || appId === undefined) return null
+
+        const found = facets.data?.apps.find((a) => a.id === appId)
+
+        if (!found) return null
+
+        return { id: found.id, name: found.name, icon: found.icon }
+    }
+}
