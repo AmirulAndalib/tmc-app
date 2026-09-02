@@ -1450,6 +1450,17 @@ export const AppListQuerySchema = z.object({
      * request that skips the cursor.
      */
     ids: z.array(z.coerce.number().int().positive()).max(100).optional(),
+    /**
+     * Fetch apps by URL slug, the same way `ids` fetches them by id.
+     *
+     * The app's plugin folders are named after the slug (`plugins/app/<slug>/`)
+     * and its detection rules therefore produce slugs, while everything the app
+     * stores — a game directory, a sandbox — is keyed by the numeric id. Nothing
+     * else could translate: the device only learns the mapping by already
+     * having a sandbox or a subscription for the game, which a machine that has
+     * just been scanned for the first time does not.
+     */
+    slugs: z.array(z.string().max(120)).max(100).optional(),
     type: AppTypeSchema.optional(),
     /** Only apps that can be launched from here. */
     playable: QueryBool.optional(),

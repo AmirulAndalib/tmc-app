@@ -52,6 +52,20 @@ pub struct AppState {
     /// reconnect per line.
     pub rcon: RconPool,
 
+    /// Slug → TMC app id, learned from the catalogue.
+    ///
+    /// The device's plugin folders are named after a game's URL slug and
+    /// everything it STORES is keyed by the numeric id, and until this existed
+    /// the only translation was "find a sandbox or a subscription that already
+    /// has both". That works for a machine somebody has already set up and
+    /// fails for the one case the folder scan exists to serve: a fresh install
+    /// with an empty library, where every scan result was found and then could
+    /// not be applied.
+    ///
+    /// Cached because it is asked once per candidate in a batch of a dozen, and
+    /// the mapping changes when a game is added to the catalogue.
+    app_ids: RwLock<std::collections::BTreeMap<String, i64>>,
+
     /// One filesystem scan at a time, and a way to stop it.
     ///
     /// Two flags rather than one because they answer different questions and
@@ -211,12 +225,71 @@ impl AppState {
             downloads,
             rcon,
             sessions,
+            app_ids: RwLock::new(std::collections::BTreeMap::new()),
             scan_running: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             scan_cancel: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             cipher: std::sync::OnceLock::new(),
             library,
             app_plugins: RwLock::new(Arc::new(app_plugins)),
         })
+    }
+
+    /// The app id for a game's plugin slug, from the cache.
+    pub fn cached_app_id(&self, slug: &str) -> Option<i64> {
+        self.app_ids
+            .read()
+            .ok()?
+            .get(&slug.to_ascii_lowercase())
+            .copied()
+    }
+
+    /// Learn a batch of slug → id mappings.
+    pub fn remember_app_ids(&self, pairs: impl IntoIterator<Item = (String, i64)>) {
+        let Ok(mut map) = self.app_ids.write() else {
+            return;
+        };
+
+        for (slug, id) in pairs {
+            map.insert(slug.to_ascii_lowercase(), id);
+        }
+    }
+
+    /// The plugin slug for a TMC app id, from anything on this device.
+    ///
+    /// The inverse of [`Self::cached_app_id`], and it matters for the same
+    /// reason: a sandbox with no slug has no game rules at all — no preset, no
+    /// strategy validation, no install rule and no launch rule. It is created
+    /// successfully and then does nothing, which is the worst way to fail.
+    ///
+    /// Local sources first because they are free and authoritative for a game
+    /// this device already has; the catalogue cache is the fallback that covers
+    /// a machine with an empty library.
+    pub fn app_slug_for(&self, app_id: i64) -> Option<String> {
+        if let Ok(sandboxes) = self.library.sandbox_list(None) {
+            if let Some(found) = sandboxes
+                .iter()
+                .find(|s| s.app_id == app_id && s.app_slug.is_some())
+            {
+                return found.app_slug.clone();
+            }
+        }
+
+        if let Ok(rows) = self.library.list() {
+            if let Some(slug) = rows
+                .into_iter()
+                .find(|e| e.app_id == Some(app_id) && e.app_slug.is_some())
+                .and_then(|e| e.app_slug)
+            {
+                return Some(slug);
+            }
+        }
+
+        self.app_ids
+            .read()
+            .ok()?
+            .iter()
+            .find(|(_, id)| **id == app_id)
+            .map(|(slug, _)| slug.clone())
     }
 
     /// Claim the scan slot. False when one is already running.

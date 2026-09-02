@@ -355,7 +355,10 @@ export default function LibraryGames() {
                 appId,
                 name: name ?? ref?.name ?? `Game ${appId}`,
                 icon: ref?.icon ?? null,
-                slug,
+                // A game known only by its configured folder has no local row
+                // to carry a slug, and a sandbox created without one gets no
+                // game rules at all — no preset, no install rule, no launch.
+                slug: slug ?? ref?.slug ?? null,
                 dir: app?.gameDirs[String(appId)] ?? null,
                 sandboxes: [],
             }

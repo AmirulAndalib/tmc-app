@@ -88,11 +88,61 @@ pub fn sandbox_get(state: State<'_, AppState>, id: i64) -> AppResult<Option<Sand
 /// assemble those would mean a sandbox whose settings never went through the
 /// game's own schema.
 #[tauri::command]
-pub fn sandbox_create(
+pub async fn sandbox_create(
     state: State<'_, AppState>,
     mut new: NewSandbox,
     preset: Option<String>,
 ) -> AppResult<SandboxRow> {
+    /*
+     * A sandbox with no slug has no game rules at all — no preset, no strategy
+     * validation, no install rule and no launch rule. It is created
+     * successfully and then does nothing, which is the worst way for this to
+     * fail: nothing on screen is wrong until somebody presses Play.
+     *
+     * The caller often cannot supply one. A server's page carries an `AppRef`
+     * with a name and an id; the Library's game rows are keyed by the id that
+     * `settings.gameDirs` uses. So it is resolved here, from what the device
+     * knows and then from the catalogue.
+     */
+    if new.app_slug.as_deref().unwrap_or("").trim().is_empty() {
+        new.app_slug = state.app_slug_for(new.app_id);
+    }
+
+    if new.app_slug.is_none() {
+        if let Ok(answer) = state
+            .api
+            .request(
+                tmc_core::api::Method::GET,
+                &format!("/apps?ids={}&limit=1", new.app_id),
+                None,
+                false,
+            )
+            .await
+        {
+            if let Some(app) = answer
+                .get("apps")
+                .and_then(serde_json::Value::as_array)
+                .and_then(|apps| apps.first())
+            {
+                new.app_slug = app
+                    .get("slug")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_ascii_lowercase);
+
+                if new.app_name.is_none() {
+                    new.app_name = app
+                        .get("name")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_owned);
+                }
+
+                if let Some(slug) = &new.app_slug {
+                    state.remember_app_ids([(slug.clone(), new.app_id)]);
+                }
+            }
+        }
+    }
+
     let plugins = state.app_plugins();
 
     let spec = new
@@ -629,7 +679,8 @@ pub async fn sandbox_import(
             auto_update: true,
         },
         None,
-    )?;
+    )
+    .await?;
 
     let id = created.sandbox.id;
 

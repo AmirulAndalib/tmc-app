@@ -49,9 +49,13 @@ export function useAppIcons(): (appId: number | null | undefined) => string | nu
  *
  * Same query key as above, so the two share one request.
  */
-export function useAppRefs(): (
-    appId: number | null | undefined
-) => { id: number; name: string; icon: string | null } | null {
+export function useAppRefs(): (appId: number | null | undefined) => {
+    id: number
+    name: string
+    icon: string | null
+    /** The URL slug, which is also the game's plugin folder name. */
+    slug: string | null
+} | null {
     const facets = useQuery({
         queryKey: ['facets', 'mod'],
         queryFn: () => api.facets('mod'),
@@ -65,6 +69,17 @@ export function useAppRefs(): (
 
         if (!found) return null
 
-        return { id: found.id, name: found.name, icon: found.icon }
+        return {
+            id: found.id,
+            name: found.name,
+            icon: found.icon,
+            /*
+             * Lower-cased, because a plugin folder is `plugins/app/<slug>` and
+             * the app lower-cases every folder name it loads. An operator who
+             * typed `GTAV` in the admin form would otherwise produce a slug
+             * that matches no rule.
+             */
+            slug: found.url?.toLowerCase() ?? null,
+        }
     }
 }

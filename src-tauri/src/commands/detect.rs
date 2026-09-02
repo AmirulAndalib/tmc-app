@@ -63,6 +63,16 @@ pub async fn detect_games(app: AppHandle, state: State<'_, AppState>) -> AppResu
             .await
             .map_err(|e| AppError::internal(format!("detect: {e}")))?;
 
+    /*
+     * Learned BEFORE annotating, so `alreadySet` and `replaces` are right on
+     * the first render. Without it a scan of a fresh machine shows every game
+     * as unconfigured, including the ones that are — the lookup that decides it
+     * had no id to compare against.
+     */
+    let slugs: Vec<String> = report.games.iter().filter_map(|g| g.slug.clone()).collect();
+
+    learn_app_ids(&state, &slugs).await;
+
     Ok(report
         .games
         .into_iter()
@@ -117,8 +127,19 @@ pub fn detect_apply(state: State<'_, AppState>, slug: String, path: String) -> A
 
 /// Which TMC app id a slug belongs to on this device.
 ///
-/// From the sandboxes and the library, which are the only places the app learns
-/// the mapping — a slug is the plugin folder's name and an id is the API's.
+/// A slug is the plugin folder's name and an id is the API's, and everything
+/// the device stores — a game directory, a sandbox — is keyed by the id. So
+/// something has to translate, and the local sources only can once the machine
+/// already has a sandbox or a subscription for that game.
+///
+/// **That was the whole story until the folder scan existed, and it failed for
+/// the exact case the scan is for.** A fresh install with an empty library
+/// found a dozen games and could apply none of them, with an error saying the
+/// app did not know the game — which it did; it only did not know its id.
+///
+/// The catalogue is the third source and the authoritative one. It is cached
+/// (see [`AppState::cached_app_id`]) because a batch apply asks once per
+/// candidate, and it is filled by [`learn_app_ids`] before a batch runs.
 fn app_id_for(slug: &str, state: &AppState) -> Option<i64> {
     if let Ok(sandboxes) = state.library.sandbox_list(None) {
         if let Some(found) = sandboxes
@@ -129,13 +150,74 @@ fn app_id_for(slug: &str, state: &AppState) -> Option<i64> {
         }
     }
 
-    state
-        .library
-        .list()
-        .ok()?
-        .into_iter()
-        .find(|e| e.app_slug.as_deref() == Some(slug))
-        .and_then(|e| e.app_id)
+    if let Ok(rows) = state.library.list() {
+        if let Some(id) = rows
+            .into_iter()
+            .find(|e| e.app_slug.as_deref() == Some(slug))
+            .and_then(|e| e.app_id)
+        {
+            return Some(id);
+        }
+    }
+
+    state.cached_app_id(slug)
+}
+
+/// Ask the catalogue for the ids behind a set of slugs, and cache them.
+///
+/// Best effort throughout: a device that is offline still has whatever it
+/// learned last time, and a slug the catalogue does not know is a game the app
+/// ships a rule for and the site does not list — which is a real state during
+/// development and must not fail the whole batch.
+async fn learn_app_ids(state: &AppState, slugs: &[String]) {
+    let wanted: Vec<String> = slugs
+        .iter()
+        .filter(|slug| state.cached_app_id(slug).is_none())
+        .cloned()
+        .collect();
+
+    if wanted.is_empty() {
+        return;
+    }
+
+    /*
+     * Encoded here rather than through `commands::api::api_get`, which is the
+     * webview's door and takes its path from a caller. A slug is a plugin
+     * folder's name — `[a-z0-9-]` by the time it reaches this — but it is still
+     * interpolated into a URL, so it goes through the same percent-encoding
+     * every other query value does.
+     */
+    let encoded = wanted
+        .iter()
+        .take(100)
+        .map(|slug| format!("slugs={}", urlencode(slug)))
+        .chain(std::iter::once("limit=100".to_string()))
+        .collect::<Vec<_>>()
+        .join("&");
+
+    let Ok(answer) = state
+        .api
+        .request(
+            tmc_core::api::Method::GET,
+            &format!("/apps?{encoded}"),
+            None,
+            false,
+        )
+        .await
+    else {
+        return;
+    };
+
+    let Some(apps) = answer.get("apps").and_then(serde_json::Value::as_array) else {
+        return;
+    };
+
+    state.remember_app_ids(apps.iter().filter_map(|app| {
+        let id = app.get("id")?.as_i64()?;
+        let slug = app.get("slug")?.as_str()?.to_string();
+
+        Some((slug, id))
+    }));
 }
 
 /// Are these the same directory, allowing for a symlink or a trailing slash?
@@ -298,6 +380,10 @@ pub async fn detect_scan(
 
     let settings = state.settings.get();
 
+    let slugs: Vec<String> = report.games.iter().filter_map(|g| g.slug.clone()).collect();
+
+    learn_app_ids(&state, &slugs).await;
+
     Ok(ScanReport {
         games: report
             .games
@@ -374,6 +460,27 @@ pub fn detect_apply_many(
                 ok: false,
                 error: Some(err.to_string()),
             }),
+        }
+    }
+
+    out
+}
+
+/// Percent-encode everything outside the unreserved set.
+///
+/// A second copy of `commands::api`'s helper rather than a shared one, and that
+/// is a deliberate two lines: making it public would put a URL-building helper
+/// on the module the webview talks to, next to the command that takes a path
+/// from it.
+fn urlencode(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+
+    for byte in raw.as_bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(*byte as char)
+            }
+            other => out.push_str(&format!("%{other:02X}")),
         }
     }
 

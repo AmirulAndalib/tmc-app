@@ -190,7 +190,9 @@ export default function QuickInstall({ summary }: { summary: ContentSummaryT }) 
                 {creating && (
                     <SandboxEditor
                         appId={appId}
-                        appSlug={null}
+                        // An app ref's `url` IS the plugin folder's name, and a
+                        // sandbox created without one has no game rules at all.
+                        appSlug={summary.app?.url?.toLowerCase() ?? null}
                         appName={summary.app?.name ?? null}
                         existing={null}
                         onClose={() => setCreating(false)}
