@@ -403,12 +403,7 @@ export const ipc = {
      * A mod and an asset take the identical path: they differ only in which app
      * rule matches them, and that selection already happens inside the executor.
      */
-    sandboxInstallItem: (
-        id: number,
-        kind: string,
-        itemId: number,
-        deploy = true
-    ) =>
+    sandboxInstallItem: (id: number, kind: string, itemId: number, deploy = true) =>
         call('sandbox_install_item', QuickInstallReportSchema, {
             id,
             kind,

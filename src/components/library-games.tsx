@@ -24,10 +24,7 @@ import SandboxEditor from '~/components/sandbox-editor'
 import ScanDialog from '~/components/scan-dialog'
 import PlayDialog, { type PlayTargetT } from '~/components/play-dialog'
 import SessionHistory from '~/components/session-history'
-import {
-    ExportSandbox,
-    ImportSandbox,
-} from '~/components/sandbox-share'
+import { ExportSandbox, ImportSandbox } from '~/components/sandbox-share'
 import type { SandboxRowT, SessionT } from '~/lib/ipc/schemas'
 
 /**
@@ -99,7 +96,11 @@ function GameCard({
 }: {
     row: GameRow
     running: SessionT | null
-    playtime: { seconds: number; launches: number; lastPlayedMs: number | null } | null
+    playtime: {
+        seconds: number
+        launches: number
+        lastPlayedMs: number | null
+    } | null
     onEdit: (sandbox: SandboxRowT) => void
     onCreate: () => void
     onPlay: () => void
@@ -131,9 +132,7 @@ function GameCard({
                         <span className="flex items-center gap-1">
                             <FiLayers className="size-3" />
                             {row.sandboxes.length}{' '}
-                            {row.sandboxes.length === 1
-                                ? 'sandbox'
-                                : 'sandboxes'}
+                            {row.sandboxes.length === 1 ? 'sandbox' : 'sandboxes'}
                         </span>
 
                         {playtime && playtime.seconds > 0 ? (
@@ -159,10 +158,7 @@ function GameCard({
                         <FiFolder className="size-3 shrink-0" />
                         <span className="selectable truncate">
                             {row.dir ?? (
-                                <Link
-                                    to="/settings/games"
-                                    className="underline"
-                                >
+                                <Link to="/settings/games" className="underline">
                                     No folder set for this game
                                 </Link>
                             )}
@@ -340,7 +336,11 @@ export default function LibraryGames() {
     const rows = useMemo<GameRow[]>(() => {
         const byApp = new Map<number, GameRow>()
 
-        const ensure = (appId: number, slug: string | null, name?: string | null) => {
+        const ensure = (
+            appId: number,
+            slug: string | null,
+            name?: string | null
+        ) => {
             const existing = byApp.get(appId)
 
             if (existing) {
@@ -388,8 +388,10 @@ export default function LibraryGames() {
                 // Most recently played first, then alphabetical. Somebody
                 // opening this screen is usually going back to what they were
                 // last doing.
-                const aLast = playtime.data?.byApp[String(a.appId)]?.lastPlayedMs ?? 0
-                const bLast = playtime.data?.byApp[String(b.appId)]?.lastPlayedMs ?? 0
+                const aLast =
+                    playtime.data?.byApp[String(a.appId)]?.lastPlayedMs ?? 0
+                const bLast =
+                    playtime.data?.byApp[String(b.appId)]?.lastPlayedMs ?? 0
 
                 if (aLast !== bLast) return bLast - aLast
 
@@ -477,9 +479,9 @@ export default function LibraryGames() {
                     <FiLayers className="size-6 text-muted" />
                     <p className="text-sm">No games set up on this device yet.</p>
                     <p className="max-w-sm text-xs text-muted">
-                        Let the app read your launchers, or point it at the
-                        folders your games are in. Nothing is changed until you
-                        pick what to set up.
+                        Let the app read your launchers, or point it at the folders
+                        your games are in. Nothing is changed until you pick what to
+                        set up.
                     </p>
                     <button
                         type="button"
@@ -496,9 +498,8 @@ export default function LibraryGames() {
                             key={row.appId}
                             row={row}
                             running={
-                                running.data?.find(
-                                    (s) => s.appId === row.appId
-                                ) ?? null
+                                running.data?.find((s) => s.appId === row.appId) ??
+                                null
                             }
                             playtime={
                                 playtime.data?.byApp[String(row.appId)] ?? null

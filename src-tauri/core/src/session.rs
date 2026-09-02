@@ -694,7 +694,9 @@ fn kill_pid(pid: u32) -> AppResult<()> {
         return Ok(());
     }
 
-    Err(AppError::internal(format!("could not stop the game: {err}")))
+    Err(AppError::internal(format!(
+        "could not stop the game: {err}"
+    )))
 }
 
 #[cfg(windows)]
@@ -848,11 +850,14 @@ mod tests {
         command.env("TMC_TEST", "1");
 
         let session = sessions
-            .spawn(command, SessionSpec {
-                app_id: Some(11),
-                label: "Echo".into(),
-                ..Default::default()
-            })
+            .spawn(
+                command,
+                SessionSpec {
+                    app_id: Some(11),
+                    label: "Echo".into(),
+                    ..Default::default()
+                },
+            )
             .expect("spawn");
 
         assert!(session.running());
@@ -900,10 +905,13 @@ mod tests {
         command.env("TMC_TEST", "1");
 
         let session = sessions
-            .spawn(command, SessionSpec {
-                label: "Capture".into(),
-                ..Default::default()
-            })
+            .spawn(
+                command,
+                SessionSpec {
+                    label: "Capture".into(),
+                    ..Default::default()
+                },
+            )
             .expect("spawn");
 
         for _ in 0..200 {
@@ -971,11 +979,14 @@ mod tests {
         command.env("TMC_TEST", "1");
 
         let session = sessions
-            .spawn(command, SessionSpec {
-                sandbox_id: Some(4),
-                label: "Sleeper".into(),
-                ..Default::default()
-            })
+            .spawn(
+                command,
+                SessionSpec {
+                    sandbox_id: Some(4),
+                    label: "Sleeper".into(),
+                    ..Default::default()
+                },
+            )
             .expect("spawn");
 
         assert!(sessions.running_for_sandbox(4));

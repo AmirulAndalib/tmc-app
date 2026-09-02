@@ -94,7 +94,10 @@ export default function ScanDialog({
             .then(setLauncher)
             .catch((err: unknown) => setError(messageOf(err)))
 
-        void ipc.fsRoots().then(setRoots).catch(() => undefined)
+        void ipc
+            .fsRoots()
+            .then(setRoots)
+            .catch(() => undefined)
     }, [])
 
     useEffect(() => {
@@ -375,9 +378,7 @@ export default function ScanDialog({
                     <section>
                         <h3 className="mb-2 text-xs font-semibold">
                             Found{' '}
-                            <span className="text-muted">
-                                ({found.length})
-                            </span>
+                            <span className="text-muted">({found.length})</span>
                         </h3>
 
                         {found.length < 1 ? (

@@ -61,8 +61,7 @@ function verdict(row: SessionRowT): { text: string; tone: string } {
     if (row.exitCode === null)
         return { text: 'Ended — no exit code', tone: 'text-muted' }
 
-    if (row.exitCode === 0)
-        return { text: 'Exited normally', tone: 'text-success' }
+    if (row.exitCode === 0) return { text: 'Exited normally', tone: 'text-success' }
 
     return { text: `Exited with code ${row.exitCode}`, tone: 'text-danger' }
 }
@@ -176,7 +175,9 @@ export default function SessionHistory({ appId }: { appId?: number }) {
             </div>
 
             <ul>
-                {history.data?.map((row) => <Row key={row.id} row={row} />)}
+                {history.data?.map((row) => (
+                    <Row key={row.id} row={row} />
+                ))}
             </ul>
         </div>
     )

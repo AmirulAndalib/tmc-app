@@ -167,7 +167,10 @@ pub async fn play_open_web(
         install_id: None,
     });
 
-    let url = format!("{}/app-player", tmc_core::api::api_base().trim_end_matches('/'));
+    let url = format!(
+        "{}/app-player",
+        tmc_core::api::api_base().trim_end_matches('/')
+    );
 
     let parsed = url
         .parse()
@@ -297,10 +300,7 @@ pub async fn play_handoff(
     Ok(state.sessions.record_handoff(SessionSpec {
         app_id: Some(request.app_id),
         app_slug: request.app_slug.clone(),
-        label: request
-            .title
-            .clone()
-            .unwrap_or_else(|| "Game".to_string()),
+        label: request.title.clone().unwrap_or_else(|| "Game".to_string()),
         sandbox_id: None,
         install_id: None,
     }))

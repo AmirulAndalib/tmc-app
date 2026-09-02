@@ -42,11 +42,7 @@ import type { QuickInstallReportT } from '~/lib/ipc/schemas'
  * component takes `summary.kind` and passes it through, and there is no branch
  * anywhere in it that reads the word "asset".
  */
-export default function QuickInstall({
-    summary,
-}: {
-    summary: ContentSummaryT
-}) {
+export default function QuickInstall({ summary }: { summary: ContentSummaryT }) {
     const { status } = useAuth()
 
     const [sandboxId, setSandboxId] = useState('')
@@ -151,8 +147,7 @@ export default function QuickInstall({
 
                 {report.subscribed && (
                     <span className="text-muted">
-                        Subscribed, so it stays updated on your other devices
-                        too.
+                        Subscribed, so it stays updated on your other devices too.
                     </span>
                 )}
 
@@ -189,8 +184,7 @@ export default function QuickInstall({
                     className="flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-xs"
                 >
                     <FiPlus className="size-3.5" />
-                    Make a sandbox for{' '}
-                    {summary.app?.name ?? 'this game'} first
+                    Make a sandbox for {summary.app?.name ?? 'this game'} first
                 </button>
 
                 {creating && (

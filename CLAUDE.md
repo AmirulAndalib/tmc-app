@@ -22,6 +22,11 @@ browser tab cannot do:
 - **Finding the games** — Steam, Epic, GOG and the rest, read from what they
   already wrote down
 - **Local-first settings**, kept deliberately separate from account settings
+- **A catalogue of every game**, with a Play button on the ones that can be
+  started from here — in a window of their own, or from the copy installed on
+  this machine with a sandbox's mods in front of it
+- **Play sessions** — what is running, how long it ran, and what it printed
+  before it crashed
 
 It is **not** a wrapper around the website. There is no landing page, no
 marketing header, no footer. It opens on a browser and stays there.
@@ -72,7 +77,8 @@ tmc-core (src-tauri/core/src/)     ← NO Tauri dependency; tests anywhere
   ├── plugins/    manifest → jail → step executor, all declarative
   ├── deploy/     merge tree → link/copy → ledger; how mods reach the game
   ├── library/    subscriptions, sandboxes, staging, deployment
-  ├── launch.rs   the only place a process is spawned
+  ├── launch.rs   the only place a launch is RESOLVED
+  ├── session.rs  the games that are running, and how long they ran for
   ├── deeplink.rs what a `tmc://` link may mean, which is "show a page"
   └── logging.rs  the audit trail Settings → Logging reads
   │
@@ -150,6 +156,9 @@ genuinely need a window belongs on that side of the line.
 | `rcon/frostbite.rs` | Battlefield's, with `login.hashed` |
 | `rcon/store.rs` | Saved servers. Passwords encrypted; none of it leaves the device |
 | `launch.rs` | The only place a launch is RESOLVED. Produces a plan; runs nothing |
+| `session.rs` | **Games that are running.** Keeps the `Child`, times the session, captures its output. What can be known about a launch, and what cannot |
+| `detect/walk.rs` | The bounded walk over folders the USER ticked, for what no launcher wrote down |
+| `library/share.rs` | A sandbox as a pasteable code. Item ids, never files, and nothing about this machine |
 
 **`src-tauri/usvfs/src/` — `tmc-usvfs`**
 
@@ -172,6 +181,8 @@ genuinely need a window belongs on that side of the line.
 | `commands/detect.rs` | Scan, and separately apply. A scan configures nothing |
 | `commands/rcon.rs` | Consoles. No command returns a password |
 | `commands/library.rs` | Sync, install, uninstall, launch |
+| `commands/play.rs` | The three ways a game starts. Names IDS, never a loader URL or a connect link |
+| `commands/sessions.rs` | What is running, what ran, and the log it printed |
 | `spawn.rs` | The only place in the app that starts a process. Which mechanism is the PLAN's decision, not the caller's |
 | `state.rs` | `AppState`, assembled once — shared locks and caches depend on that |
 | `paths.rs` | Every path, from Tauri's resolver — never `$HOME` |
@@ -215,6 +226,16 @@ genuinely need a window belongs on that side of the line.
 | `components/server-table.tsx` | The server browser's default view: table, expandable rows |
 | `components/browse-filters.tsx` | The filter panel: collapsible groups, kind-aware, URL-backed |
 | `components/server-panel.tsx` | The live panel on a server's page |
+| `routes/apps.tsx` | **The front door.** Every game and app, and which of them can be started here |
+| `routes/library.tsx` | Two views: the games on this machine, and what the account subscribed to |
+| `components/library-games.tsx` | Installed games, their sandboxes, play time, and what is running |
+| `components/library-content.tsx` | The subscription list, and why each row is or is not installed |
+| `components/play-dialog.tsx` | **The launcher.** The three ways to start a game, and which are possible here |
+| `components/scan-dialog.tsx` | Finding games: read the launchers, or walk folders the user ticked |
+| `components/sandbox-editor.tsx` | Create, edit and delete one sandbox |
+| `components/sandbox-share.tsx` | Export a sandbox to a code; import one from a code |
+| `components/session-history.tsx` | Recent launches, and the log a crashed game printed |
+| `components/quick-install.tsx` | One-click install of a mod or asset INTO a sandbox |
 | `routes/sandboxes.tsx` | The mod manager: what is in a sandbox, and whether it is applied |
 | `routes/downloads.tsx` | The queue, and everything to do when one is stuck |
 | `routes/rcon.tsx` | The server console |
@@ -282,7 +303,23 @@ Why a separate REST API rather than the website's tRPC:
 - Rust calls it too.
 
 Endpoints: `/auth/device`, `/auth/token`, `/auth/refresh`, `/auth/revoke`, `/me`
-(GET + PATCH), `/browse`, `/content/:kind/:id`, `/facets`, `/version`.
+(GET + PATCH), `/browse`, `/content/:kind/:id`, `/facets`, `/apps`,
+`/play/launch`, `/version`.
+
+**`/apps` exists because the website has no page that could answer it.** Its
+chrome is built around one chosen game, so "what games are there?" is a question
+it answers by making you choose first; the app opens on a flat grid across the
+whole catalogue and that IS its front door. The endpoint carries the play
+vocabulary (`directPlay`, the launch options, which modes an app supports) that
+`/facets` has no reason to know about, and per-app counts from three `groupBy`s
+over the page's ids rather than a relation `_count` per row.
+
+**`/play/launch` resolves one launch, server-side, and answers `null` for every
+refusal.** The app never decides whether a game can be started by reading
+columns off a catalogue row — it asks — so the button that is drawn and the
+launch that happens agree by construction. `directPlay` is enforced there as
+well as hidden in the UI, because a client that ignores the field must not get a
+serverless launch out of it.
 
 ### The browse filters mirror the website's, deliberately
 
@@ -935,6 +972,186 @@ Options reach a command line only through `optionArgs` in the game's own
 `launch.json`. `LaunchOptions` carries them in a flattened `extra` map; an
 object or an array contributes nothing, and there is still no shell.
 
+## Playing a game
+
+There are **three** ways a game starts from the app, and which of them is
+possible is a fact about THIS machine that no server can answer. That is the
+whole reason the app's launcher beats the website's: a browser has exactly one
+way to start a game, so the site can offer one button.
+
+| Mode | What it is | Who resolves it |
+| --- | --- | --- |
+| **sandbox** | The copy installed here, with a profile's mods deployed and its load order applied | Entirely local — `launch::plan` |
+| **web** | The app's uploaded JavaScript loader, in a window of its own | `/play/launch` |
+| **connect** | The server's own `connectUrl`, handed to the installed game client | The API supplies it; Rust opens it |
+
+`components/play-dialog.tsx` puts the three side by side with the facts that
+decide between them — which sandboxes exist, whether a game folder is set, and
+the latency measured from this device rather than from a scanner in another
+hemisphere.
+
+### The web player runs on the SITE's origin, and that is the isolation
+
+A game loader is third-party JavaScript. Running it in the app's own webview
+would hand it `invoke`, and the window it would reach is the one holding the
+sandbox engine, the RCON store and the settings that anchor the plugin jail.
+
+So the player window opens at `<site>/app-player` — a chrome-free page in
+website-city with its own root layout, no providers and no session read. Two
+properties follow, and both are enforced by something other than care:
+
+  * **The app's CSP forbids the loader here anyway.** `tauri.conf.json` sets
+    `script-src 'self'`, so a loader on a CDN does not execute in the app's
+    webview at all. Widening that would widen it for the whole UI.
+  * **A remote page has no IPC.** Tauri exposes commands to the app's own asset
+    origin only; a window pointed at `https://` has no `invoke`, no event
+    channel and no plugin access — by the runtime's construction rather than by
+    a permission list somebody has to keep correct. A hostile loader is a web
+    page with a web page's powers.
+
+The boot descriptor reaches it through `initialization_script`, not a query
+string, for the reason the site's own player gives: a server address on a URL
+ends up in every cache entry and history record that URL touches.
+
+That window is **decorated**, unlike the main one. Drawing our own frame needs
+`core:window:allow-start-dragging`, and this window is remote precisely so that
+it has no capabilities at all. A native frame is the price of the isolation.
+
+**`/app-player` is excluded from website-city's locale middleware**, alongside
+`/file/…` and for the same reason: it lives outside `[locale]` deliberately, and
+rewritten under one it 404s.
+
+### The webview names ids, never URLs
+
+`play_open_web` takes an app id and an optional server id and asks
+`/play/launch` itself. A loader URL from the frontend would be a `<script src>`
+injected into a page on the site's origin; a connect link from the frontend
+would be a request to hand a string to whatever program claimed a scheme. Both
+are resolved in Rust, and a connect link is checked against
+`plugins::apps::LAUNCH_SCHEMES` — the same closed list a plugin's launch rule is
+held to.
+
+This is the rule `download_release` already followed, restated: there is no
+`play_open(loaderUrl)`, and nothing an injected script could point at a script
+of its choosing.
+
+## Play sessions
+
+`spawn::run` used to `Command::spawn` and drop the `Child`, with a comment
+saying the game outlives the launcher. The first half was right and the
+conclusion was not: dropping the handle dropped every fact about the launch. One
+missing piece, three symptoms — the account was told `playedSeconds: 0` on every
+start, the Library could not say whether a game was already open, and a game
+that died in two seconds left nothing to read.
+
+`session::Sessions` keeps it on a supervisor thread. What that buys, and what it
+deliberately does not:
+
+**`SessionKind` is the honest record of what can be known.**
+
+| Kind | Duration | Exit code | Output |
+| --- | --- | --- | --- |
+| `Process` | measured | real | captured |
+| `Handoff` | **none** | none | none |
+| `Web` | measured | none | none |
+
+A `steam://` launch is a `Handoff`: the OS opener started a launcher which
+started the game, and there is no process of ours. It reports **no** play time
+rather than the time between firing a URI and the app noticing — that number
+describes the app, and a launcher whose statistics are fiction is worse than one
+with none. The Library says "not measured" for one, not "0h".
+
+**A duration is never inferred from a later launch.** Other managers treat "the
+app was closed" as the end of a session, or clamp a long one to something
+plausible. Both produce a number nobody can distinguish from a right one.
+
+**Output goes to one bounded file per session.** That is the whole crash-report
+story: a game that exits in two seconds has almost always printed why, and
+without a pipe that goes to a console nobody attached. Bounded because a game
+left running overnight with a chatty logger is the normal case.
+
+**`stop` signals by pid.** The supervisor holds the `&mut Child` for its whole
+`wait`, so `Child::kill` is unreachable. Signalling by pid is normally a bug —
+a pid is reused — and is sound in exactly that position and nowhere else: a
+process inside `wait` has not been reaped, so its pid cannot yet have been
+handed to anybody else.
+
+**A finished session is WRITTEN, not reported.** It lands in `game_session`
+marked unreported, and `sessions_flush` sends it when the device next has an API
+to talk to. A game is very often played offline — a laptop on a train is the
+case the feature is for — and play time that only counts when the network
+happened to be up is play time that silently goes missing. The flush runs on the
+library's sync pass, which is the device's own "am I online now?" heartbeat.
+
+**A sandbox that is already running cannot be started twice.** The second copy
+opens files the first has mapped, and the play clock for that sandbox would
+otherwise be able to exceed wall-clock time.
+
+## Finding games the launchers do not know about
+
+`detect::scan` reads Steam's manifests, Epic's `.item` files and Galaxy's
+database. That is the right first answer and covers most machines. It cannot
+cover a game copied from another PC, a dedicated server unpacked by hand, or a
+drive that was moved.
+
+`detect::walk` walks folders **the user ticked**. `roots` is a required argument
+with no default, and that is the design rather than an inconvenience: a scan of
+"the filesystem" is a scan of somebody's documents, their photos and every
+network share the machine has mounted, and a feature that did that by default
+would be indistinguishable from one looking for something else.
+
+Bounded on four axes, each a real machine rather than a hypothetical:
+
+| Bound | The machine it exists for |
+| --- | --- |
+| Depth | A game's own asset tree, which is where the hundred thousand files are |
+| Directory count | A `node_modules` tree, a `/nix/store` |
+| Wall clock | A network share that has gone away and answers `readdir` in thirty seconds |
+| Never follows a symlink | `~/.wine/dosdevices/z: -> /`, which is a layout people have |
+
+Two properties worth keeping:
+
+  * **A matched folder is not descended into.** Everything below a game's root
+    is the game's own data.
+  * **An unmatched folder is not a finding.** That is what separates this from a
+    file browser: a list of every directory on a drive is not a scan result.
+
+`WalkStop` distinguishes "walked everything" from "hit a limit", because showing
+them identically is how somebody concludes their game is undetectable when the
+walk simply never reached it.
+
+**Applying is still separate.** `detect_apply_many` runs each candidate through
+`detect_apply`'s own validation — a batch where one folder is refused must still
+apply the other eleven and say which one was not.
+
+## Sharing a sandbox
+
+A code, not a file. `library::share` encodes a sandbox as `TMC1-<base64>`.
+
+**Why a code.** A file export needs a path to write and a file import needs a
+path to read, and the webview names neither — the one command that takes a path
+returns directory names and reads nothing. Trading that guarantee for a save
+dialog is not a trade worth making, and a code is what people do with an
+exported profile anyway: put it in a message.
+
+**Item ids, never files.** Shipping the files would make this a redistribution
+channel for other people's work, with no download counted, no licence respected
+and no update path.
+
+**Nothing about this machine.** No game directory, no launch environment, no
+ledger, no staging path — the same test the settings split uses, and a code is
+by definition going somewhere else. A game folder in a shared code is also
+somebody's username in a chat message. `a_code_carries_nothing_about_this_machine`
+decodes an export and asserts none of it is there.
+
+**Importing previews first**, because a code is a string from somebody else and
+pressing Import can make two hundred subscriptions on an account. It subscribes
+and adds; it does not stage — two hundred mods is two hundred downloads, and
+starting them inside a command the UI is awaiting is a frozen dialog with no
+queue to look at. `cloudSync` and `autoUpdate` come from the importer's own
+defaults: whether somebody's mod list leaves their machine is their decision,
+not the exporter's.
+
 ## Downloads
 
 Every file the app fetches goes through `download::DownloadManager` — a mod's
@@ -1472,6 +1689,37 @@ changed it, and the lookup costs nothing.
 
 ## Gotchas
 
+- **`openUrl` cannot open a `steam://` link, and fails silently.**
+  `tauri-plugin-opener`'s capability is scoped to `https://*` deliberately, so
+  the webview cannot open a custom scheme registered by something else on the
+  machine. The server page's "Join server" button handed `connectUrl` — which is
+  always `steam://` or a sibling — straight to it, and was refused every single
+  time it was pressed. Anything that is not `https` goes through Rust, where the
+  scheme is checked against `plugins::apps::LAUNCH_SCHEMES`.
+- **A `const` in `schemas.ts` referenced before its initializer runs is a
+  runtime TDZ error, not a type error.** `tsc` is perfectly happy with a schema
+  that uses one declared two hundred lines below it, and the app then throws on
+  module load with a message about the wrong file. New schemas go BELOW
+  everything they reference.
+- **`/app-player` has to be in website-city's middleware exclusion list.** It
+  lives outside `[locale]` on purpose; without the exclusion next-intl rewrites
+  it to `/en/app-player`, which does not exist. The symptom is an empty player
+  window, which reads as a broken game rather than a routing rule.
+- **A query-string field that is sometimes a list must be in `ARRAY_FIELDS`.**
+  `?ids=42` and `?ids=42&ids=43` reach the schema as different SHAPES otherwise,
+  so the one-element case fails validation while the two-element case passes —
+  invisible in any test that happens to use two values.
+- **A `steam://` launch has no play time and must not be given one.** It is a
+  `SessionKind::Handoff`: the OS opener started a launcher which started the
+  game, and the only duration available is the time between firing a URI and the
+  app noticing. That number describes the app. `Session::seconds` returns `None`
+  for one and every caller has to decide what to draw — `0` is the wrong answer
+  everywhere except the database column.
+- **`Child::kill` is unreachable while the supervisor is in `wait`.** It needs
+  `&mut Child` and the supervisor holds that lock for the whole wait, which is
+  why `Sessions::stop` signals by pid. That is sound in exactly that position —
+  a process inside `wait` has not been reaped — and is a bug anywhere else.
+
 - **A native `<select>`'s popup is drawn by the OS and cannot be styled.** The
   closed control takes CSS; the open list takes none of it, so every settings
   pane in a dark theme had one white rectangle in it. `components/select.tsx`
@@ -1656,8 +1904,21 @@ Honest list, so nothing here reads as finished when it is not:
   against none of those would be a feature naming a capability it does not have,
   with a silently-installed binary as the consequence.
 - **Writes.** The app is read-only against the API for publishing — no
-  commenting or uploading. Reviews, review votes, reports, subscriptions and
-  sandboxes DO write.
+  commenting or uploading. Reviews, review votes, reports, subscriptions,
+  sandboxes and play-time reports DO write.
+- **A measurable virtual launch.** A USVFS launch is recorded as a
+  `SessionKind::Handoff` — not because nothing of ours started it, but because
+  `inject::launch` does not return the process handle, so there is no exit to
+  observe and no duration to measure. Fixing that means a change inside the one
+  part of the tree that has never been run against a game.
+- **A mod config editor.** Every manager studied for this has one — editing a
+  mod's own config files from inside the app rather than in a text editor
+  alongside it. It is the largest single feature still missing, and it is not
+  free: it needs a bounded read/write path into the game folder, which is a
+  deliberate widening of the rule that no command takes a path from the webview.
+  The shape that would work is a game declaring its config locations in
+  `sandbox.json` and everything resolving through `plugins::jail`, exactly as an
+  installer's steps do.
 - **USVFS injection, proven.** The strategy is implemented end to end and gated
   behind `usvfs-hooks`, off by default. The tree and the blob are tested on
   every platform; the two hundred lines that patch an import table in somebody

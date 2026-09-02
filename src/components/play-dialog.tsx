@@ -178,10 +178,7 @@ function defaultsFor(options: PlayOptionT[]): PlayOptionValuesT {
         }
 
         if (option.kind === 'int') {
-            out[option.key] = Math.min(
-                Math.max(option.def, option.min),
-                option.max
-            )
+            out[option.key] = Math.min(Math.max(option.def, option.min), option.max)
 
             continue
         }
@@ -257,9 +254,7 @@ export default function PlayDialog({
     const [preview, setPreview] = useState<LaunchPreviewT | null>(null)
     const [confirming, setConfirming] = useState(false)
 
-    const live = useLiveServer<HTMLDivElement>(
-        server ? requestFor(server) : null
-    )
+    const live = useLiveServer<HTMLDivElement>(server ? requestFor(server) : null)
 
     const options = useMemo(
         () =>
@@ -324,7 +319,15 @@ export default function PlayDialog({
         setMode(
             canSandbox ? 'sandbox' : canWeb ? 'web' : canConnect ? 'connect' : null
         )
-    }, [mode, sandboxes, canSandbox, canWeb, canConnect, target.app, looked.isPending])
+    }, [
+        mode,
+        sandboxes,
+        canSandbox,
+        canWeb,
+        canConnect,
+        target.app,
+        looked.isPending,
+    ])
 
     const launchWeb = useCallback(async () => {
         setBusy(true)
@@ -476,8 +479,7 @@ export default function PlayDialog({
                                 <Link to="/sandboxes" className="underline">
                                     Sandboxes
                                 </Link>
-                                , or open a server&rsquo;s page to connect
-                                directly.
+                                , or open a server&rsquo;s page to connect directly.
                             </p>
                         </div>
                     ) : (
@@ -550,10 +552,7 @@ export default function PlayDialog({
                                     <span>
                                         No sandbox exists for this game on this
                                         device.{' '}
-                                        <Link
-                                            to="/library"
-                                            className="underline"
-                                        >
+                                        <Link to="/library" className="underline">
                                             Add one
                                         </Link>{' '}
                                         to play it with mods.

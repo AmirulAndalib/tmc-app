@@ -804,7 +804,6 @@ export const ImportReportSchema = z.object({
 
 export type ImportReportT = z.infer<typeof ImportReportSchema>
 
-
 /** One setting a game's launch rule understands — `apps::OptionSpec`. */
 export const OptionSpecSchema = z.object({
     key: z.string(),

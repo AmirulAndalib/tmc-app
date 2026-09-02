@@ -242,8 +242,7 @@ impl AppState {
     }
 
     pub fn scan_running(&self) -> bool {
-        self.scan_running
-            .load(std::sync::atomic::Ordering::SeqCst)
+        self.scan_running.load(std::sync::atomic::Ordering::SeqCst)
     }
 
     /// The flag the walk checks between directories.

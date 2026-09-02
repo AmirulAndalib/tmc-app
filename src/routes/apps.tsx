@@ -353,9 +353,9 @@ export default function AppsRoute() {
 
                 {playDisabled && (
                     <p className="rounded-lg border border-border bg-surface-2 px-3 py-2 text-[11px] text-muted">
-                        Playing games from the app is switched off site-wide at
-                        the moment, so no Play buttons are shown. Everything else
-                        on this screen still works.
+                        Playing games from the app is switched off site-wide at the
+                        moment, so no Play buttons are shown. Everything else on
+                        this screen still works.
                     </p>
                 )}
             </header>

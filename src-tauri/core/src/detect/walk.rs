@@ -282,7 +282,9 @@ pub fn walk(
              * at every level, and `~/.wine/dosdevices/z: -> /` is a layout
              * people really have.
              */
-            let Ok(kind) = entry.file_type() else { continue };
+            let Ok(kind) = entry.file_type() else {
+                continue;
+            };
 
             if !kind.is_dir() || kind.is_symlink() {
                 continue;
@@ -411,9 +413,7 @@ fn identify(
                     continue;
                 }
 
-                if !spec.markers.is_empty()
-                    && !has_marker(&dir.to_string_lossy(), &spec.markers)
-                {
+                if !spec.markers.is_empty() && !has_marker(&dir.to_string_lossy(), &spec.markers) {
                     continue;
                 }
 
@@ -510,11 +510,7 @@ mod tests {
         // Deliberately NOT named after the game.
         write(tmp.path(), "Games/gta-backup/GTA5.exe", "x");
 
-        let report = run(
-            &[tmp.path().to_path_buf()],
-            &apps,
-            &WalkLimits::balanced(),
-        );
+        let report = run(&[tmp.path().to_path_buf()], &apps, &WalkLimits::balanced());
 
         assert_eq!(report.games.len(), 1, "{:?}", report.games);
         assert_eq!(report.games[0].slug.as_deref(), Some("gtav"));
@@ -546,8 +542,7 @@ mod tests {
         let plugin_dir = tempfile::tempdir().expect("tempdir");
         let apps = plugins(plugin_dir.path());
 
-        std::fs::create_dir_all(tmp.path().join("Steam/common/Some Indie Game"))
-            .expect("mkdir");
+        std::fs::create_dir_all(tmp.path().join("Steam/common/Some Indie Game")).expect("mkdir");
 
         let report = run(&[tmp.path().to_path_buf()], &apps, &WalkLimits::balanced());
 
@@ -595,7 +590,10 @@ mod tests {
             ..WalkLimits::balanced()
         };
 
-        assert_eq!(run(&[tmp.path().to_path_buf()], &apps, &deep).games.len(), 1);
+        assert_eq!(
+            run(&[tmp.path().to_path_buf()], &apps, &deep).games.len(),
+            1
+        );
     }
 
     #[test]
@@ -671,9 +669,11 @@ mod tests {
 
         write(tmp.path(), ".local/share/gta/GTA5.exe", "x");
 
-        assert!(run(&[tmp.path().to_path_buf()], &apps, &WalkLimits::balanced())
-            .games
-            .is_empty());
+        assert!(
+            run(&[tmp.path().to_path_buf()], &apps, &WalkLimits::balanced())
+                .games
+                .is_empty()
+        );
 
         let with_hidden = WalkLimits {
             hidden: true,
@@ -714,7 +714,11 @@ mod tests {
 
         let missing = tmp.path().join("not-here");
 
-        let report = run(std::slice::from_ref(&missing), &apps, &WalkLimits::balanced());
+        let report = run(
+            std::slice::from_ref(&missing),
+            &apps,
+            &WalkLimits::balanced(),
+        );
 
         assert_eq!(report.unreadable.len(), 1);
         assert_eq!(report.unreadable[0].0, missing.display().to_string());

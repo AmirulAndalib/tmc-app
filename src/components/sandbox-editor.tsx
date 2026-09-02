@@ -74,14 +74,12 @@ export default function SandboxEditor({
 
     const [name, setName] = useState(existing?.name ?? '')
     const [description, setDescription] = useState(existing?.description ?? '')
-    const [environment, setEnvironment] = useState<
-        'client' | 'server' | 'shared'
-    >(existing?.environment ?? 'client')
+    const [environment, setEnvironment] = useState<'client' | 'server' | 'shared'>(
+        existing?.environment ?? 'client'
+    )
     const [strategy, setStrategy] = useState<string>(existing?.strategy ?? '')
     const [preset, setPreset] = useState<string>(existing?.preset ?? '')
-    const [gameDir, setGameDir] = useState<string | null>(
-        existing?.gameDir ?? null
-    )
+    const [gameDir, setGameDir] = useState<string | null>(existing?.gameDir ?? null)
     const [cloudSync, setCloudSync] = useState(existing?.cloudSync ?? true)
     const [autoUpdate, setAutoUpdate] = useState(existing?.autoUpdate ?? true)
 
@@ -144,7 +142,10 @@ export default function SandboxEditor({
             return {
                 value,
                 label: STRATEGY_LABELS[value] ?? value,
-                hint: probe && !probe.available ? (probe.reason ?? 'Not available here') : undefined,
+                hint:
+                    probe && !probe.available
+                        ? (probe.reason ?? 'Not available here')
+                        : undefined,
                 disabled: probe ? !probe.available : false,
             }
         })
@@ -223,8 +224,8 @@ export default function SandboxEditor({
                         {existing ? 'Edit sandbox' : 'New sandbox'}
                     </h2>
                     <p className="text-[11px] text-muted">
-                        {appName ?? 'This game'} · a named set of mods with its
-                        own load order and launch settings.
+                        {appName ?? 'This game'} · a named set of mods with its own
+                        load order and launch settings.
                     </p>
                 </header>
 
@@ -337,9 +338,8 @@ export default function SandboxEditor({
                         <span className="flex flex-col gap-0.5">
                             <span>Keep this on my account</span>
                             <span className="text-[11px] text-muted">
-                                Its name, mods and load order follow you to
-                                another machine. Off means it never leaves this
-                                device.
+                                Its name, mods and load order follow you to another
+                                machine. Off means it never leaves this device.
                             </span>
                         </span>
                     </label>
@@ -354,8 +354,7 @@ export default function SandboxEditor({
                         <span className="flex flex-col gap-0.5">
                             <span>Keep its mods up to date</span>
                             <span className="text-[11px] text-muted">
-                                Stages the newest release each subscription
-                                offers.
+                                Stages the newest release each subscription offers.
                             </span>
                         </span>
                     </label>
@@ -380,9 +379,9 @@ export default function SandboxEditor({
                              * game shipped with.
                              */}
                             <p className="text-muted">
-                                Its deployed files are removed from the game
-                                folder first. Keeping them leaves files nothing
-                                can undeploy later.
+                                Its deployed files are removed from the game folder
+                                first. Keeping them leaves files nothing can
+                                undeploy later.
                             </p>
                             <div className="flex flex-wrap gap-2">
                                 <button

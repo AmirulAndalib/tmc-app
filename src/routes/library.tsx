@@ -74,11 +74,7 @@ export default function LibraryRoute() {
         <div className="flex flex-col gap-3 p-3">
             <Header view={view} onChange={setView} count={rows.length} />
 
-            {view === 'games' ? (
-                <LibraryGames />
-            ) : (
-                <LibraryContent />
-            )}
+            {view === 'games' ? <LibraryGames /> : <LibraryContent />}
         </div>
     )
 }
@@ -145,9 +141,7 @@ function Tab({
         >
             <Icon className="size-3.5" />
             {label}
-            {badge !== undefined && (
-                <span className="opacity-70">{badge}</span>
-            )}
+            {badge !== undefined && <span className="opacity-70">{badge}</span>}
         </button>
     )
 }

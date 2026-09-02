@@ -211,7 +211,6 @@ function LibraryRow({ row }: { row: LibraryRowT }) {
     )
 }
 
-
 export default function LibraryContent() {
     const { rows, loading, lastSync, error, sync } = useLibrary()
     const [filter, setFilter] = useState<Filter>('all')

@@ -554,9 +554,7 @@ pub fn sandbox_export(state: State<'_, AppState>, id: i64) -> AppResult<String> 
 /// somebody else, and pressing Import on one should show what is in it before
 /// forty subscriptions are made on the account.
 #[tauri::command]
-pub fn sandbox_import_preview(
-    code: String,
-) -> AppResult<tmc_core::library::share::SharedSandbox> {
+pub fn sandbox_import_preview(code: String) -> AppResult<tmc_core::library::share::SharedSandbox> {
     tmc_core::library::share::import(&code)
 }
 
@@ -641,8 +639,7 @@ pub async fn sandbox_import(
      * "could not subscribe" and then "subscribe to this item first" — which
      * reads as two problems with one item.
      */
-    let mut failed: std::collections::BTreeSet<(String, i64)> =
-        std::collections::BTreeSet::new();
+    let mut failed: std::collections::BTreeSet<(String, i64)> = std::collections::BTreeSet::new();
 
     for item in &shared.mods {
         /*
@@ -749,7 +746,11 @@ pub async fn sandbox_import(
         )
     );
 
-    report.sandbox = state.library.sandbox_get(id)?.map(|s| row(s, &state)).transpose()?;
+    report.sandbox = state
+        .library
+        .sandbox_get(id)?
+        .map(|s| row(s, &state))
+        .transpose()?;
 
     Ok(report)
 }
@@ -849,9 +850,7 @@ pub async fn sandbox_install_item(
          * every step below fails on an item that was just subscribed — which
          * reads as the button not working.
          */
-        if let Err(err) =
-            tmc_core::library::sync_once(&state.api, &state.library, false).await
-        {
+        if let Err(err) = tmc_core::library::sync_once(&state.api, &state.library, false).await {
             report
                 .warnings
                 .push(format!("Could not refresh the library: {}", err.detail()));
@@ -904,8 +903,7 @@ pub async fn sandbox_install_item(
 
         let ctx = state.sandbox_ctx(&plugins, &settings, &roots, &staging, &backups);
 
-        report.staged =
-            Some(stage_mod(&state.library, &sandbox, member, &entry, &ctx).await);
+        report.staged = Some(stage_mod(&state.library, &sandbox, member, &entry, &ctx).await);
     }
 
     let staged_ok = report.staged.as_ref().is_some_and(|s| s.ok);

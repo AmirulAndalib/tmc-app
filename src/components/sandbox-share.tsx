@@ -33,13 +33,7 @@ import type { ImportReportT, SharedSandboxT } from '~/lib/ipc/schemas'
  * action in this app has.
  */
 
-export function ExportSandbox({
-    id,
-    name,
-}: {
-    id: number
-    name: string
-}) {
+export function ExportSandbox({ id, name }: { id: number; name: string }) {
     const [code, setCode] = useState<string | null>(null)
     const [copied, setCopied] = useState(false)
     const [error, setError] = useState<string | null>(null)
@@ -172,8 +166,8 @@ export function ImportSandbox({
                 <header className="border-b border-border p-4">
                     <h2 className="text-sm font-semibold">Import a sandbox</h2>
                     <p className="text-[11px] text-muted">
-                        Paste a code somebody shared. Nothing happens until you
-                        have seen what is in it.
+                        Paste a code somebody shared. Nothing happens until you have
+                        seen what is in it.
                     </p>
                 </header>
 
@@ -182,8 +176,7 @@ export function ImportSandbox({
                         <div className="flex flex-col gap-2 text-xs">
                             <p className="flex items-center gap-2 text-success">
                                 <FiCheck className="size-3.5" />
-                                Created “{report.sandbox?.name}” with{' '}
-                                {report.added}{' '}
+                                Created “{report.sandbox?.name}” with {report.added}{' '}
                                 {report.added === 1 ? 'mod' : 'mods'}.
                             </p>
 
@@ -194,15 +187,14 @@ export function ImportSandbox({
                              * nothing deserves to have been told why.
                              */}
                             <p className="text-muted">
-                                Its files are not downloaded yet — open the
-                                sandbox and press Deploy.
+                                Its files are not downloaded yet — open the sandbox
+                                and press Deploy.
                             </p>
 
                             {report.skipped.length > 0 && (
                                 <div className="rounded-lg border border-warning/40 bg-warning/10 p-2">
                                     <p className="font-medium text-warning">
-                                        {report.skipped.length} could not be
-                                        added
+                                        {report.skipped.length} could not be added
                                     </p>
                                     <ul className="mt-1 flex flex-col gap-0.5 text-[11px] text-muted">
                                         {report.skipped.map((line) => (
@@ -229,8 +221,7 @@ export function ImportSandbox({
 
                             <div className="rounded-lg border border-border p-3 text-xs">
                                 <p className="font-medium">
-                                    {preview.appName ??
-                                        `Game ${preview.appId}`}
+                                    {preview.appName ?? `Game ${preview.appId}`}
                                 </p>
                                 <p className="text-[11px] text-muted">
                                     {preview.loader ?? 'no loader'} ·{' '}
@@ -258,8 +249,8 @@ export function ImportSandbox({
                             <p className="text-[11px] text-muted">
                                 Importing subscribes your account to{' '}
                                 {preview.mods.length}{' '}
-                                {preview.mods.length === 1 ? 'item' : 'items'},
-                                so they stay updated on your devices.
+                                {preview.mods.length === 1 ? 'item' : 'items'}, so
+                                they stay updated on your devices.
                             </p>
                         </>
                     ) : (
@@ -298,9 +289,7 @@ export function ImportSandbox({
                         <button
                             type="button"
                             disabled={busy || (!preview && !code.trim())}
-                            onClick={() =>
-                                preview ? void run() : void look()
-                            }
+                            onClick={() => (preview ? void run() : void look())}
                             className="flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-accent-foreground disabled:opacity-50"
                         >
                             <FiDownloadCloud className="size-3.5" />

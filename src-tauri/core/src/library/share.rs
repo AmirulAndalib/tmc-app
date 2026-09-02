@@ -39,8 +39,8 @@ use std::collections::BTreeMap;
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 
-use crate::error::{AppError, AppResult};
 use crate::deploy::Strategy;
+use crate::error::{AppError, AppResult};
 use crate::library::sandbox::{Environment, Sandbox};
 
 /// Marks a string as one of ours, and says which format it is.
