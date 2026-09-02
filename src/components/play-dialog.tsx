@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import {
     FiAlertTriangle,
@@ -10,6 +11,7 @@ import {
     FiServer,
 } from 'react-icons/fi'
 
+import { api } from '~/lib/api/client'
 import { ipc } from '~/lib/ipc/commands'
 import { messageOf } from '~/lib/ipc'
 import { GameIcon } from '~/components/game-icon'
@@ -57,7 +59,17 @@ import type { LaunchPreviewT, SandboxRowT } from '~/lib/ipc/schemas'
 type Mode = 'web' | 'sandbox' | 'connect'
 
 export type PlayTargetT = {
-    app: AppSummaryT
+    appId: number
+    /**
+     * The full catalogue row, when the caller already has one.
+     *
+     * The Apps tab does; a server page does not — it has an `AppRef` with a
+     * name and an icon and nothing about how the game can be launched. So the
+     * dialog looks the rest up by id rather than making every caller carry it,
+     * and `fallback` is what it draws while that is in flight or if it fails.
+     */
+    app?: AppSummaryT
+    fallback?: { name: string; icon: string | null; slug: string | null }
     /** Set when launching into a specific server. */
     server?: ContentSummaryT | null
 }
@@ -187,7 +199,52 @@ export default function PlayDialog({
     target: PlayTargetT
     onClose: () => void
 }) {
-    const { app, server } = target
+    const { server } = target
+
+    /*
+     * Skipped entirely when the caller already handed over a row. `enabled`
+     * rather than a conditional hook: the Apps tab passes one and a server page
+     * does not, and a hook that sometimes runs is not a hook.
+     */
+    const looked = useQuery({
+        queryKey: ['apps', { ids: [target.appId] }],
+        queryFn: () => api.apps({ ids: [target.appId], limit: 1 }),
+        enabled: !target.app,
+        staleTime: 5 * 60 * 1000,
+    })
+
+    /*
+     * The catalogue row if there is one, and a stub otherwise.
+     *
+     * The stub carries `play: null`, which is the honest value: without the
+     * server's answer nothing is known about web launches, so none is offered.
+     * The SANDBOX launch still works — it needs nothing from the catalogue —
+     * which is what keeps this dialog useful offline.
+     */
+    const app: AppSummaryT = useMemo(
+        () =>
+            target.app ??
+            looked.data?.apps[0] ?? {
+                id: target.appId,
+                name: target.fallback?.name ?? `Game ${target.appId}`,
+                slug: target.fallback?.slug ?? null,
+                description: null,
+                type: 'GAME',
+                images: {
+                    card: null,
+                    banner: null,
+                    icon: target.fallback?.icon ?? null,
+                },
+                isOfficial: false,
+                integrations: [],
+                hasServers: true,
+                engine: null,
+                counts: { mods: 0, assets: 0, servers: 0, players: 0 },
+                play: null,
+                webUrl: '',
+            },
+        [target.app, target.appId, target.fallback, looked.data]
+    )
 
     const [sandboxes, setSandboxes] = useState<SandboxRowT[] | null>(null)
     const [sandboxId, setSandboxId] = useState<string>('')
@@ -262,11 +319,12 @@ export default function PlayDialog({
      */
     useEffect(() => {
         if (mode !== null || sandboxes === null) return
+        if (!target.app && looked.isPending) return
 
         setMode(
             canSandbox ? 'sandbox' : canWeb ? 'web' : canConnect ? 'connect' : null
         )
-    }, [mode, sandboxes, canSandbox, canWeb, canConnect])
+    }, [mode, sandboxes, canSandbox, canWeb, canConnect, target.app, looked.isPending])
 
     const launchWeb = useCallback(async () => {
         setBusy(true)

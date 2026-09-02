@@ -170,7 +170,7 @@ function AppCard({
                     {canPlay && (
                         <button
                             type="button"
-                            onClick={() => onPlay({ app })}
+                            onClick={() => onPlay({ appId: app.id, app })}
                             className="flex items-center gap-1.5 rounded-lg bg-accent px-2.5 py-1 text-[11px] font-semibold text-accent-foreground"
                         >
                             <FiPlay className="size-3" />

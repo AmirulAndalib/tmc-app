@@ -27,6 +27,7 @@ import Markdown from '~/components/markdown'
 import ServerPanel from '~/components/server-panel'
 import InstallButton from '~/components/install-button'
 import QuickInstall from '~/components/quick-install'
+import PlayDialog, { type PlayTargetT } from '~/components/play-dialog'
 import SubscribeButton from '~/components/subscribe-button'
 import Dependencies from '~/components/dependencies'
 import Gallery from '~/components/gallery'
@@ -143,6 +144,7 @@ export default function ViewRoute() {
 
     // Above the early returns below, because a hook cannot be conditional.
     const [queued, setQueued] = useState(false)
+    const [playTarget, setPlayTarget] = useState<PlayTargetT | null>(null)
 
     /*
      * Set by a `tmc://install/…` deep link — see `lib/hooks/use-deep-link`. All
@@ -275,15 +277,38 @@ export default function ViewRoute() {
                             : ''
                     }`}
                 >
-                    {summary.kind === 'server' && summary.server?.connectUrl && (
+                    {/*
+                        Play, not "Join".
+                     *
+                     * This used to hand `connectUrl` to `openUrl`, which cannot
+                     * work: the opener's capability is scoped to `https://*`
+                     * precisely so the webview cannot open a custom scheme on
+                     * its own, and every one of these links is `steam://` or a
+                     * sibling. The button was refused every time it was pressed.
+                     *
+                     * The dialog offers the three real answers instead — the
+                     * sandbox on this machine, the game's web build, or the
+                     * connect link through Rust, which checks its scheme
+                     * against the same closed list a plugin's launch rule is
+                     * held to.
+                     */}
+                    {summary.kind === 'server' && summary.app && (
                         <Button
                             btnType="primary"
                             onClick={() =>
-                                void openUrl(summary.server!.connectUrl!)
+                                setPlayTarget({
+                                    appId: summary.app!.id,
+                                    fallback: {
+                                        name: summary.app!.name,
+                                        icon: summary.app!.icon,
+                                        slug: summary.app!.url,
+                                    },
+                                    server: summary,
+                                })
                             }
                         >
                             <span className="flex items-center gap-2">
-                                <FiPlay className="size-4" /> Join server
+                                <FiPlay className="size-4" /> Play
                             </span>
                         </Button>
                     )}
@@ -356,6 +381,13 @@ export default function ViewRoute() {
 
                 {/* --------------------------------------------- Live server */}
                 {summary.kind === 'server' && <ServerPanel item={summary} />}
+
+                {playTarget && (
+                    <PlayDialog
+                        target={playTarget}
+                        onClose={() => setPlayTarget(null)}
+                    />
+                )}
 
                 {/* ------------------------------------------------- Chips */}
                 {(summary.categories.length > 0 || summary.tags.length > 0) && (

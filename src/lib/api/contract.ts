@@ -1453,6 +1453,16 @@ export type AppSortT = (typeof AppSortVals)[number]
 
 export const AppListQuerySchema = z.object({
     search: z.string().max(120).optional(),
+    /**
+     * Fetch specific apps by id, ignoring every other filter but the sort.
+     *
+     * The app's launcher needs the play vocabulary for ONE game — the one whose
+     * server somebody just pressed Play on — and searching by name for it is
+     * the kind of lookup that works until two games share a word. Bounded at
+     * the page limit, so it cannot become a way to dump the catalogue in one
+     * request that skips the cursor.
+     */
+    ids: z.array(z.coerce.number().int().positive()).max(100).optional(),
     type: AppTypeSchema.optional(),
     /** Only apps that can be launched from here. */
     playable: QueryBool.optional(),

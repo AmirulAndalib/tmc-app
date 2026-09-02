@@ -22,6 +22,7 @@ import { GameIcon } from '~/components/game-icon'
 import SandboxEditor from '~/components/sandbox-editor'
 import ScanDialog from '~/components/scan-dialog'
 import PlayDialog, { type PlayTargetT } from '~/components/play-dialog'
+import SessionHistory from '~/components/session-history'
 import type { SandboxRowT, SessionT } from '~/lib/ipc/schemas'
 
 /**
@@ -378,40 +379,19 @@ export default function LibraryGames() {
         }
     }
 
-    const play = (row: GameRow) => {
-        const found = catalogue.data?.apps.find((a) => a.id === row.appId)
-
-        if (found) {
-            setTarget({ app: found })
-
-            return
-        }
-
-        /*
-         * A game the catalogue page did not include — it is outside the first
-         * hundred, or the device is offline. A stub carries enough for the
-         * dialog to offer the SANDBOX launch, which is the only mode that does
-         * not need the server's answer anyway, and the play modes are absent
-         * rather than guessed.
-         */
+    /*
+     * The catalogue row when this page's own fetch happened to include it, and
+     * an id plus what is known locally otherwise — the dialog looks the rest up
+     * itself. Passing the row when we have it saves a request; passing the id
+     * when we do not is what makes a game outside the first page of the
+     * catalogue, or a device that is offline, still launchable.
+     */
+    const play = (row: GameRow) =>
         setTarget({
-            app: {
-                id: row.appId,
-                name: row.name,
-                slug: row.slug,
-                description: null,
-                type: 'GAME',
-                images: { card: null, banner: null, icon: row.icon },
-                isOfficial: false,
-                integrations: [],
-                hasServers: true,
-                engine: null,
-                counts: { mods: 0, assets: 0, servers: 0, players: 0 },
-                play: null,
-                webUrl: '',
-            },
+            appId: row.appId,
+            app: catalogue.data?.apps.find((a) => a.id === row.appId),
+            fallback: { name: row.name, icon: row.icon, slug: row.slug },
         })
-    }
 
     return (
         <div className="flex flex-col gap-3">
@@ -506,6 +486,15 @@ export default function LibraryGames() {
                         />
                     ))}
                 </div>
+            )}
+
+            {rows.length > 0 && (
+                /*
+                 * Below the games rather than on its own screen: a modded game
+                 * that will not start is what somebody comes here to work out,
+                 * and the launch that failed is the row above this one.
+                 */
+                <SessionHistory />
             )}
 
             {scanning && (
