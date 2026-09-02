@@ -770,7 +770,19 @@ pub async fn sandbox_import(
             .filter(|m| !failed.contains(&(m.kind.clone(), m.item_id)))
             .collect();
 
-        ordered.sort_by_key(|m| -m.priority);
+        /*
+         * ASCENDING, because that is what `sandbox_reorder` means.
+         *
+         * It assigns `priority = index`, so the first key gets priority 0 and
+         * the last gets the highest — and higher priority WINS a contested
+         * path in `merge::build`. `sandbox_mods` reads back
+         * `ORDER BY priority ASC`, so an exported list is already in this
+         * order and sorting it descending reversed it: a pack exported as
+         * A, B, C came back as C, B, A and produced a different set of files in
+         * the game folder than the exporter had. Which is precisely what the
+         * comment below says must not happen.
+         */
+        ordered.sort_by_key(|m| m.priority);
 
         ordered
             .iter()

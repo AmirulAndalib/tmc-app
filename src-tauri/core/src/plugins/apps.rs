@@ -86,6 +86,14 @@ pub enum AppPluginKind {
     /// strategies work for it, which presets it offers, and which options its
     /// launch rule understands.
     Sandbox,
+    /// `config.json` — where this game keeps the files a player edits by hand.
+    ///
+    /// A separate file from `sandbox.json` because it is separate knowledge: a
+    /// game's deployment strategy is a fact about how its files are laid out,
+    /// and its config locations are a fact about what its mod loader writes at
+    /// runtime. Games routinely need one and not the other, and a rule nobody
+    /// has written yet should be absent rather than an empty key.
+    Config,
 }
 
 impl AppPluginKind {
@@ -99,6 +107,7 @@ impl AppPluginKind {
             "manage_collection" => Some(Self::ManageCollection),
             "launch" => Some(Self::Launch),
             "sandbox" => Some(Self::Sandbox),
+            "config" => Some(Self::Config),
             _ => None,
         }
     }
@@ -110,7 +119,7 @@ impl AppPluginKind {
             Self::ManageMod => Some("mod"),
             Self::ManageAsset => Some("asset"),
             Self::ManageCollection => Some("collection"),
-            Self::Launch | Self::Sandbox => None,
+            Self::Launch | Self::Sandbox | Self::Config => None,
         }
     }
 
@@ -129,6 +138,7 @@ impl AppPluginKind {
             Self::ManageCollection => "manage_collection",
             Self::Launch => "launch",
             Self::Sandbox => "sandbox",
+            Self::Config => "config",
         }
     }
 }
@@ -365,11 +375,23 @@ pub struct DetectSpec {
 }
 
 impl DetectSpec {
+    /// Does this spec say nothing at all about how to find the game?
+    ///
+    /// `markers` counts, and did not used to. That was defensible while the
+    /// only reader was [`crate::detect::match_slug`], where a marker is a
+    /// CONFIRMATION of an id or name match and never a match on its own — so a
+    /// markers-only spec really was useless there and `hints_from` dropped it.
+    ///
+    /// The hand-driven folder scan changed that: a marker file in a folder is a
+    /// complete identification on its own, because that scan has no launcher id
+    /// and no display name to work from. A markers-only spec dropped before it
+    /// reaches the hint set is a game the scan can never find, silently.
     pub fn is_empty(&self) -> bool {
         self.steam_app_ids.is_empty()
             && self.epic_app_names.is_empty()
             && self.gog_product_ids.is_empty()
             && self.names.is_empty()
+            && self.markers.is_empty()
             && self.paths.is_empty()
     }
 }
@@ -707,6 +729,223 @@ impl SandboxSpec {
     }
 }
 
+/// **Where a game keeps the files a player edits by hand.**
+///
+/// Every mod manager has a config editor, and every one of them is the same
+/// feature: a mod loader writes `.cfg` and `.toml` files into the game folder
+/// the first time it runs, and changing a value in one currently means leaving
+/// the manager, finding the folder, and opening a text editor.
+///
+/// **The game declares the locations; the app does not guess them.** That is
+/// the same rule the rest of this module follows — "where do this game's mods
+/// go" is not knowledge the app has, and neither is "where does its loader put
+/// its settings". A game with no `config.json` simply has no config editor,
+/// which is honest; a heuristic that looked for `*.cfg` under the game folder
+/// would find a hundred files the player must not touch.
+///
+/// **A location is a grant, not a suggestion.** These compile into the same
+/// [`crate::plugins::jail`] grants an installer's do, so a config location that
+/// names `..` or an absolute path is refused at load time and again at resolve
+/// time. The editor cannot reach a file the game did not declare.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConfigSpec {
+    /// Where to look, in the order they are shown.
+    #[serde(default)]
+    pub locations: Vec<ConfigLocation>,
+
+    /// Cap on one file, in bytes. Defaults to [`DEFAULT_CONFIG_MAX_BYTES`].
+    ///
+    /// A config editor is a TEXT editor. A game that keeps a 200 MB binary
+    /// cache next to its settings would otherwise have it read into a webview
+    /// as a string, which is a frozen window and an out-of-memory crash rather
+    /// than an editing session.
+    #[serde(default)]
+    pub max_bytes: Option<u64>,
+}
+
+/// One place a game's editable settings live.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConfigLocation {
+    /// Shown as a group heading. Required — an unlabelled group of files is a
+    /// list somebody has to open one by one to understand.
+    pub label: String,
+
+    /// Which root. `gameDir` for what a loader writes beside the game;
+    /// `pluginData` for anything the app itself keeps.
+    #[serde(default = "game_dir_root")]
+    pub root: FsRoot,
+
+    /// The DIRECTORY, relative to the root. Empty means the root itself.
+    ///
+    /// A location is always a folder, never a single file, and that is not a
+    /// limitation — it is what stops the grant this compiles into destroying
+    /// the thing it was meant to expose. [`crate::plugins::jail::Jail::build`]
+    /// pre-creates every writable grant's prefix, so a location naming
+    /// `options.txt` would create a DIRECTORY called `options.txt` where the
+    /// game's settings file belongs. Name the folder and list the file in
+    /// [`Self::files`].
+    #[serde(default)]
+    pub path: String,
+
+    /// Which files count. Lower-case, without the dot.
+    ///
+    /// Empty means [`DEFAULT_CONFIG_EXTENSIONS`], which is the set every mod
+    /// loader studied for this actually writes. An allow-list rather than a
+    /// deny-list for the reason the offline cache is one: a new extension
+    /// nobody listed costs a file that has to be edited elsewhere, and a
+    /// deny-list that missed one puts a game's save file in a text editor.
+    #[serde(default)]
+    pub extensions: Vec<String>,
+
+    /// Exact file names, when the extension is too broad to be the rule.
+    ///
+    /// `options.txt` sits in the game's root next to a dozen files nobody
+    /// should edit, so `{ path: "", files: ["options.txt"] }` says exactly what
+    /// is meant. When this is non-empty it REPLACES the extension test rather
+    /// than adding to it — a location that named both would be asking two
+    /// questions with one answer.
+    #[serde(default)]
+    pub files: Vec<String>,
+
+    /// Descend into subdirectories, bounded by [`MAX_CONFIG_DEPTH`].
+    ///
+    /// Off by default. BepInEx's `config` folder is flat; Minecraft's is one
+    /// level deep for some loaders and flat for others, so the game says.
+    #[serde(default)]
+    pub recursive: bool,
+}
+
+fn game_dir_root() -> FsRoot {
+    FsRoot::GameDir
+}
+
+/// What counts as an editable settings file when a game does not say.
+pub const DEFAULT_CONFIG_EXTENSIONS: [&str; 10] = [
+    "cfg",
+    "toml",
+    "json",
+    "ini",
+    "properties",
+    "yaml",
+    "yml",
+    "conf",
+    "txt",
+    "xml",
+];
+
+/// The default per-file ceiling. A settings file is a few kilobytes.
+pub const DEFAULT_CONFIG_MAX_BYTES: u64 = 2 * 1024 * 1024;
+
+/// The hard ceiling a game's own `maxBytes` is clamped into.
+pub const MAX_CONFIG_MAX_BYTES: u64 = 16 * 1024 * 1024;
+
+/// How deep a recursive location may go.
+pub const MAX_CONFIG_DEPTH: usize = 4;
+
+/// Cap on files returned across every location, so a folder somebody pointed at
+/// their whole drive cannot produce a hundred thousand rows.
+pub const MAX_CONFIG_FILES: usize = 2_000;
+
+/// Cap on declared locations.
+const MAX_CONFIG_LOCATIONS: usize = 32;
+
+impl ConfigSpec {
+    /// The per-file ceiling this game asks for, clamped.
+    pub fn max_bytes(&self) -> u64 {
+        self.max_bytes
+            .unwrap_or(DEFAULT_CONFIG_MAX_BYTES)
+            .clamp(1, MAX_CONFIG_MAX_BYTES)
+    }
+
+    fn validate(&self) -> AppResult<()> {
+        if self.locations.len() > MAX_CONFIG_LOCATIONS {
+            return Err(AppError::invalid(
+                "A config file declares too many locations.",
+            ));
+        }
+
+        for location in &self.locations {
+            if location.label.trim().is_empty() {
+                return Err(AppError::invalid("Every config location needs a label."));
+            }
+
+            /*
+             * Refused at LOAD time as well as at resolve time. The jail would
+             * catch it either way, but a rule that can only fail is a rule the
+             * log should name now rather than the first time somebody opens the
+             * editor for that game.
+             */
+            if crate::plugins::jail::join_relative(std::path::Path::new("/"), &location.path)
+                .is_err()
+            {
+                return Err(AppError::invalid(format!(
+                    "'{}' is not a path a config location may name.",
+                    location.path
+                )));
+            }
+
+            if location.extensions.len() > 32 || location.files.len() > 64 {
+                return Err(AppError::invalid(
+                    "A config location declares too many extensions or files.",
+                ));
+            }
+
+            /*
+             * A name, not a path. `files` is matched against a directory
+             * entry's own name, so a value with a separator in it could never
+             * match anything — and an author writing one means a subdirectory,
+             * which is what `recursive` is for.
+             */
+            for name in &location.files {
+                if name.contains('/') || name.contains('\\') || name.trim().is_empty() {
+                    return Err(AppError::invalid(format!(
+                        "'{name}' is a file name, not a path — config locations name a folder."
+                    )));
+                }
+            }
+        }
+
+        Ok(())
+    }
+}
+
+impl ConfigLocation {
+    /// The extensions this location accepts, lower-cased.
+    pub fn accepted(&self) -> Vec<String> {
+        if self.extensions.is_empty() {
+            return DEFAULT_CONFIG_EXTENSIONS
+                .iter()
+                .map(|e| (*e).to_string())
+                .collect();
+        }
+
+        self.extensions
+            .iter()
+            .map(|e| e.trim_start_matches('.').to_ascii_lowercase())
+            .collect()
+    }
+
+    /// Does this location offer a file with this name?
+    ///
+    /// The names test wins outright when it is declared — see [`Self::files`].
+    pub fn offers(&self, file_name: &str) -> bool {
+        let lower = file_name.to_ascii_lowercase();
+
+        if !self.files.is_empty() {
+            return self.files.iter().any(|f| f.to_ascii_lowercase() == lower);
+        }
+
+        let extension = lower.rsplit_once('.').map(|(_, e)| e.to_string());
+
+        match extension {
+            Some(ext) => self.accepted().contains(&ext),
+            None => false,
+        }
+    }
+}
+
 /// A manage rule: how to install and uninstall one content item for this game.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -746,6 +985,9 @@ pub struct AppPluginFile {
 
     #[serde(default)]
     pub sandbox: Option<SandboxSpec>,
+
+    #[serde(default)]
+    pub config: Option<ConfigSpec>,
 
     // ---------------------------------------------------- Filled by the loader
     /// The kind, from the file name. `skip_deserializing` because it is not a
@@ -809,6 +1051,13 @@ impl AppPluginFile {
                 };
 
                 sandbox.validate()?;
+            }
+            AppPluginKind::Config => {
+                let Some(config) = &self.config else {
+                    return Err(AppError::invalid("A config file must declare `config`."));
+                };
+
+                config.validate()?;
             }
             _ => {
                 let Some(manage) = &self.manage else {
@@ -890,6 +1139,32 @@ impl AppPluginFile {
     /// and one it declares for itself still has to be declared.
     fn launch_grants(&self) -> Vec<FsGrant> {
         let mut grants = self.permissions.fs.clone();
+
+        /*
+         * A config rule's grants are DERIVED from its locations rather than
+         * declared beside them.
+         *
+         * Two sources for one fact is how they disagree, and here the
+         * disagreement is silent and one-directional: an author who adds a
+         * location and forgets the matching grant gets a config folder that
+         * lists nothing, with no error anywhere. Deriving them means a declared
+         * location is always reachable and an undeclared path never is.
+         *
+         * Writable, because that is the entire feature. The grant is still a
+         * FILTER over a resolved path — a location naming `config` does not let
+         * anything touch `saves`.
+         */
+        if self.kind == AppPluginKind::Config {
+            if let Some(config) = &self.config {
+                for location in &config.locations {
+                    grants.push(FsGrant {
+                        root: location.root,
+                        path: location.path.clone(),
+                        write: true,
+                    });
+                }
+            }
+        }
 
         if self.kind == AppPluginKind::Launch
             && !grants
@@ -1149,6 +1424,26 @@ impl AppPlugins {
     /// A game with no `sandbox.json` is not unsupported — it gets the app's own
     /// defaults, which is the right answer for the many games where "put the
     /// file in `mods/` and hard-link it" is the whole story.
+    /// A game's config-editor rules, when it declares any.
+    ///
+    /// `None` means the game has no config editor, which is the honest answer
+    /// for a game nobody has written a `config.json` for — the alternative is
+    /// guessing at file locations, and a wrong guess offers somebody their save
+    /// file in a text editor.
+    pub fn config_spec(&self, slug: &str) -> Option<&ConfigSpec> {
+        self.for_slug(slug)
+            .iter()
+            .find(|f| f.kind == AppPluginKind::Config)
+            .and_then(|f| f.config.as_ref())
+    }
+
+    /// The whole config file for a game, which the jail is built from.
+    pub fn config_file(&self, slug: &str) -> Option<&AppPluginFile> {
+        self.for_slug(slug)
+            .iter()
+            .find(|f| f.kind == AppPluginKind::Config)
+    }
+
     pub fn sandbox_spec(&self, slug: &str) -> Option<&SandboxSpec> {
         self.for_slug(slug)
             .iter()

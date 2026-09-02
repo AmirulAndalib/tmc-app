@@ -1956,3 +1956,16 @@ Honest list, so nothing here reads as finished when it is not:
 - **The download queue's own network path IS tested**, against a loopback HTTP
   server: resume, the ignored-range trap, checksum rejection, a dropped
   connection retrying, cancel and pause. That is the exception, not the rule.
+
+---
+
+## External source code
+
+`~/stack/external-study/` holds **third-party source cloned to be read** — the Source
+engine, Momentum Mod, Shavit's `bhoptimer`, Godot itself, and the mod managers. It is
+read-only, is never a dependency, and nothing in this repository imports from it.
+
+**Look there before designing something from scratch.** If a problem here looks like
+one somebody has already solved in public, the odds are the implementation is in that
+tree. See [`external-study/README.md`](../external-study/README.md) for what is there
+and what has already been taken from it.

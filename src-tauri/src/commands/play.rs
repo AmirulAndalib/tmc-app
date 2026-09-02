@@ -157,16 +157,6 @@ pub async fn play_open_web(
         .filter(|t| !t.trim().is_empty())
         .unwrap_or_else(|| "TMC Player".to_string());
 
-    let session = state.sessions.open_web(SessionSpec {
-        app_id: Some(request.app_id),
-        app_slug: request.app_slug.clone(),
-        label: title.clone(),
-        sandbox_id: None,
-        // A browser game is not an install, so there is nothing on the account
-        // to report its play time against. It is still measured locally.
-        install_id: None,
-    });
-
     let url = format!(
         "{}/app-player",
         tmc_core::api::api_base().trim_end_matches('/')
@@ -201,6 +191,16 @@ pub async fn play_open_web(
         let _ = existing.close();
     }
 
+    /*
+     * Everything that can fail happens BEFORE the session is opened.
+     *
+     * It used to be opened first, and every error path after it — a URL that
+     * would not parse, a descriptor that would not serialise, a window that
+     * would not build — left a live session with no window and no destroy
+     * handler to close it. Nothing could ever end that session: it showed as a
+     * running game forever, and the Library's Stop button routes a web session
+     * to `play_close`, which finds no window and cheerfully returns Ok.
+     */
     let built = WebviewWindowBuilder::new(&app, PLAYER_LABEL, WebviewUrl::External(parsed))
         .title(&title)
         .inner_size(1280.0, 800.0)
@@ -223,6 +223,16 @@ pub async fn play_open_web(
         .build()
         .map_err(|e| AppError::internal(format!("could not open the player: {e}")))?;
 
+    let session = state.sessions.open_web(SessionSpec {
+        app_id: Some(request.app_id),
+        app_slug: request.app_slug.clone(),
+        label: title.clone(),
+        sandbox_id: None,
+        // A browser game is not an install, so there is nothing on the account
+        // to report its play time against. It is still measured locally.
+        install_id: None,
+    });
+
     /*
      * The session ends when the window does, and Rust is what notices.
      *
@@ -239,6 +249,19 @@ pub async fn play_open_web(
                 sessions.end(id, false);
             }
         });
+    }
+
+    /*
+     * A window destroyed between `build` and the handler being attached would
+     * leak the session the same way. Cheap to rule out, and the race is real on
+     * a machine slow enough for the page to fail while this function runs.
+     */
+    if app.get_webview_window(PLAYER_LABEL).is_none() {
+        state.sessions.end(session.id, false);
+
+        return Err(AppError::internal(
+            "The player window closed before it finished opening.",
+        ));
     }
 
     tmc_core::audit!(

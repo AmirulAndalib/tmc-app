@@ -66,6 +66,15 @@ pub struct AppState {
     /// the mapping changes when a game is added to the catalogue.
     app_ids: RwLock<std::collections::BTreeMap<String, i64>>,
 
+    /// One playtime flush at a time.
+    ///
+    /// It reads the unreported rows, sends them, and only then marks them —
+    /// so two overlapping runs read the same rows and each report the same
+    /// seconds. The library's sync loop fires it WITHOUT awaiting it (the
+    /// report must not hold up a sync), so its own re-entrancy guard has
+    /// already been released by the time a second pass starts.
+    flushing: Arc<std::sync::atomic::AtomicBool>,
+
     /// One filesystem scan at a time, and a way to stop it.
     ///
     /// Two flags rather than one because they answer different questions and
@@ -226,6 +235,7 @@ impl AppState {
             rcon,
             sessions,
             app_ids: RwLock::new(std::collections::BTreeMap::new()),
+            flushing: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             scan_running: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             scan_cancel: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             cipher: std::sync::OnceLock::new(),
@@ -290,6 +300,27 @@ impl AppState {
             .iter()
             .find(|(_, id)| **id == app_id)
             .map(|(slug, _)| slug.clone())
+    }
+
+    /// Claim the playtime-flush slot. False when one is already running.
+    ///
+    /// `compare_exchange` for the reason `scan_begin` uses one: a read followed
+    /// by a write is not a claim, and two syncs a moment apart is exactly the
+    /// pattern this loses.
+    pub fn flush_begin(&self) -> bool {
+        self.flushing
+            .compare_exchange(
+                false,
+                true,
+                std::sync::atomic::Ordering::SeqCst,
+                std::sync::atomic::Ordering::SeqCst,
+            )
+            .is_ok()
+    }
+
+    pub fn flush_end(&self) {
+        self.flushing
+            .store(false, std::sync::atomic::Ordering::SeqCst);
     }
 
     /// Claim the scan slot. False when one is already running.

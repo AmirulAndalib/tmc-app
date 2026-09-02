@@ -58,12 +58,43 @@ function verdict(row: SessionRowT): { text: string; tone: string } {
     if (row.endedMs === null) return { text: 'Running', tone: 'text-success' }
     if (row.stoppedByUser) return { text: 'Stopped from here', tone: 'text-muted' }
 
+    // A web session is a window that closed. There was never a process to
+    // report a code, so saying one is missing describes a thing that could not
+    // have existed.
+    if (row.kind === 'web') return { text: 'Closed', tone: 'text-muted' }
+
     if (row.exitCode === null)
         return { text: 'Ended — no exit code', tone: 'text-muted' }
 
     if (row.exitCode === 0) return { text: 'Exited normally', tone: 'text-success' }
 
     return { text: `Exited with code ${row.exitCode}`, tone: 'text-danger' }
+}
+
+/**
+ * The icon, derived from the same rule as the text beside it.
+ *
+ * It used to test `exitCode === 0 || stoppedByUser` on its own, which called
+ * two entirely normal outcomes a crash: a WEB session has no exit code at all,
+ * and neither does a process killed with SIGKILL — so both drew a red warning
+ * triangle next to a muted "ended, no exit code". Telling somebody their game
+ * crashed when they are the one who closed it is worse than saying nothing.
+ *
+ * A failure is now only what a supervised process reported as one.
+ */
+function Icon({ row }: { row: SessionRowT }) {
+    if (row.kind === 'handoff')
+        return <FiExternalLink className="size-3 shrink-0 text-muted" />
+
+    if (row.stoppedByUser || row.exitCode === 0)
+        return <FiCheckCircle className="size-3 shrink-0 text-success" />
+
+    // No exit code is not a failure — see above. It is the normal state for a
+    // web session and for anything the OS took down without one.
+    if (row.exitCode === null)
+        return <FiCheckCircle className="size-3 shrink-0 text-muted" />
+
+    return <FiAlertTriangle className="size-3 shrink-0 text-danger" />
 }
 
 function Row({ row }: { row: SessionRowT }) {
@@ -100,13 +131,7 @@ function Row({ row }: { row: SessionRowT }) {
                     <FiChevronRight className="size-3 shrink-0 text-muted" />
                 )}
 
-                {row.kind === 'handoff' ? (
-                    <FiExternalLink className="size-3 shrink-0 text-muted" />
-                ) : row.exitCode === 0 || row.stoppedByUser ? (
-                    <FiCheckCircle className="size-3 shrink-0 text-success" />
-                ) : (
-                    <FiAlertTriangle className="size-3 shrink-0 text-danger" />
-                )}
+                <Icon row={row} />
 
                 <span className="truncate font-medium">{row.label}</span>
 

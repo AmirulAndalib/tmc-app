@@ -479,11 +479,23 @@ impl Sessions {
     /// so a kill that fails leaves the session running, which is true.
     pub fn stop(&self, id: u64) -> AppResult<()> {
         let (child, pid) = {
-            let state = self.lock()?;
+            let mut state = self.lock()?;
 
-            let Some(live) = state.live.get(&id) else {
+            let Some(live) = state.live.get_mut(&id) else {
                 return Err(AppError::invalid("That session is not running."));
             };
+
+            /*
+             * Marked BEFORE the signal goes out, because after it the
+             * supervisor owns the record and this thread never touches it
+             * again.
+             *
+             * Without this every Stop looked like a crash. SIGKILL leaves no
+             * exit code, so the history rendered "ended, no exit code" under a
+             * red warning triangle — telling somebody their game died when they
+             * are the one who closed it.
+             */
+            live.session.stopped_by_user = true;
 
             let pid = live.session.pid;
 
@@ -957,6 +969,62 @@ mod tests {
         assert_eq!(
             sessions.recent().first().map(|s| s.label.clone()),
             Some(format!("s{}", MAX_RECENT + 24))
+        );
+    }
+
+    /// Pressing Stop is not a crash, and the history has to be able to say so.
+    ///
+    /// SIGKILL leaves no exit code, so a stopped session and a session that
+    /// died on its own are indistinguishable by `exit_code` alone — which made
+    /// every deliberate Stop render under a red warning triangle.
+    #[test]
+    fn a_stopped_session_is_recorded_as_stopped_by_the_user() {
+        let sessions = registry();
+
+        let mut command = if cfg!(windows) {
+            let mut c = Command::new("cmd");
+
+            c.args(["/C", "ping -n 60 127.0.0.1 > nul"]);
+            c
+        } else {
+            let mut c = Command::new("sh");
+
+            c.args(["-c", "sleep 60"]);
+            c
+        };
+
+        command.env("TMC_TEST", "1");
+
+        let session = sessions
+            .spawn(
+                command,
+                SessionSpec {
+                    app_id: Some(77),
+                    label: "Stoppable".into(),
+                    ..Default::default()
+                },
+            )
+            .expect("spawn");
+
+        sessions.stop(session.id).expect("stop");
+
+        for _ in 0..200 {
+            if !sessions.running_for_app(77) {
+                break;
+            }
+
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+
+        let finished = sessions
+            .recent()
+            .into_iter()
+            .find(|s| s.id == session.id)
+            .expect("in history");
+
+        assert!(
+            finished.stopped_by_user,
+            "a deliberate stop was recorded as a crash"
         );
     }
 

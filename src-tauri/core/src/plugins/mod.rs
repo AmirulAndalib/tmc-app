@@ -1,4 +1,5 @@
 pub mod apps;
+pub mod config;
 pub mod jail;
 pub mod manifest;
 pub mod query;

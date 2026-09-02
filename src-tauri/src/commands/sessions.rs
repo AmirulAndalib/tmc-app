@@ -139,6 +139,30 @@ pub struct FlushReport {
 /// forty requests on the next connection.
 #[tauri::command]
 pub async fn sessions_flush(state: State<'_, AppState>) -> AppResult<FlushReport> {
+    /*
+     * One at a time.
+     *
+     * The rows are read, sent, and only THEN marked reported, so two
+     * overlapping runs read the same rows and each report the same seconds
+     * against the same install. The one caller fires this without awaiting it
+     * — a playtime report must not hold up a library sync — so its own
+     * re-entrancy guard is released long before this finishes.
+     *
+     * A refused flush is not an error: whatever is outstanding is still
+     * outstanding, and the run already in progress is about to send it.
+     */
+    if !state.flush_begin() {
+        return Ok(FlushReport::default());
+    }
+
+    let result = flush_inner(&state).await;
+
+    state.flush_end();
+
+    result
+}
+
+async fn flush_inner(state: &AppState) -> AppResult<FlushReport> {
     let pending = state.library.sessions_unreported(200)?;
 
     if pending.is_empty() {

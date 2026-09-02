@@ -266,7 +266,7 @@ function GameCard({
 }
 
 export default function LibraryGames() {
-    const { app } = useSettings()
+    const { app, reloadApp } = useSettings()
     const refFor = useAppRefs()
 
     const [search, setSearch] = useState('')
@@ -331,7 +331,17 @@ export default function LibraryGames() {
     const refresh = useCallback(() => {
         void sandboxes.refetch()
         void playtime.refetch()
-    }, [sandboxes, playtime])
+
+        /*
+         * And the SETTINGS, because applying a scan result writes `gameDirs` in
+         * Rust rather than through the settings provider — it has to, since
+         * each folder is validated as a jail anchor on the way in. Without this
+         * the rows below are still built from the `gameDirs` this screen loaded
+         * at mount, so a fresh machine that just found a dozen games sees none
+         * of them until the app is restarted.
+         */
+        void reloadApp()
+    }, [sandboxes, playtime, reloadApp])
 
     const rows = useMemo<GameRow[]>(() => {
         const byApp = new Map<number, GameRow>()

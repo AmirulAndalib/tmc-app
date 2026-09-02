@@ -172,6 +172,19 @@ pub fn import(code: &str) -> AppResult<SharedSandbox> {
         ));
     };
 
+    /*
+     * Bounded BEFORE the decode, which is what `MAX_BYTES` claims to do.
+     *
+     * Checking the decoded length meant a 64 MB pasted string had already been
+     * allocated in full by the time it was rejected. Base64 is four characters
+     * per three bytes, so the encoded ceiling is the plaintext ceiling times
+     * 4/3 — rounded up, so a code exactly at the limit is not refused for being
+     * one character over.
+     */
+    if body.len() > MAX_BYTES.div_ceil(3) * 4 {
+        return Err(AppError::invalid("That code is too large to be a sandbox."));
+    }
+
     let raw = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(body.as_bytes())
         .map_err(|_| {
@@ -179,10 +192,6 @@ pub fn import(code: &str) -> AppResult<SharedSandbox> {
                 "That code is damaged — it was probably cut short when it was copied.",
             )
         })?;
-
-    if raw.len() > MAX_BYTES {
-        return Err(AppError::invalid("That code is too large to be a sandbox."));
-    }
 
     let mut shared: SharedSandbox = serde_json::from_slice(&raw)
         .map_err(|_| AppError::invalid("That code is not a sandbox this app understands."))?;
@@ -197,18 +206,24 @@ pub fn import(code: &str) -> AppResult<SharedSandbox> {
         shared.name = "Imported sandbox".into();
     }
 
-    // Truncated rather than refused: a code with six hundred mods is a real
-    // modpack somebody wants, and importing five hundred of it with a count on
-    // screen beats importing none of it.
-    shared.mods.truncate(MAX_MODS);
-
-    // A duplicated item would be added twice and then fight itself in the merge
-    // tree, for one path, forever.
+    /*
+     * De-duplicated BEFORE truncating, and the order matters.
+     *
+     * A duplicated item would be added twice and then fight itself in the merge
+     * tree, for one path, forever. Truncating first meant a code padded with
+     * five hundred copies of one mod kept the padding and discarded every
+     * genuine entry after it — which is a working import of the wrong modpack.
+     */
     let mut seen = std::collections::BTreeSet::new();
 
     shared
         .mods
         .retain(|m| seen.insert((m.kind.clone(), m.item_id)));
+
+    // Truncated rather than refused: a code with six hundred mods is a real
+    // modpack somebody wants, and importing five hundred of it with a count on
+    // screen beats importing none of it.
+    shared.mods.truncate(MAX_MODS);
 
     Ok(shared)
 }

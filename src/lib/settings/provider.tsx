@@ -53,6 +53,19 @@ type SettingsContextT = {
      */
     setGameDir: (appId: number | string, dir: string | null) => Promise<void>
     setDownloadDir: (dir: string | null) => Promise<void>
+
+    /**
+     * Re-read the app settings from Rust.
+     *
+     * For the paths that change settings WITHOUT going through this provider.
+     * `detect_apply_many` writes `gameDirs` in Rust — it has to, because
+     * applying a scan result is a batch that validates each folder as a jail
+     * anchor — so nothing here hears about it. Without this the Library builds
+     * its game list from a `gameDirs` that is still empty, and a fresh machine
+     * that scans and applies a dozen games sees no new rows until it is
+     * restarted.
+     */
+    reloadApp: () => Promise<void>
 }
 
 const SettingsContext = createContext<SettingsContextT | null>(null)
@@ -97,6 +110,12 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
 
     const resetApp = useCallback(async () => {
         setAppState(await ipc.settingsReset())
+    }, [])
+
+    const reloadApp = useCallback(async () => {
+        // A failure leaves the previous settings in place rather than blanking
+        // them: a stale game list is a better screen than an empty one.
+        setAppState((await ipc.settingsGet().catch((): null => null)) ?? null)
     }, [])
 
     const setUser = useCallback(
@@ -190,6 +209,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
             setApp,
             setUser,
             resetApp,
+            reloadApp,
             setGameDir,
             setDownloadDir,
         }),
@@ -200,6 +220,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
             setApp,
             setUser,
             resetApp,
+            reloadApp,
             setGameDir,
             setDownloadDir,
         ]

@@ -195,6 +195,7 @@ pub fn walk(
      * into a slow one.
      */
     let by_marker = marker_index(&hints);
+    let deep = deep_markers(&hints);
 
     /*
      * A breadth-first queue rather than recursion. Depth is bounded so the
@@ -240,7 +241,7 @@ pub fn walk(
 
         report.dirs_visited += 1;
 
-        if let Some(found) = identify(&dir, &hints, &by_marker) {
+        if let Some(found) = identify(&dir, &hints, &by_marker, &deep) {
             report.games.push(found);
 
             /*
@@ -343,15 +344,27 @@ fn is_noise(name: &str) -> bool {
     NOISE.contains(&lower.as_str())
 }
 
-/// Marker file name → the games that declare it.
+/// Marker file name → the games that declare it, for markers that ARE a name.
 ///
-/// Lower-cased keys because Windows and macOS are case-insensitive and a
-/// manifest author writing `GTA5.exe` must match a folder holding `gta5.exe`.
+/// The fast path. A folder's own entries are read once and each name looked up
+/// here, so a machine with two hundred app plugins costs one `read_dir` per
+/// directory rather than two hundred `exists` calls.
+///
+/// Multi-segment markers are deliberately absent: `bin/x64/Game.exe` describes
+/// a file BELOW the game's folder, so no entry of that folder is ever named it
+/// and no name-based index can find it. Those go to [`deep_markers`].
+///
+/// Lower-cased because Windows and macOS are case-insensitive and a manifest
+/// author writing `GTA5.exe` must match a folder holding `gta5.exe`.
 fn marker_index(hints: &BTreeMap<String, DetectSpec>) -> BTreeMap<String, Vec<String>> {
     let mut out: BTreeMap<String, Vec<String>> = BTreeMap::new();
 
     for (slug, spec) in hints {
         for marker in &spec.markers {
+            if marker.contains('/') || marker.contains('\\') {
+                continue;
+            }
+
             out.entry(marker.to_ascii_lowercase())
                 .or_default()
                 .push(slug.clone());
@@ -361,14 +374,39 @@ fn marker_index(hints: &BTreeMap<String, DetectSpec>) -> BTreeMap<String, Vec<St
     out
 }
 
+/// The games whose markers name a path rather than a file.
+///
+/// Checked with [`has_marker`] per candidate directory — the same test the
+/// launcher scan applies — because that is the only thing that can resolve
+/// `bin/x64/Game.exe` against a folder. It is the slow path and it is bounded
+/// by being rare: this is a handful of games, not the whole plugin set, and
+/// without it the two ways of looking disagree about the same manifest.
+fn deep_markers(hints: &BTreeMap<String, DetectSpec>) -> Vec<(String, Vec<String>)> {
+    hints
+        .iter()
+        .filter_map(|(slug, spec)| {
+            let deep: Vec<String> = spec
+                .markers
+                .iter()
+                .filter(|m| m.contains('/') || m.contains('\\'))
+                .cloned()
+                .collect();
+
+            (!deep.is_empty()).then(|| (slug.clone(), deep))
+        })
+        .collect()
+}
+
 /// Is this folder a game we know, and which one?
 ///
 /// Two rules, in descending order of confidence — the same two [`super::scan`]
 /// applies to a launcher's rows, minus the launcher ids, which a bare folder
 /// does not have:
 ///
-///   1. **A marker file in it.** `GTA5.exe` in a folder means that folder is
-///      GTA V, whatever it is called.
+///   1. **A marker in it.** `GTA5.exe` in a folder means that folder is GTA V,
+///      whatever it is called. A marker naming a PATH — `bin/x64/Game.exe` —
+///      is checked with `has_marker`, the same test the launcher scan applies,
+///      because no index keyed on a folder's own entry names can resolve one.
 ///   2. **A folder name that normalises to a declared name**, and only when the
 ///      game declares no marker. A game that named a marker and does not have
 ///      it here is not that game — that rule is what stops a folder called
@@ -377,6 +415,7 @@ fn identify(
     dir: &Path,
     hints: &BTreeMap<String, DetectSpec>,
     by_marker: &BTreeMap<String, Vec<String>>,
+    deep: &[(String, Vec<String>)],
 ) -> Option<DetectedGame> {
     let name = dir.file_name()?.to_string_lossy().into_owned();
 
@@ -396,6 +435,14 @@ fn identify(
                 }
             }
         }
+    }
+
+    // (1b) A marker that names a path below this folder.
+    if matched.is_none() {
+        matched = deep
+            .iter()
+            .find(|(_, markers)| has_marker(&dir.to_string_lossy(), markers))
+            .map(|(slug, _)| slug.clone());
     }
 
     // (2) The folder's own name, for games that declare no marker.
@@ -523,6 +570,47 @@ mod tests {
     /// folder called "Grand Theft Auto V" in somebody's downloads is not an
     /// install, and offering it produces a game directory that fails every
     /// check the moment it is accepted.
+    /// A marker may be a PATH, and both ways of looking must agree about it.
+    ///
+    /// `has_marker` resolves `bin/x64/Game.exe` correctly, so the launcher scan
+    /// matches such a game; this scan compared the whole string against a
+    /// directory entry's name and never did.
+    #[test]
+    fn a_marker_with_a_path_component_matches_and_is_re_verified() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let plugin_dir = tempfile::tempdir().expect("tempdir");
+
+        write(
+            plugin_dir.path(),
+            "app/deep/sandbox.json",
+            r#"{
+                "manifestVersion": 1,
+                "sandbox": {
+                    "deploy": {
+                        "defaultStrategy": "direct",
+                        "supportedStrategies": ["direct"]
+                    },
+                    "detect": { "markers": ["bin/x64/Game.exe"] }
+                }
+            }"#,
+        );
+
+        let apps = AppPlugins::load(plugin_dir.path());
+
+        // The real layout the marker describes.
+        write(tmp.path(), "Games/Proper/bin/x64/Game.exe", "x");
+
+        // The same file NAME at a folder's root, which does not satisfy it.
+        write(tmp.path(), "Games/Decoy/Game.exe", "x");
+
+        let report = run(&[tmp.path().to_path_buf()], &apps, &WalkLimits::balanced());
+
+        let paths: Vec<&str> = report.games.iter().map(|g| g.path.as_str()).collect();
+
+        assert_eq!(report.games.len(), 1, "{paths:?}");
+        assert!(paths[0].ends_with("Proper"), "{paths:?}");
+    }
+
     #[test]
     fn a_name_match_without_the_declared_marker_is_refused() {
         let tmp = tempfile::tempdir().expect("tempdir");
