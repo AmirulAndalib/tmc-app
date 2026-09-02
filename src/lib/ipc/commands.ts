@@ -7,6 +7,12 @@ import {
     DependencyReportSchema,
     OutdatedSchema,
     DetectedGameSchema,
+    ApplyOutcomeSchema,
+    ScanReportSchema,
+    SessionSchema,
+    SessionRowSchema,
+    PlaytimeSummarySchema,
+    FlushReportSchema,
     DeployReportSchema,
     PurgeReportSchema,
     QueueSnapshotSchema,
@@ -45,6 +51,7 @@ import {
     type AppSettingsT,
     type LogLevelT,
     type RustQueryProtocolT,
+    type WalkLimitsT,
 } from './schemas'
 
 /**
@@ -478,6 +485,78 @@ export const ipc = {
      */
     detectApply: (slug: string, path: string) =>
         call('detect_apply', z.void(), { slug, path }),
+
+    /**
+     * Walk folders the user ticked, for what the launchers do not know about.
+     *
+     * `roots` is required and has no default. A scan of "the filesystem" is a
+     * scan of somebody's documents and every network share they have mounted,
+     * and the app has no business enumerating any of it — so the folders come
+     * from a person, one tick at a time. Rust bounds depth, directory count and
+     * wall clock on top of that.
+     */
+    detectScan: (roots: string[], limits?: WalkLimitsT) =>
+        call('detect_scan', ScanReportSchema, { request: { roots, limits } }),
+
+    /**
+     * Ask a running scan to stop.
+     *
+     * Takes effect between two directories rather than immediately, which on a
+     * dead network share can still be several seconds — so the UI says
+     * "stopping" rather than closing itself.
+     */
+    detectScanCancel: () => call('detect_scan_cancel', z.void()),
+
+    detectScanRunning: () => call('detect_scan_running', z.boolean()),
+
+    /**
+     * Apply several results at once.
+     *
+     * Each goes through `detect_apply`'s own validation and a failure does not
+     * stop the rest — a batch where one folder is refused must still apply the
+     * other eleven and say which one was not.
+     */
+    detectApplyMany: (games: [slug: string, path: string][]) =>
+        call('detect_apply_many', z.array(ApplyOutcomeSchema), { games }),
+
+    // -------------------------------------------------------------- Sessions
+    //
+    // Nothing here STARTS anything. A launch goes through `launchInstall` or
+    // `sandboxLaunch`, which are the two places holding a resolved plan and the
+    // checks that produced it.
+
+    /** What is running right now. */
+    sessionRunning: () => call('session_running', z.array(SessionSchema)),
+
+    /** Recent launches, from the durable history — survives a restart. */
+    sessionHistory: (appId?: number, limit?: number) =>
+        call('session_history', z.array(SessionRowSchema), { appId, limit }),
+
+    /** Kill a running game. See `Sessions::stop` for why there is no polite ask. */
+    sessionStop: (id: number) => call('session_stop', z.void(), { id }),
+
+    /**
+     * Close a session the app is holding open.
+     *
+     * The web player's window, and nothing else: a supervised process closes
+     * its own session when it exits, and letting the webview close one would
+     * let a script mark a running game as finished and bank its playtime.
+     */
+    sessionCloseWeb: (id: number) => call('session_close_web', z.void(), { id }),
+
+    /** The last lines a session's process printed. The crash report. */
+    sessionLog: (id: number, lines?: number) =>
+        call('session_log', z.string(), { id, lines }),
+
+    playtimeSummary: () => call('playtime_summary', PlaytimeSummarySchema),
+
+    /**
+     * Send outstanding playtime to the account.
+     *
+     * A game is very often played offline, so a session is written first and
+     * reported whenever the device next has an API to talk to.
+     */
+    sessionsFlush: () => call('sessions_flush', FlushReportSchema),
 
     // ------------------------------------------------------------------ RCON
     //

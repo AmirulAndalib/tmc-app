@@ -45,6 +45,7 @@ pub mod folders;
 pub mod gog;
 pub mod steam;
 pub mod vdf;
+pub mod walk;
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -225,7 +226,7 @@ pub(crate) fn has_marker(dir: &str, markers: &[String]) -> bool {
 /// `Grand Theft Auto V`, `Grand Theft Auto V - Enhanced` and `GRAND THEFT AUTO
 /// V™` all reduce to the same string; `Portal` and `Portal 2` do not, because
 /// digits are kept.
-fn normalise(name: &str) -> String {
+pub(crate) fn normalise(name: &str) -> String {
     let mut out = String::with_capacity(name.len());
 
     for ch in name.chars() {

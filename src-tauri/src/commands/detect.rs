@@ -9,12 +9,27 @@
 //! The two are separate commands rather than one for exactly that reason: a
 //! scan that configured as it went would be a scan that could not be shown to
 //! anybody first.
+//!
+//! TWO WAYS TO LOOK
+//! ---------------
+//! [`detect_games`] reads what the LAUNCHERS wrote down — Steam's manifests,
+//! Epic's `.item` files, Galaxy's database. It is fast, exact and covers most
+//! machines, and it is what runs when the screen opens.
+//!
+//! [`detect_scan`] walks folders **the user ticked**, for everything the
+//! launchers do not know about: a game copied from another PC, a dedicated
+//! server unpacked by hand, a drive that was moved. It is slower, it is bounded
+//! on four axes, and it never runs on its own — see [`tmc_core::detect::walk`]
+//! for why the roots are a required argument with no default.
 
 use std::path::PathBuf;
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
 
-use serde::Serialize;
-use tauri::{AppHandle, State};
+use serde::{Deserialize, Serialize};
+use tauri::{AppHandle, Emitter, State};
 
+use tmc_core::detect::walk::{WalkLimits, WalkReport};
 use tmc_core::detect::{DetectReport, DetectedGame};
 use tmc_core::error::{AppError, AppResult};
 use tmc_core::settings::AppSettings;
@@ -143,4 +158,224 @@ fn protected(state: &AppState) -> Vec<PathBuf> {
         state.paths.staging_dir(),
         state.paths.backup_dir(),
     ]
+}
+
+// --------------------------------------------------------- Scanning by hand
+
+/// Progress from a running scan.
+///
+/// One event per directory would be tens of thousands of IPC messages for a
+/// drive, so they are throttled to [`PROGRESS_EVERY`]. The UI shows the path
+/// because a scan of a whole drive takes long enough that a spinner with
+/// nothing under it reads as a hang — and because seeing it sitting in a
+/// backup folder is how somebody learns to tick a narrower root.
+const EVENT_PROGRESS: &str = "tmc://scan-progress";
+
+/// Directories between progress events.
+const PROGRESS_EVERY: usize = 200;
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ScanProgress {
+    dirs: usize,
+    /// Where the walk currently is. Display only.
+    path: String,
+}
+
+/// What the frontend asks for.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScanRequest {
+    /// The folders the user ticked. Required, and there is no default — see
+    /// [`tmc_core::detect::walk`] for why a scan never chooses its own roots.
+    pub roots: Vec<String>,
+    #[serde(default)]
+    pub limits: Option<WalkLimits>,
+}
+
+/// A scan result, with the same annotation a launcher-found candidate gets.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScanReport {
+    pub games: Vec<Candidate>,
+    pub dirs_visited: usize,
+    pub elapsed_ms: u64,
+    pub stop: tmc_core::detect::walk::WalkStop,
+    pub unreadable: Vec<(String, String)>,
+}
+
+/// Walk the folders the user chose.
+///
+/// **Cancellable and single-flight.** A second scan while one is running is
+/// refused rather than queued: two walks share one directory budget in the
+/// user's head and neither would finish in the time they expected. The flag
+/// lives in the state so `detect_scan_cancel` can reach it.
+#[tauri::command]
+pub async fn detect_scan(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    request: ScanRequest,
+) -> AppResult<ScanReport> {
+    if request.roots.is_empty() {
+        return Err(AppError::invalid(
+            "Choose at least one folder or drive to scan.",
+        ));
+    }
+
+    if request.roots.len() > WalkLimits::MAX_ROOTS {
+        return Err(AppError::invalid(format!(
+            "That is more than {} folders. Scan them in batches.",
+            WalkLimits::MAX_ROOTS
+        )));
+    }
+
+    if !state.scan_begin() {
+        return Err(AppError::invalid(
+            "A scan is already running. Wait for it to finish, or cancel it.",
+        ));
+    }
+
+    /*
+     * Cleared AFTER the slot is claimed, not before. A cancel that arrives
+     * between the two would otherwise be swallowed and the new scan would run
+     * to completion having been told to stop.
+     */
+    let cancel = state.scan_cancel();
+
+    cancel.store(false, Ordering::SeqCst);
+
+    let roots: Vec<PathBuf> = request.roots.iter().map(PathBuf::from).collect();
+    let limits = request.limits.unwrap_or_default();
+    let plugins = state.app_plugins();
+
+    tmc_core::audit!(
+        state.audit,
+        Info,
+        App,
+        "detect.scan",
+        format!("scanning {} folder(s)", roots.len())
+    );
+
+    let emitter = app.clone();
+    let flag = Arc::clone(&cancel);
+
+    /*
+     * `spawn_blocking`, because the walk is `read_dir` in a loop and would hold
+     * a runtime worker for up to the whole time budget. The progress callback
+     * runs on that thread and emits directly — Tauri's emitter is `Send` and an
+     * event is a fire-and-forget write to the webview.
+     */
+    let walked: AppResult<WalkReport> = tauri::async_runtime::spawn_blocking(move || {
+        let mut last = 0usize;
+
+        let mut progress = |path: &std::path::Path, dirs: usize| -> bool {
+            if dirs >= last + PROGRESS_EVERY {
+                last = dirs;
+
+                let _ = emitter.emit(
+                    EVENT_PROGRESS,
+                    ScanProgress {
+                        dirs,
+                        path: path.display().to_string(),
+                    },
+                );
+            }
+
+            !flag.load(Ordering::SeqCst)
+        };
+
+        tmc_core::detect::walk::walk(&roots, &plugins, &limits, &mut progress)
+    })
+    .await
+    .map_err(|e| AppError::internal(format!("scan: {e}")));
+
+    // Cleared on every path, including the error one — a flag left set makes
+    // the next scan refuse to start with a message about a scan that is gone.
+    state.scan_end();
+    cancel.store(false, Ordering::SeqCst);
+
+    let report = walked?;
+
+    let settings = state.settings.get();
+
+    Ok(ScanReport {
+        games: report
+            .games
+            .into_iter()
+            .map(|game| annotate(game, &settings, &state))
+            .collect(),
+        dirs_visited: report.dirs_visited,
+        elapsed_ms: report.elapsed_ms,
+        stop: report.stop,
+        unreadable: report.unreadable,
+    })
+}
+
+/// Stop a running scan.
+///
+/// The walk checks the flag between directories, so this takes effect within
+/// one `read_dir` rather than immediately — which on a dead network share can
+/// still be several seconds. The UI says "stopping" rather than closing itself,
+/// because a dialog that vanishes while the thread is still walking is one that
+/// will refuse the next scan for reasons nobody can see.
+#[tauri::command]
+pub fn detect_scan_cancel(state: State<'_, AppState>) {
+    state.scan_cancel().store(true, Ordering::SeqCst);
+}
+
+/// Whether a scan is running, so a reopened screen shows the right state.
+#[tauri::command]
+pub fn detect_scan_running(state: State<'_, AppState>) -> bool {
+    state.scan_running()
+}
+
+/// One result of applying a batch of candidates.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApplyOutcome {
+    pub slug: String,
+    pub path: String,
+    pub ok: bool,
+    /// Why it was refused. Present exactly when `ok` is false.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// Point several games' directories at what a scan found.
+///
+/// **Every one goes through [`detect_apply`]'s own validation**, one at a time,
+/// and a failure does not stop the rest. That is the difference between this
+/// and a loop in the frontend: a batch where one folder is refused must still
+/// apply the other eleven, and the user needs to be told which one and why
+/// rather than being shown a single error for the whole operation.
+///
+/// It is the "automatically integrate what it finds" half of the scan button,
+/// and it is still a separate call from the scan itself — the user sees the
+/// list and confirms it. A scan that configured as it went could not be shown
+/// to anybody first, which is the rule at the top of this module.
+#[tauri::command]
+pub fn detect_apply_many(
+    state: State<'_, AppState>,
+    games: Vec<(String, String)>,
+) -> Vec<ApplyOutcome> {
+    let mut out = Vec::with_capacity(games.len());
+
+    for (slug, path) in games {
+        match detect_apply(state.clone(), slug.clone(), path.clone()) {
+            Ok(()) => out.push(ApplyOutcome {
+                slug,
+                path,
+                ok: true,
+                error: None,
+            }),
+            Err(err) => out.push(ApplyOutcome {
+                slug,
+                path,
+                ok: false,
+                error: Some(err.to_string()),
+            }),
+        }
+    }
+
+    out
 }

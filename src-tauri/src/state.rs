@@ -52,6 +52,16 @@ pub struct AppState {
     /// reconnect per line.
     pub rcon: RconPool,
 
+    /// One filesystem scan at a time, and a way to stop it.
+    ///
+    /// Two flags rather than one because they answer different questions and
+    /// are set by different sides: `scan_running` is owned by the scan and says
+    /// whether a second may start, while `scan_cancel` is set by the UI and
+    /// read by the walk. Folding them into one would mean cancelling by
+    /// clearing "running", which is indistinguishable from the scan finishing.
+    scan_running: Arc<std::sync::atomic::AtomicBool>,
+    scan_cancel: Arc<std::sync::atomic::AtomicBool>,
+
     /// Games this process has started, live and recent.
     ///
     /// An `Arc` because the supervisor thread that waits on each child holds
@@ -201,10 +211,44 @@ impl AppState {
             downloads,
             rcon,
             sessions,
+            scan_running: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            scan_cancel: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             cipher: std::sync::OnceLock::new(),
             library,
             app_plugins: RwLock::new(Arc::new(app_plugins)),
         })
+    }
+
+    /// Claim the scan slot. False when one is already running.
+    ///
+    /// `compare_exchange` rather than a read followed by a write: two Scan
+    /// buttons pressed a frame apart on a fast machine both pass a read-then-
+    /// write and start two walks, which is the exact race this is here to lose.
+    pub fn scan_begin(&self) -> bool {
+        self.scan_running
+            .compare_exchange(
+                false,
+                true,
+                std::sync::atomic::Ordering::SeqCst,
+                std::sync::atomic::Ordering::SeqCst,
+            )
+            .is_ok()
+    }
+
+    /// Release the scan slot. Called on every path, including the failing one.
+    pub fn scan_end(&self) {
+        self.scan_running
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    pub fn scan_running(&self) -> bool {
+        self.scan_running
+            .load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// The flag the walk checks between directories.
+    pub fn scan_cancel(&self) -> Arc<std::sync::atomic::AtomicBool> {
+        Arc::clone(&self.scan_cancel)
     }
 
     /// The key that encrypts RCON passwords, created on first use.

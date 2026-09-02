@@ -492,9 +492,91 @@ export const LaunchPlanSchema = z.object({
     vfs: z.object({ blob: z.string(), root: z.string() }).nullable().default(null),
 })
 
+// ----------------------------------------------------------------- Sessions
+
+/**
+ * How a game was started, which decides what can be known about it.
+ *
+ * `handoff` is the honest answer for a `steam://` launch: the OS opener started
+ * a launcher which started the game, so there is no process of ours, no exit
+ * code and NO playtime. The UI must not draw a duration for one — see
+ * `tmc_core::session`.
+ */
+export const SessionKindSchema = z.enum(['process', 'handoff', 'web'])
+export type SessionKindT = z.infer<typeof SessionKindSchema>
+
+export const SessionSchema = z.object({
+    id: z.number(),
+    kind: SessionKindSchema,
+    appId: z.number().nullable(),
+    appSlug: z.string().nullable(),
+    label: z.string(),
+    sandboxId: z.number().nullable(),
+    installId: z.number().nullable(),
+    startedMs: z.number(),
+    /** Absent while it is still running. */
+    endedMs: z.number().nullable(),
+    pid: z.number().nullable(),
+    exitCode: z.number().nullable(),
+    stoppedByUser: z.boolean(),
+    logPath: z.string().nullable(),
+})
+
+export type SessionT = z.infer<typeof SessionSchema>
+
+/** A finished launch, from the durable history. */
+export const SessionRowSchema = z.object({
+    id: z.number(),
+    kind: z.string(),
+    appId: z.number().nullable(),
+    appSlug: z.string().nullable(),
+    label: z.string(),
+    sandboxId: z.number().nullable(),
+    installId: z.number().nullable(),
+    startedMs: z.number(),
+    endedMs: z.number().nullable(),
+    /** Measured seconds. Always 0 for a launch whose duration is unknowable. */
+    seconds: z.number(),
+    exitCode: z.number().nullable(),
+    stoppedByUser: z.boolean(),
+})
+
+export type SessionRowT = z.infer<typeof SessionRowSchema>
+
+export const PlayTotalsSchema = z.object({
+    seconds: z.number(),
+    launches: z.number(),
+    lastPlayedMs: z.number().nullable(),
+})
+
+export type PlayTotalsT = z.infer<typeof PlayTotalsSchema>
+
+export const PlaytimeSummarySchema = z.object({
+    /** Keyed by TMC app id as a string — JSON object keys always are. */
+    byApp: z.record(z.string(), PlayTotalsSchema),
+    bySandbox: z.record(z.string(), PlayTotalsSchema),
+})
+
+export type PlaytimeSummaryT = z.infer<typeof PlaytimeSummarySchema>
+
+export const FlushReportSchema = z.object({
+    reported: z.number(),
+    seconds: z.number(),
+    deferred: z.number(),
+})
+
 export const LaunchPreviewSchema = z.object({
     plan: LaunchPlanSchema,
     command: z.string(),
+    /**
+     * The session that was opened, on the paths that actually start something.
+     *
+     * Absent from a PREVIEW, which is the point of a preview. Present on a
+     * launch so the caller can watch that session rather than guess which of
+     * the running ones it just created — two launches of the same game a
+     * second apart are indistinguishable by app id alone.
+     */
+    session: SessionSchema.optional(),
 })
 
 export type LaunchPreviewT = z.infer<typeof LaunchPreviewSchema>
@@ -783,6 +865,70 @@ export const DetectedGameSchema = z.object({
 })
 
 export type DetectedGameT = z.infer<typeof DetectedGameSchema>
+
+/** How far a hand-driven filesystem scan may go. Rust clamps every field. */
+export const WalkLimitsSchema = z.object({
+    /** Directory levels below each ticked root. */
+    depth: z.number().int().min(0).max(8),
+    /** Directories visited across the whole scan. */
+    maxDirs: z.number().int().min(1).max(200_000),
+    budgetSecs: z.number().int().min(1).max(300),
+    /**
+     * Descend into dot-directories.
+     *
+     * Worth offering rather than hard-coding: `~/.minecraft`,
+     * `~/.local/share/Steam` and `~/.steam` are all real install locations, so
+     * a scan of a Linux home with this off finds nothing at all.
+     */
+    hidden: z.boolean(),
+})
+
+export type WalkLimitsT = z.infer<typeof WalkLimitsSchema>
+
+/**
+ * Why a scan stopped.
+ *
+ * A scan that hit a limit and one that finished are different answers — the
+ * first means "there may be more, look somewhere narrower" — and showing them
+ * identically is how somebody concludes their game is undetectable when the
+ * walk simply never reached it.
+ */
+export const WalkStopSchema = z.enum([
+    'completed',
+    'dirLimit',
+    'timeLimit',
+    'cancelled',
+])
+
+export type WalkStopT = z.infer<typeof WalkStopSchema>
+
+export const ScanReportSchema = z.object({
+    games: z.array(DetectedGameSchema),
+    dirsVisited: z.number(),
+    elapsedMs: z.number(),
+    stop: WalkStopSchema,
+    /** `[path, reason]` for each ticked root that could not be read. */
+    unreadable: z.array(z.tuple([z.string(), z.string()])),
+})
+
+export type ScanReportT = z.infer<typeof ScanReportSchema>
+
+/** One directory the walk is currently in. Emitted on `tmc://scan-progress`. */
+export const ScanProgressSchema = z.object({
+    dirs: z.number(),
+    path: z.string(),
+})
+
+export type ScanProgressT = z.infer<typeof ScanProgressSchema>
+
+export const ApplyOutcomeSchema = z.object({
+    slug: z.string(),
+    path: z.string(),
+    ok: z.boolean(),
+    error: z.string().optional(),
+})
+
+export type ApplyOutcomeT = z.infer<typeof ApplyOutcomeSchema>
 
 // --------------------------------------------------------------------- RCON
 
