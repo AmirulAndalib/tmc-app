@@ -19,11 +19,14 @@
 //!   * **Every listing is capped** at [`MAX_ENTRIES`], so a directory with a
 //!     hundred thousand children cannot be used to stall the app or balloon the
 //!     IPC reply.
-//!   * **It is not a capability escalation.** `settings_patch` already accepts
-//!     an arbitrary string for `gameDirs` and `downloadDir`, so a webview that
-//!     wanted to point the plugin jail somewhere unwelcome never needed a
-//!     directory listing to do it. This makes the tree readable; it does not
-//!     make anything writable that was not already.
+//!   * **It makes nothing writable.** Reading the tree is the whole capability.
+//!     The jail anchors this picker feeds — `gameDirs` and `downloadDir` — are
+//!     refused by `settings_patch` (`JAIL_ROOT_FIELDS`) and reachable only
+//!     through their own setters, each of which runs
+//!     [`tmc_core::anchor::validate_root`] on the result. So a directory this
+//!     lists is a directory the webview may NAME; whether it may become a jail
+//!     anchor is a separate decision made somewhere else, against rules this
+//!     module has no part in.
 //!
 //! WHY IT EXISTS
 //! -------------

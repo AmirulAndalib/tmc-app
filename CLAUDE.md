@@ -40,6 +40,14 @@ marketing header, no footer. It opens on a browser and stays there.
 | `../tmc-global` | `@modcommunity/shared` — design tokens and a few UI primitives, consumed from GitHub Packages. `npm run shared:local` swaps in the sibling checkout. |
 | `../website-processing` | Astro landing site. No relationship to this app beyond sharing the design system. |
 
+**This repository is public and GPL-3.0-only** (`LICENSE`; every crate declares
+it, and so does `package.json`). Two consequences worth holding while writing
+code here: a comment is published, and a vulnerability report arrives from a
+stranger. [`SECURITY.md`](SECURITY.md) is the front door for the second — it
+states the threat model the architecture below is built around, and lists the
+things that look like holes and are deliberate, so that a report can be aimed
+past them.
+
 ## Architecture, and the one rule everything follows
 
 > **Credentials and the filesystem live in Rust. The webview gets data.**
@@ -752,15 +760,38 @@ download because its files come from `tmcdev.net`. The user still sees the host
 
 #### The games that ship
 
-| Slug | Where its mods go | Notes |
-| --- | --- | --- |
-| `minecraft` | `mods/`, `resourcepacks/`, `shaderpacks/` | Instance model — see below |
-| `valheim`, `vrising`, `sotf` | `BepInEx/plugins/` | Paths verified against r2modman's ecosystem data |
-| `gmod` | `garrysmod/addons/` | Workshop subscriptions are the game's own business, not a sandbox's |
-| `tf2` | `tf/custom/` | The folder Valve added so custom content survives a patch |
-| `7-days-to-die` | `Mods/<mod>/` | A mod IS its folder; the loader reads `ModInfo.xml` |
-| `rust` | `oxide/plugins/` | **Server only.** EAC is kernel-level; there is no client half and inventing one costs somebody an account |
-| `gtav` | game root, `scripts/` | |
+**Thirty-two, and the canonical list is the README's table** — which game, where
+its mods land, and whether anybody has actually run it. Repeating it here would
+be a second list to keep in step, and the one in the README is the one a user
+reads.
+
+What belongs here instead is the shape of those rules, because it is what a
+thirty-third has to fit into:
+
+| Family | Slugs | Mods land in | Default |
+| --- | --- | --- | --- |
+| Bethesda + script extender | `skyrim`, `skyrim-se`, `skyrim-vr`, `fallout-3`, `fallout-4`, `fallout-new-vegas`, `oblivion`, `starfield`, `morrowind` | `Data/`, plus `Data/<XSE>/Plugins` for the extender's own DLLs | `hardlink` |
+| BepInEx | `valheim`, `vrising`, `sotf` | `BepInEx/plugins`, `patchers`, `config` | `hardlink` |
+| Source | `tf2`, `gmod` | `tf/custom`, `garrysmod/addons` | `hardlink` |
+| Plain `Mods/` folder | `rimworld`, `stardew-valley`, `mount-and-blade-2`, `witcher-3`, `7-days-to-die`, `palworld`, `kerbal-space-program`, `cyberpunk-2077` | one folder, named by the game | `hardlink` |
+| Instance model | `minecraft` | `mods`, `resourcepacks`, `shaderpacks`, `datapacks`, `config` | `direct` |
+| Documents, not the install | `sims-3`, `sims-4`, `baldurs-gate-3` | the user's documents folder | `direct` |
+| Game root | `gtav`, `gta-3`, `gta-4`, `gta-san-andreas`, `gta-vice-city` | `modloader/`, `scripts/`, or the root itself | `direct` |
+| Server only | `rust` | `oxide/plugins`, `oxide/config`, `oxide/data` | `direct` |
+
+Four of those rows carry a decision rather than a path:
+
+  * **`antiCheat: "kernel"` is set on `gtav` and `rust`**, which is what forces
+    Direct and warns on every other option. Guessing wrong there costs somebody
+    their account, not an install.
+  * **`rust` is the dedicated SERVER.** EAC is kernel-level, there is no
+    client-side Rust modding, and inventing one would be inventing a ban.
+  * **The three documents-folder games are why a sandbox's `gameDir` is not
+    "where Steam put it".** The install folder holds no mods at all, so a
+    sandbox pointed at it deploys perfectly and changes nothing.
+  * **`gmod`'s Workshop subscriptions are the game's own business**, not a
+    sandbox's — the rule covers `addons/`, `lua/autorun` and the workshop
+    cache, and does not try to own what Steam already manages.
 
 **Minecraft is the instance model, deliberately.** A sandbox given its own game
 folder gets its own `mods`, `config`, `saves` and `options.txt`, the way
@@ -1914,6 +1945,37 @@ linuxdeploy` — as it does the missing `librsvg2-dev` the GTK plugin needs.
 
 ## Working here
 
+### What CI runs, and why it is split that way
+
+`.github/workflows/ci.yml` on every push and pull request, in four jobs rather
+than one:
+
+| Job | Runs | Needs |
+| --- | --- | --- |
+| `web` | `check:web` — tsc, eslint, vitest | node |
+| `core` | clippy, tests and `cargo fmt --check` for `tmc-core` + `tmc-usvfs` | **nothing else** |
+| `shell` | `check:rust` and `test:rust` for the whole workspace | the GTK/WebKit stack |
+| `windows-crosscheck` | `cargo check -p tmc-usvfs --target x86_64-pc-windows-gnu` | the Windows target |
+
+**The `core` job is the one the workspace split exists for.** Every guard worth
+failing a pull request over — the path jail, the address guard, the protocol
+parsers, the token lifecycle — is in `tmc-core`, and that job proves them on a
+runner with no display stack, no WebKit and no dbus. If it ever starts needing
+`apt-get`, something has been added on the wrong side of the line.
+
+`windows-crosscheck` is the only thing that looks at the injector at all: those
+two hundred lines have never been run against a game, and type-checking them
+against the Windows target is what has caught the four real bugs found in them
+so far.
+
+`release.yml` is separate and builds the bundle on all three desktop platforms.
+It is not duplicated here — proving that a `.dmg` links on every push would cost
+twenty minutes to re-prove something that matters only when a release is cut.
+
+`npm run audit:rust` is deliberately in neither: `cargo-audit` is a separate
+install, and wiring it into the definition of done would make a fresh clone fail
+its own check.
+
 ### Type safety
 
 - **`any` is banned** and enforced by eslint. `unknown` plus a parse is always
@@ -1935,7 +1997,7 @@ linuxdeploy` — as it does the missing `librsvg2-dev` the GTK plugin needs.
   `detail()` and the log, never to the webview.
 - Prefer returning an `AppApiResult`-style error over panicking. A panic in a
   command is a `Result<_, String>` the frontend cannot classify.
-- New privileged capability → new `#[tauri::command]` in `commands.rs`, with the
+- New privileged capability → new `#[tauri::command]` under `commands/`, with the
   policy check *in* the command, not in the caller.
 
 ### Supply chain: `npm run audit:rust`
@@ -2415,13 +2477,35 @@ Honest list, so nothing here reads as finished when it is not:
 
 ---
 
-## External source code
+## Prior art
 
-`~/stack/external-study/` holds **third-party source cloned to be read** — the Source
-engine, Momentum Mod, Shavit's `bhoptimer`, Godot itself, and the mod managers. It is
-read-only, is never a dependency, and nothing in this repository imports from it.
+This app is not the first mod manager, and the comments throughout it name the
+others on purpose: Mod Organizer's virtual filesystem, Vortex's hard-link
+deployment, r2modman's and CurseForge's per-profile instances, Gale's config
+form. Where one of them settled a question well, the reasoning is credited to
+them at the point it applies, so the next person to read that code learns why
+the shape is what it is rather than assuming it was arbitrary.
 
-**Look there before designing something from scratch.** If a problem here looks like
-one somebody has already solved in public, the odds are the implementation is in that
-tree. See [`external-study/README.md`](../external-study/README.md) for what is there
-and what has already been taken from it.
+**Credited, not copied.** Every line in this repository is written for it.
+What is taken from other projects is the same thing any engineer takes from
+published work — the knowledge that a problem exists and roughly how it tends
+to be solved — and that is exactly what the comments record. Three specific
+categories are worth separating, because they are treated differently:
+
+  * **Protocol and file-format behaviour** is fact about somebody else's wire
+    format or on-disk layout, and the comments name the authority that settled
+    it — `spy`'s scanner for query ports, `go-a2s` for split-reply framing,
+    each game's own modding documentation for where its mods go. A format is
+    not authorship, and getting it wrong is a bug in this app.
+  * **Folder layouts in `plugins/manager/`** are the documented defaults each
+    manager publishes for its own users. They are data in this repository
+    because they belong to those projects and change on their schedule — a
+    corrected descriptor is a JSON edit, not a patch to Rust.
+  * **Nothing is vendored.** No third-party source is copied into this tree, and
+    nothing here is a derivative work of another manager. Dependencies are
+    declared in `package.json` and the `Cargo.toml`s, under their own licences.
+
+If a comparison in a comment ever reads as a claim on somebody else's work
+rather than a note about why this code looks the way it does, rewrite it. The
+projects named here are the reason a lot of this was tractable, and the
+attribution is meant to say so.

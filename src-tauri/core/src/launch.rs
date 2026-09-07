@@ -45,7 +45,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{AppError, AppResult};
-use crate::plugins::apps::{AppPluginFile, LaunchSpec};
+use crate::plugins::apps::{is_allowed_launch_uri, AppPluginFile, LaunchSpec};
 use crate::plugins::jail::Jail;
 use crate::plugins::manifest::{FsRoot, PathRef};
 
@@ -367,6 +367,24 @@ pub fn plan(
             if has_unresolved(&filled) {
                 return Err(AppError::invalid(
                     "The launch URI has placeholders this install cannot fill.",
+                ));
+            }
+
+            /*
+             * Re-checked AFTER substitution, for the same reason the download
+             * step re-checks its host there rather than at validation time:
+             * the string that was vetted when the rule was parsed is not the
+             * string that reaches the OS opener. The values filled in here are
+             * a sandbox's own options, and those make a round trip through the
+             * account — so "the template was fine" is a claim about a different
+             * string. A scheme cannot be substituted in (a template not already
+             * starting with an allowed one is refused at parse time), but a
+             * quote or a control character in an option value can be, and this
+             * is the last point before the platform's opener sees it.
+             */
+            if !is_allowed_launch_uri(&filled) {
+                return Err(AppError::invalid(
+                    "That launch URI is not one this app will open.",
                 ));
             }
 
@@ -865,6 +883,43 @@ mod tests {
 
         assert_eq!(plan.uri.as_deref(), Some("steam://rungameid/271590"));
         assert!(plan.program.is_none());
+    }
+
+    /// A value substituted into a URI is checked again, not trusted because
+    /// the TEMPLATE was checked when the rule was parsed.
+    ///
+    /// The filled string is what the platform opener receives, and a quote or
+    /// a control character reaching it is how one argument becomes two.
+    #[test]
+    fn a_substituted_uri_is_re_checked() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let jail = jail_over(tmp.path());
+
+        let rule = rule_from(
+            r#"{ "manifestVersion": 1, "launch": { "uri": "steam://rungameid/{installName}" } }"#,
+        );
+
+        for hostile in ["271590\" --exec", "271590\u{7f}x", "271590\nsecond"] {
+            let ctx = LaunchContext {
+                install_name: Some(hostile.into()),
+                ..Default::default()
+            };
+
+            assert!(
+                plan(&rule, &jail, &LaunchOptions::default(), &ctx).is_err(),
+                "{hostile:?} should be refused"
+            );
+        }
+
+        // The ordinary case still resolves.
+        let ctx = LaunchContext {
+            install_name: Some("271590".into()),
+            ..Default::default()
+        };
+
+        let ok = plan(&rule, &jail, &LaunchOptions::default(), &ctx).expect("plan");
+
+        assert_eq!(ok.uri.as_deref(), Some("steam://rungameid/271590"));
     }
 
     #[test]

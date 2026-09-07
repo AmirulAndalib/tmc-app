@@ -146,3 +146,18 @@ will ignore.
 
 Your game is not here? It is four JSON files under `plugins/app/<slug>/` and no
 code — see **Adding a game** in `CLAUDE.md`.
+
+## Security
+
+Found something? **Please do not open a public issue** —
+[`SECURITY.md`](SECURITY.md) has the private reporting route, the threat model
+the app is built around, and the list of things that look like holes and are
+deliberate (RCON reaching private addresses is the usual one).
+
+## Licence
+
+[GPL-3.0-only](LICENSE). The game names, trademarks and mod-manager names used
+throughout are their respective owners'; they appear here to say which game a
+rule is for and which manager a folder layout belongs to, and nothing in this
+repository is a derivative work of any of them — see **Prior art** in
+`CLAUDE.md`.

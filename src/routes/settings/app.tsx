@@ -317,6 +317,20 @@ export default function AppSettingsRoute() {
                             </span>
                         }
                     />
+                </Section>
+            )}
+
+            {/*
+             * Shown on EVERY build, unlike Development above.
+             *
+             * A version number is the first thing any bug or security report
+             * has to carry, and until this existed the only place it appeared
+             * was a section that renders on dev builds — so the people most
+             * likely to be reporting something were the ones who could not
+             * find it. SECURITY.md asks for it by name.
+             */}
+            {env && (
+                <Section title="About">
                     <Row
                         label="Version"
                         control={
