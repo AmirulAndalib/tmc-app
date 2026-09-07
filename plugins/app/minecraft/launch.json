@@ -1,7 +1,7 @@
 {
     "manifestVersion": 1,
     "label": "Minecraft (bundled launcher)",
-    "description": "Starts the launcher that ships inside the game folder, pointed at this install's own directory so two profiles never share a saves folder.",
+    "description": "Starts the launcher that ships inside the game folder, pointed at this sandbox's own directory with --workDir. That flag is what makes a sandbox an instance: the launcher writes mods, config, saves and options.txt underneath it, so two sandboxes never share any of them.",
 
     "permissions": {},
 
@@ -19,7 +19,8 @@
             "width": ["--width", "{width}"],
             "height": ["--height", "{height}"],
             "windowMode": ["--{windowMode}"],
-            "memoryMb": ["--jvmArgs", "-Xmx{memoryMb}M"]
+            "memoryMb": ["--jvmArgs", "-Xmx{memoryMb}M"],
+            "minMemoryMb": ["--jvmArgs", "-Xms{minMemoryMb}M"]
         },
 
         "env": {

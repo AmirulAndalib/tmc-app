@@ -160,6 +160,11 @@ genuinely need a window belongs on that side of the line.
 | `session.rs` | **Games that are running.** Keeps the `Child`, times the session, captures its output. What can be known about a launch, and what cannot |
 | `detect/walk.rs` | The bounded walk over folders the USER ticked, for what no launcher wrote down |
 | `library/share.rs` | A sandbox as a pasteable code. Item ids, never files, and nothing about this machine |
+| `local/metadata.rs` | **`tmc.json`** — what an archive claims about where it came from. A hint, never a permission |
+| `local/store.rs` | Imported mods on disk: assembling one, laying it out under the game folder, moving it, removing it |
+| `local/adopt.rs` | What is already in a game folder that the ledger, a subscription and a previous adoption cannot account for |
+| `local/vault.rs` | Paths this process found, named from the webview by token. What that buys, and what it does not |
+| `plugins/managers.rs` | **Another mod manager, read.** Where it keeps its mods, declaratively — the fourth plugin type |
 
 **`src-tauri/usvfs/src/` — `tmc-usvfs`**
 
@@ -185,6 +190,7 @@ genuinely need a window belongs on that side of the line.
 | `commands/play.rs` | The three ways a game starts. Names IDS, never a loader URL or a connect link |
 | `commands/config.rs` | The game-settings editor's three commands, behind one setting |
 | `commands/sessions.rs` | What is running, what ran, and the log it printed |
+| `commands/import.rs` | Dropped files, adopted folders, other managers. Names TOKENS, never paths |
 | `spawn.rs` | The only place in the app that starts a process. Which mechanism is the PLAN's decision, not the caller's |
 | `state.rs` | `AppState`, assembled once — shared locks and caches depend on that |
 | `paths.rs` | Every path, from Tauri's resolver — never `$HOME` |
@@ -239,6 +245,9 @@ genuinely need a window belongs on that side of the line.
 | `components/session-history.tsx` | Recent launches, and the log a crashed game printed |
 | `components/config-editor.tsx` | Editing the settings files a game declares |
 | `components/quick-install.tsx` | One-click install of a mod or asset INTO a sandbox |
+| `components/drop-import.tsx` | The drop overlay, above the router. Listens to Rust, never to the DOM |
+| `components/import-dialog.tsx` | What is about to be imported, where it will land, and the three fields worth editing |
+| `components/local-mods.tsx` | Imported mods: the list, the game-folder scan, the other-manager import |
 | `routes/sandboxes.tsx` | The mod manager: what is in a sandbox, and whether it is applied |
 | `routes/downloads.tsx` | The queue, and everything to do when one is stuck |
 | `routes/rcon.tsx` | The server console |
@@ -568,13 +577,14 @@ That is a real limitation and it is the point: the alternative is third-party
 code running with full filesystem access next to the user's saves and
 credentials, and nothing bolted on afterwards recovers from that.
 
-### Three types
+### Four types
 
 | Type | Declares | Runtime |
 | --- | --- | --- |
 | **Installer** | Ordered `install` / `uninstall` steps | `plugins/steps.rs` |
 | **Server Live Query** | A hex request + a field list | `plugins/query.rs` |
 | **Theme** | A map of CSS custom properties | `plugins/theme.rs` |
+| **Manager** | Where another mod manager keeps its mods | `plugins/managers.rs` |
 
 ### The step vocabulary
 
@@ -704,6 +714,65 @@ deleting it.
 and runs through the same jail and the same executor, so it can express nothing
 a registry plugin cannot. What it adds is only the *selection* — which rule
 applies to which game, kind and file.
+
+#### Where they come from, and why they are compiled in
+
+Two sources, and `AppPlugins::resolve` is the only thing that reads both:
+
+| Source | Holds |
+| --- | --- |
+| Compiled into the binary from `<repo>/plugins/app/` | the games the app ships support for |
+| `<app data>/plugins/app/` | whatever the user added |
+
+**The shipped half is embedded by `core/build.rs`, not shipped beside the
+binary.** A Tauri resource is a separate file next to the exe — which the
+portable Windows build does not carry, and neither does an AppImage moved out of
+its directory. The first release built from this tree shipped no rules at all,
+and what that cost was not "fewer games": **detection found nothing, no game
+could be launched, no sandbox knew its strategy and the config editor had
+nothing to list — silently**, because every one of those features reads an empty
+map perfectly happily. That is far too much to hang on a file being adjacent.
+
+The rules stay files in the repository; the build script only reads them.
+`the_compiled_in_rules_match_the_repository` asserts the two agree, so a build
+script that quietly stopped embedding one fails a test rather than shipping.
+
+**A slug the user has rules for REPLACES the shipped one** rather than merging
+with it. Two authors' rules for one game interleaved by specificity would answer
+`choose` with a rule neither of them expected to win.
+
+**A rule never has to name the site it downloads from.** `download_hosts` adds
+`api_base()`'s host to every app rule's net allow-list, because `{fileUrl}`
+comes from the API and Rust picked the base — an author naming it restates a
+constant, and one who gets it wrong writes a rule that cannot download and finds
+out when somebody clicks install. That is not hypothetical: the shipped rules
+named `moddingcommunity.com`, and a build pointed at the dev site refused every
+download because its files come from `tmcdev.net`. The user still sees the host
+— `permission_summary` reads the manifest this builds.
+
+#### The games that ship
+
+| Slug | Where its mods go | Notes |
+| --- | --- | --- |
+| `minecraft` | `mods/`, `resourcepacks/`, `shaderpacks/` | Instance model — see below |
+| `valheim`, `vrising`, `sotf` | `BepInEx/plugins/` | Paths verified against r2modman's ecosystem data |
+| `gmod` | `garrysmod/addons/` | Workshop subscriptions are the game's own business, not a sandbox's |
+| `tf2` | `tf/custom/` | The folder Valve added so custom content survives a patch |
+| `7-days-to-die` | `Mods/<mod>/` | A mod IS its folder; the loader reads `ModInfo.xml` |
+| `rust` | `oxide/plugins/` | **Server only.** EAC is kernel-level; there is no client half and inventing one costs somebody an account |
+| `gtav` | game root, `scripts/` | |
+
+**Minecraft is the instance model, deliberately.** A sandbox given its own game
+folder gets its own `mods`, `config`, `saves` and `options.txt`, the way
+CurseForge, Prism and MultiMC all do it — so `defaultStrategy` is `direct`.
+Copying is not laziness there: the launcher is pointed at the folder with
+`--workDir` and everything inside is expected to be a real file, loaders resolve
+paths, some mods rewrite their own jar on first run, and Windows refuses to make
+a symbolic link at all without Developer Mode. Hard links are offered for
+somebody running several packs that share mods off one drive.
+
+Everything else defaults to `hardlink`, which is the app's own default and right
+when a game folder is shared rather than instanced.
 
 ## The library
 
@@ -1156,6 +1225,155 @@ queue to look at. `cloudSync` and `autoUpdate` come from the importer's own
 defaults: whether somebody's mod list leaves their machine is their decision,
 not the exporter's.
 
+## Importing mods from outside the account
+
+Everything above assumes an account subscribed to something. That is the right
+model for what the site holds and it is the whole model for nothing else — and
+"nothing else" is most of what is on a modder's disk: the jar from a Discord
+thread, the folder they built themselves, the two hundred mods already sitting
+in Vortex, the pack downloaded before they had an account.
+
+A **local mod** is one directory of files plus editable text about it, and it is
+deployed by exactly the code that deploys a subscribed one.
+
+`deploy::DeployMod` wants a key, a name, a priority and a folder laid out as it
+belongs under the game directory. A staged subscription is one of those; an
+import is another. So the merge tree, the conflict report, the ledger, the
+backup-before-overwrite rule and the "still ours" purge check all apply to an
+imported mod with **no new code and no second set of rules to keep in step** —
+`library::deploy::mod_root` is the single place the two sources meet, and
+`an_imported_mod_and_a_subscribed_one_deploy_through_one_ledger` is what stops
+that claim rotting.
+
+| File | Owns |
+| --- | --- |
+| `local/metadata.rs` | `tmc.json` — what an archive says about where it came from |
+| `local/store.rs` | The files: importing, laying out, moving, removing |
+| `local/adopt.rs` | What is already in a game folder that nothing here claims |
+| `local/vault.rs` | How the webview names a path it is never shown |
+| `plugins/managers.rs` | The fourth plugin type: another mod manager, read |
+
+### The webview still never names a path
+
+`commands/import.rs` looks like an exception to `commands/mod.rs`'s second rule
+and is not one. Every path it acts on was produced by **this side** — the OS
+delivered a drag-and-drop event to the window, or one of the two scans listed a
+directory — and reaches the frontend as an opaque token.
+
+What that buys is bounded and `local/vault.rs` says so: a script with execution
+in the webview can replay a token for a file the user just dropped, which is
+nothing it could not get by asking them to drop it again. It cannot name
+`~/.ssh/id_ed25519`, because **no token exists for one**. Tokens expire and the
+store is capped, because a capability with no lifetime is one an injected script
+can hoard.
+
+`dragDropEnabled` is therefore ON in `tauri.conf.json`, which also means the
+webview receives no HTML5 drag events at all — the point, since an `ondrop`
+handler there would be the untrusted half deciding what was dropped, holding
+real paths to do it with. The hover events are emitted from Rust carrying a
+COUNT and nothing else.
+
+### `tmc.json`
+
+The website puts a small JSON document at a release archive's root; the importer
+reads it for the item's name, version and link. It is a **hint about identity**,
+not a permission and not a signature: it arrives inside a file a stranger
+supplied, so `installPath` goes through `join_relative` like any other untrusted
+path, and an item link is offered only when `source`'s ORIGIN matches this
+build's `api_base()` — a production archive must not hand a dev build an item id
+from a different database.
+
+Not signed, deliberately. The app has the machinery, and it would be the wrong
+question: a release file is authored by the mod's author and served by the site
+unmodified, so a signing key covering every upload is a key on a web server. The
+thing worth verifying about a download is its **checksum**, which the API already
+carries and the queue already enforces.
+
+### The one genuinely ambiguous decision
+
+Whether to unpack. `.jar` is a zip and must not be unpacked; a Minecraft
+resource pack is a `.zip` and must not be either; a mod shipped as a zip of
+loose DLLs must be. So the **game's own install rules decide**:
+`AppPlugins::mod_extensions` reads `match.extensions` off the `manage_*` rules,
+and a file whose extension a rule accepts is copied verbatim. Nothing invents a
+second list, and a game that grows a new packaging format gets it for free.
+
+Where the payload lands is a guess and is treated as one — the sidecar's
+`installPath`, then "does its top level already hold a declared mod target?",
+then the game's first `modTargets` entry — and then the user can change it.
+`store::relayout` is what makes that cheap: a directory rename inside the store,
+not a re-import.
+
+### Adopting what is already there
+
+`local::adopt` lists the immediate children of the folders a game's
+`sandbox.json` declares as mod targets, and subtracts everything the app can
+account for: the deployment ledger, a subscription's installed files, and
+previously adopted rows. Getting that subtraction wrong is worse than not having
+the feature — adopt something the app already deploys and the user has one mod
+listed twice, with the merge tree correctly reporting every file as conflicting
+with itself.
+
+It is **not a filesystem scan**. A game with no `sandbox.json` offers nothing,
+which is the honest answer rather than a guess about where its mods might be.
+And it **copies**: the original stays exactly where it was, so backing out is
+deleting a row and the game keeps working either way.
+
+### Reading another mod manager
+
+The fourth plugin type. `plugins/manager/*.json` is compiled into the binary by
+`core/build.rs` alongside the app rules and for the same reason, with
+`<app data>/plugins/manager/` as a per-id overlay; a registry bundle carrying a
+`manager` block is the third source and goes through the approval and signature
+gate on its way out.
+
+A descriptor names directories and says how they nest — a base the APP resolves
+(`home`, `appData`, `localData`, `programData`, `documents`), a relative path, a
+`modsPath` with `{game}` and at most **one** `*` segment whose name becomes the
+profile/instance label, a game-id-to-slug table, and optionally a per-mod JSON
+file with pointers into it. It cannot run a program, read an environment
+variable, name an absolute path or reach the network, because nothing in the
+format expresses any of those. One wildcard, not any number: two would make a
+scan the product of two listings over somebody's whole `AppData`.
+
+**Every shipped descriptor reads local storage, and that is where the answer
+is** — not a limitation of the plugin model:
+
+  * **CurseForge's** API needs a key issued per application and does not answer
+    "what has this user installed"; the instance folders do.
+  * **Nexus's** API is per-user and **Vortex** has no remote API at all; its
+    staging folders are the record.
+  * **Thunderstore's** API is open but serves the *registry*, not what a
+    machine installed; r2modman's profiles are on disk.
+
+Ships: r2modman, Thunderstore Mod Manager, Vortex, CurseForge, Prism, MultiMC.
+The game folder names those managers use are their own and are the one thing
+likely to be wrong — a corrected descriptor dropped in `plugins/manager/` is the
+whole fix, which is exactly why this is data rather than a `vortex.rs`.
+
+MO2 is **not** shipped, and the reason is worth keeping: its instances are named
+freely by the user and the game is recorded inside `ModOrganizer.ini`, so no
+declarative name match is reliable. A descriptor that guessed would find the
+wrong game's mods, which is worse than finding none.
+
+### What a local mod deliberately has not got
+
+**Updates.** There is no release history, no checksum from anybody and no URL to
+re-fetch — that is what makes it local. `LocalMod` has no `latest_version`, the
+auto-updater never sees one (it looks items up with `find_item`, which returns
+nothing for `local:`), and the honest way to update an import is to import the
+new file. When a sidecar named an item on this site the row keeps the reference
+so the UI can offer "subscribe to this instead", which is what turns a snapshot
+into something the app can keep current.
+
+**A second identity space.** The key is `local:<id>`, in the same `sandbox_mod`
+table and the same ledger as `mod:1234`. One list, one load order, one deploy.
+
+**A place in `subscription`.** `local_mod` is its own table because
+`subscription` is a mirror the full sync rewrites — anything the server did not
+send is deleted, and a dropped jar surviving its first sync is the one behaviour
+an import must have.
+
 ## Editing a game's own settings
 
 Every mod manager studied for this has a config editor, and every one exists for
@@ -1520,7 +1738,9 @@ That decision cascades, and each piece is load-bearing:
 npm install                # frontend deps (needs GitHub Packages auth for @modcommunity)
 npm run dev                # vite only, no Rust — fastest loop for UI work
 npm run desktop            # tauri dev
-npm run desktop:build      # tauri build
+npm run desktop:build      # tauri build, for this machine
+npm run build:linux        # AppImage + deb
+npm run build:windows      # portable exe + .exe setup + .msi, cross-built
 
 npm run android:init       # once, generates gen/android
 npm run android            # tauri android dev
@@ -1545,9 +1765,29 @@ npm run shared:build       # rebuild it in place
 ### Pointing a build at the dev site
 
 ```bash
-TMC_API_BASE=https://tmcdev.net:3002 npm run desktop   # debug: read at RUN time
-TMC_API_BASE=https://tmcdev.net:3002 npm run android   # baked in at BUILD time
+TMC_API_BASE=https://tmcdev.net npm run desktop        # debug: read at RUN time
+TMC_API_BASE=https://tmcdev.net npm run android        # baked in at BUILD time
+TMC_API_BASE=https://tmcdev.net npm run build:windows  # so is a release build
 ```
+
+**`https://tmcdev.net`, not `https://tmcdev.net:3002`.** Port 3002 is the Next
+dev server speaking plain HTTP; 443 is the one with TLS in front of it. Pointing
+`https://` at 3002 fails the handshake, which surfaces as "could not reach the
+site" and reads exactly like the box being down.
+
+Two consequences of the dev site's certificate being signed by a private CA
+(`TMC Local Development CA`) rather than a public one, both of which cost an
+afternoon if you meet them without expecting them:
+
+- **The machine running the build's OUTPUT has to trust that CA**, not the
+  machine that built it. A cross-built exe handed to a Windows box which has
+  never seen the dev CA fails every request with a TLS error.
+- **`http://tmcdev.net:3002` is not a way around it.** `normalise_base` refuses
+  `http` for anything but a loopback or LAN host, and a public-looking domain is
+  neither however it resolves. The LAN address is: `http://10.50.0.185:3002` is
+  accepted, at the cost of `tauri-plugin-opener` being scoped to `https://*` —
+  so sign-in cannot open the browser for you and the device screen prints the
+  URL instead, which is exactly the case that behaviour exists for.
 
 `tmc_core::api::api_base()` resolves the base once per process, from
 `TMC_API_BASE` in the environment (**debug builds only**) and otherwise from
@@ -1612,6 +1852,65 @@ npm run desktop
 that automatically when the system headers are absent, so the same npm script
 works in both situations. The sysroot supplies headers and link stubs only;
 runtime libraries still come from the system where it has them.
+
+## Shipping it
+
+Four of the five targets can be built without owning the machine they run on.
+`docs/BUILDING.md` is the full account; what belongs here is the shape and the
+one thing that is easy to undo.
+
+**Windows cross-builds from Linux, installers and all.** `scripts/build-
+windows.sh` runs `tauri build --runner cargo-xwin`, which is what makes bundled
+SQLite compile for Windows from here — the same gap that made `tmc-usvfs` its
+own crate, closed for the rest of the tree by a toolchain rather than by a
+split. NSIS already runs anywhere. **The MSI does not**: Tauri builds one by
+shelling out to WiX's `candle.exe`, so `scripts/make-msi.sh` compiles
+`packaging/windows/tmc.wxs` with `wixl` from msitools instead.
+
+That file is written against **the subset wixl implements**, which is smaller
+than WiX's — no `MajorUpgrade`, no launch conditions, no `Platform` attribute,
+no WixUI. A change that reaches for one of those does not fail at review, it
+fails at `wixl` with a Vala assertion, and the fix is a Windows runner rather
+than a workaround. Its header says which elements are there and why.
+
+The MSI registers `tmc://` in `HKLM` itself, because a per-machine install is
+the one elevated moment there is and the app cannot claim the scheme for
+itself afterwards. It does **not** bootstrap the WebView2 runtime — wixl has no
+launch conditions, so it cannot even warn — which is why the `.exe` setup is
+the recommended download and the MSI is for policy deployment.
+
+**macOS is the exception and stays one.** The SDK is not redistributable and an
+un-notarised `.app` is one Gatekeeper refuses outright rather than warns about,
+so a cross-build would produce something that cannot be run. It comes from the
+`macos-latest` runner in `.github/workflows/release.yml`.
+
+**Nothing cross-built is signed.** Tauri skips signing on a foreign host and
+says so on every run. A build handed to somebody else gets a SmartScreen
+warning, and that is a fact about the build rather than about the machine it
+was made on.
+
+### The one-line installer
+
+`scripts/install.sh` is what `curl … | sh` runs, so it is written as a document
+somebody reads before piping it: POSIX `sh`, no `sudo`, `~/.local` unless run as
+root, and `--uninstall` removes exactly what it wrote.
+
+**The checksum is required, not advisory.** It reads `checksums.txt` from the
+release and refuses to install without it — which makes the `publish` job's
+`sha256sum` step load-bearing: a release cut by hand without one is a release
+the installer will not touch.
+
+It resolves the latest version from the **redirect** on `/releases/latest`
+rather than the GitHub API, which is rate-limited per IP at sixty an hour and
+would be spent by whoever shares the NAT.
+
+Where **libfuse2** is missing — Debian 13, Ubuntu 24.04 — the AppImage is
+unpacked into `~/.local/lib/tmc` and `bin/tmc` becomes a symlink to its
+`AppRun`. The same problem hits the BUILD side, where linuxdeploy and
+appimagetool are themselves AppImages: `APPIMAGE_EXTRACT_AND_RUN=1` is what
+both honour, and Tauri reports its absence as the unhelpful `failed to run
+linuxdeploy` — as it does the missing `librsvg2-dev` the GTK plugin needs.
+`build-linux.sh` checks for both by name.
 
 ## Working here
 
@@ -1719,10 +2018,31 @@ all read `ServerQueryResult`.
 5. Nothing in Rust. If something needs adding in Rust, the file format is
    missing a field rather than the game being special.
 
-The shipped examples under `examples/plugins/app/` are validated by a test that
-builds each rule's real jail and resolves every step path through it — and, for
-`sandbox.json`, checks that no preset names a strategy the game excludes and
-that every option a preset sets survives its own schema.
+`sandbox.json`'s `modTargets` earns its keep twice over now: it is what an
+import falls back to when it cannot tell where a payload belongs, and it is the
+complete list of folders the adopt scan looks in. A game whose targets are wrong
+imports mods to the wrong place and finds nothing to adopt.
+
+The rules under `plugins/app/` are validated by a test that builds each rule's
+real jail and resolves every step path through it — and, for `sandbox.json`,
+checks that no preset names a strategy the game excludes and that every option a
+preset sets survives its own schema. It runs against `AppPlugins::shipped()`,
+the compiled-in copy, because that is the one a user actually gets.
+
+**They are compiled into the binary**, so a new game needs a rebuild to appear —
+`cargo` reruns the build script when the directory changes. A rule dropped into
+`<app data>/plugins/app/` needs no rebuild and overrides a shipped game outright.
+
+### Adding a mod manager
+
+1. `plugins/manager/<id>.json` — its roots per platform, its `modsPath`, its
+   game-directory-to-slug table, and its per-mod metadata file if it has one.
+2. Nothing else. It is compiled in by `core/build.rs` on the next build, and
+   `every_shipped_manager_descriptor_parses` fails the run if it does not load.
+
+A descriptor that finds nothing fails closed and says so, which is the right
+failure: the folder names these managers use are their own, and being wrong
+about one costs a scan rather than a game folder.
 
 ### Adding a deployment strategy
 
@@ -1986,6 +2306,30 @@ changed it, and the lookup costs nothing.
   headers in this crate are `//!` at the top of the file; clippy's
   `empty_line_after_doc_comments` catches the mistake and `check:rust` runs with
   `-D warnings`.
+- **An app rule that is not compiled into the binary supports nothing, quietly.**
+  `plugins/app/` is embedded by `core/build.rs` rather than bundled as a Tauri
+  resource, because the portable Windows exe and a relocated AppImage carry no
+  resources. With an empty rule set the scan finds no games, nothing launches,
+  no sandbox has a strategy and the config editor lists nothing — and not one of
+  those paths reports an error, because an empty map is a valid answer to all of
+  them. `the_compiled_in_rules_match_the_repository` is what makes the omission
+  loud.
+- **A `.jar` is a zip, and a Minecraft resource pack is a `.zip`.** Neither may
+  be unpacked on import, and both would be by any rule that keys off "is this an
+  archive". The game's own `manage_*` rules decide, through
+  `AppPlugins::mod_extensions` — a file whose extension a rule accepts is copied
+  verbatim. Inventing a second extension list here is how a resource pack
+  becomes a folder of loose textures the loader ignores.
+- **An archive that already holds `mods/` is a slice of the game folder.**
+  Nesting it under the game's mod target again produces `mods/mods/foo.jar`,
+  which deploys, reports no error and does nothing. `store::suggest_rel_path`
+  tests the payload's top level against the game's declared `modTargets` before
+  it nests anything.
+- **`store::relayout` cannot rename in place.** Moving a payload from the game's
+  root into `mods` is a rename of a directory into itself, which every platform
+  refuses — and the root-to-subdirectory case is the FIRST one a user hits,
+  because it is what an unrecognised archive gets. It goes via a sibling
+  holding directory, and puts the files back if the second rename fails.
 - **`serde(rename_all)` does not rename variant fields.** Enum variants in the
   plugin manifest need `rename_all_fields = "camelCase"` too, or a manifest
   would have to write `max_bytes`.
@@ -2019,6 +2363,23 @@ Honest list, so nothing here reads as finished when it is not:
   every platform; the two hundred lines that patch an import table in somebody
   else's game process are type-checked against the Windows target and have never
   been run against a game. Turning the feature on is a decision to find out.
+- **Importing from a mod manager's API.** Every shipped manager descriptor
+  reads local storage, which is where the answer actually is — see "Reading
+  another mod manager" for why CurseForge, Nexus and Thunderstore cannot answer
+  "what has this user installed" over HTTP. If one ever does, the descriptor
+  format gains a field and the built-in list gains a row; the import path,
+  which takes "a name and a folder", does not change.
+- **Mod Organizer 2.** Its instances are named freely and the game is recorded
+  inside `ModOrganizer.ini`, so no declarative name match is reliable. A
+  descriptor that guessed would find the wrong game's mods. Fixing it means the
+  descriptor format learning to read a game id out of a per-instance file, which
+  is a real feature rather than another row in `plugins/manager/`.
+- **A shipped manager descriptor verified against a real install.** The layouts
+  are from each manager's documented defaults and the parsing is tested against
+  fixtures, but no descriptor here has been run against an actual Vortex or
+  CurseForge installation. A wrong folder name fails closed — the scan finds
+  nothing — and a corrected descriptor dropped in `plugins/manager/` is the
+  whole fix, which is why this is data.
 - **Plugin distribution.** Plugins install from a local folder and there is no
   registry to fetch them from. Signature *checking* is implemented and
   `requireSignedPlugins` enforces it, but nothing is published to be checked

@@ -24,6 +24,7 @@ pub mod download;
 pub mod error;
 pub mod launch;
 pub mod library;
+pub mod local;
 pub mod logging;
 pub mod net;
 pub mod plugins;

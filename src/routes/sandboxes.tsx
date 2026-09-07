@@ -40,6 +40,8 @@ import Select from '~/components/select'
 import FolderPicker from '~/components/folder-picker'
 import { Toggle } from '~/components/form'
 import ConfigEditor from '~/components/config-editor'
+import LocalMods from '~/components/local-mods'
+import { useDropTarget } from '~/components/drop-import'
 
 /**
  * **Sandboxes** — a named set of mods, pointed at one game.
@@ -260,6 +262,13 @@ function SandboxDetail({
     onDeleted: () => Promise<void>
 }) {
     const library = useLibrary()
+
+    /*
+     * A file dropped anywhere in the window while this sandbox is on screen
+     * means "put it in THIS sandbox". The overlay lives above the router, so it
+     * cannot know which screen is up; this is how the screen tells it.
+     */
+    useDropTarget(sandbox)
 
     const [spec, setSpec] = useState<SandboxSpecT | null>(null)
     const [strategies, setStrategies] = useState<StrategyReportT[]>([])
@@ -556,6 +565,20 @@ function SandboxDetail({
 
             <ConfigSection sandbox={sandbox} />
 
+            {/*
+             * Imported mods, below the dependency panel and above the load
+             * order. That position is the argument: the three ways something
+             * gets into a sandbox WITHOUT an account behind it belong beside
+             * the list it ends up in, not on a separate screen somebody has to
+             * know exists.
+             */}
+            <LocalMods
+                sandbox={sandbox}
+                onChanged={() => {
+                    void onChanged()
+                }}
+            />
+
             {/* -------------------------------------------------------- Mods */}
             <section className="rounded-xl border border-border bg-surface">
                 <header className="flex items-center justify-between border-b border-border px-3 py-2">
@@ -615,9 +638,19 @@ function SandboxDetail({
                                 <div className="min-w-0 flex-1">
                                     <p className="truncate text-sm">{mod.name}</p>
                                     <p className="text-[0.7rem] text-muted">
+                                        {/*
+                                         * An import was never downloaded, so
+                                         * it must not say it was. The row is
+                                         * the same shape either way — one load
+                                         * order, one deploy — and the sentence
+                                         * is the only place the difference
+                                         * shows.
+                                         */}
                                         {mod.stagedAt
-                                            ? `Downloaded${mod.version ? ` · ${mod.version}` : ''}`
-                                            : 'Not downloaded yet'}
+                                            ? `${mod.kind === 'local' ? 'Imported' : 'Downloaded'}${mod.version ? ` · ${mod.version}` : ''}`
+                                            : mod.kind === 'local'
+                                              ? 'Its files are missing'
+                                              : 'Not downloaded yet'}
                                         {mod.lastError && (
                                             <span className="text-danger">
                                                 {' '}

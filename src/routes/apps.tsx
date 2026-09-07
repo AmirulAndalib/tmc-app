@@ -16,6 +16,7 @@ import {
 } from 'react-icons/fi'
 
 import { api } from '~/lib/api/client'
+import { messageOf } from '~/lib/ipc'
 import {
     AppSortVals,
     AppTypeVals,
@@ -364,9 +365,30 @@ export default function AppsRoute() {
                 {listing.isPending ? (
                     <p className="text-xs text-muted">Loading the catalogue…</p>
                 ) : listing.isError ? (
-                    <p className="text-xs text-danger">
-                        The catalogue could not be loaded.
-                    </p>
+                    /*
+                     * The reason, not just the fact. This screen is the front
+                     * door, so its failure is the first thing anybody sees —
+                     * and "could not be loaded" on its own is indistinguishable
+                     * between an offline laptop, an old build talking to a
+                     * newer site and an endpoint the site has not deployed. The
+                     * last of those is what it actually was, and it cost a
+                     * round trip through a bug report to find out.
+                     */
+                    <div className="space-y-1">
+                        <p className="text-xs text-danger">
+                            The catalogue could not be loaded.
+                        </p>
+                        <p className="text-[11px] text-muted">
+                            {messageOf(listing.error)}
+                        </p>
+                        <button
+                            type="button"
+                            onClick={() => void listing.refetch()}
+                            className="text-[11px] text-accent underline underline-offset-2"
+                        >
+                            Try again
+                        </button>
+                    </div>
                 ) : apps.length < 1 ? (
                     <p className="text-xs text-muted">
                         Nothing matched. Try a broader filter.

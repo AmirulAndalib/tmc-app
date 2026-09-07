@@ -50,6 +50,30 @@
 //! `disabled/` is skipped at any depth. That is the whole mechanism for turning
 //! a rule off without deleting it, and it is a directory rather than a flag in
 //! the file because the point is to be able to move a file without editing it.
+//!
+//! # Where the rules come from
+//!
+//! Two places, and [`AppPlugins::resolve`] is the only thing that reads both:
+//!
+//! | Source | Holds |
+//! | --- | --- |
+//! | Compiled into the binary, from `<repo>/plugins/app/` | the games the app ships support for |
+//! | `<app data>/plugins/app/` | whatever the user or a future registry added |
+//!
+//! **The shipped half is compiled IN rather than shipped beside the binary.**
+//! It was a Tauri resource first, and a resource is a separate file next to the
+//! exe: the portable Windows build is one file and carries none, and an
+//! AppImage moved out of its directory carries none either. What that cost was
+//! not "fewer games" — it was detection finding nothing, no game launchable, no
+//! sandbox knowing its strategy and no config editor having anything to list,
+//! with no error anywhere, because every one of those features reads an empty
+//! map perfectly happily. `core/build.rs` does the embedding; the rules stay
+//! files in the repository.
+//!
+//! **A slug the user has rules for REPLACES the shipped one**, rather than
+//! merging with it. Two authors' rules for one game interleaved by specificity
+//! would produce behaviour neither of them wrote, and the user's copy is the
+//! one they can see and edit.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -57,6 +81,10 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{AppError, AppResult};
+
+// `plugins/app/**`, as (path relative to `app/`, file contents). Written by
+// `core/build.rs`; see the module header for why it is compiled in.
+include!(concat!(env!("OUT_DIR"), "/builtin_app_rules.rs"));
 use crate::plugins::manifest::{FsGrant, FsRoot, Manifest, Permissions, Step};
 
 /// How deep the recursive scan goes. A rule five directories down is a mistake,
@@ -1115,13 +1143,44 @@ impl AppPluginFile {
             apps: vec![],
             permissions: Permissions {
                 fs: self.launch_grants(),
-                net: self.permissions.net.clone(),
+                net: self.download_hosts(),
                 query: false,
             },
             installer: None,
             server_query: None,
             theme: None,
+            manager: None,
         }
+    }
+
+    /// The rule's own allow-list, plus the site this build talks to.
+    ///
+    /// Every app rule's `download` step fetches `{fileUrl}`, and that URL is
+    /// not the author's to choose: it comes from the API, which Rust picked the
+    /// base for. Making each rule name the host anyway achieves nothing — an
+    /// author who got it wrong would have written a rule that cannot download,
+    /// and one who got it right has restated a constant — while getting it
+    /// wrong is silent until somebody clicks install.
+    ///
+    /// It was, and it broke every rule at once: the shipped rules named
+    /// `moddingcommunity.com`, a build pointed at the dev site served its files
+    /// from `tmcdev.net`, and the allow-list refused all of them.
+    ///
+    /// The user still SEES it — `permission_summary` reads the manifest this
+    /// builds, so the consent dialog lists this host like any other.
+    fn download_hosts(&self) -> Vec<String> {
+        let mut hosts = self.permissions.net.clone();
+
+        if let Some(host) = url::Url::parse(crate::api::api_base())
+            .ok()
+            .and_then(|u| u.host_str().map(str::to_string))
+        {
+            if !hosts.iter().any(|h| h.eq_ignore_ascii_case(&host)) {
+                hosts.push(host);
+            }
+        }
+
+        hosts
     }
 
     /// The rule's own grants, plus the one a launch rule always needs.
@@ -1256,6 +1315,82 @@ pub struct AppPlugins {
 }
 
 impl AppPlugins {
+    /// Every rule the app knows about: the ones compiled in, with the user's
+    /// own `<root>/app/` overlaid on top.
+    ///
+    /// This is what the running app uses. [`load`](Self::load) reads one
+    /// directory and is what a test wants; `shipped` reads only what is
+    /// compiled in. Reaching for either of those in the app is how half the
+    /// rules go missing.
+    pub fn resolve(root: &Path) -> Self {
+        let mut out = Self::shipped();
+        let user = Self::load(root);
+
+        // Whole-slug replacement, not a merge — see the module header.
+        for (slug, files) in user.by_slug {
+            out.by_slug.insert(slug, files);
+        }
+
+        out.errors.extend(user.errors);
+        out
+    }
+
+    /// The rules compiled into this binary.
+    ///
+    /// The same filters the on-disk loader applies, applied to the same files:
+    /// an invalid slug, a `disabled/` component at any depth and the per-game
+    /// file cap all mean here what they mean there. A rule that behaved
+    /// differently depending on whether it was shipped or dropped in would be a
+    /// bug that reproduces on one machine and not the other.
+    pub fn shipped() -> Self {
+        let mut out = Self::default();
+
+        for (rel, raw) in BUILTIN_APP_RULES {
+            let mut parts = rel.split('/');
+
+            let Some(slug) = parts.next().map(|s| s.to_ascii_lowercase()) else {
+                continue;
+            };
+
+            if slug == "disabled" || !is_valid_slug(&slug) {
+                continue;
+            }
+
+            let rest: Vec<&str> = parts.collect();
+
+            let Some((name, dirs)) = rest.split_last() else {
+                // A file directly under `app/`, which names no game.
+                continue;
+            };
+
+            if dirs.iter().any(|d| d.eq_ignore_ascii_case("disabled")) {
+                continue;
+            }
+
+            let files = out.by_slug.entry(slug.clone()).or_default();
+
+            if files.len() >= MAX_FILES_PER_APP {
+                continue;
+            }
+
+            match parse_named(name, raw, rel, &slug) {
+                Ok(Some(parsed)) => files.push(parsed),
+                Ok(None) => {}
+                Err(e) => out.errors.push(((*rel).to_string(), e.to_string())),
+            }
+        }
+
+        // A slug whose every file was skipped must not linger as an empty
+        // entry: `slugs()` would then name a game with no rules at all.
+        out.by_slug.retain(|_, files| !files.is_empty());
+
+        for files in out.by_slug.values_mut() {
+            files.sort_by(sort_rules);
+        }
+
+        out
+    }
+
     /// Scan `<root>/app/` and parse everything under it.
     ///
     /// Never fails as a whole: one broken file is recorded in `errors` and the
@@ -1289,13 +1424,7 @@ impl AppPlugins {
 
             out.walk(&entry.path(), &slug, &slug, 0, &mut files);
 
-            files.sort_by(|a, b| {
-                // Most specific first, so `choose` can take the first match.
-                b.r#match
-                    .specificity()
-                    .cmp(&a.r#match.specificity())
-                    .then_with(|| a.source.cmp(&b.source))
-            });
+            files.sort_by(sort_rules);
 
             if !files.is_empty() {
                 out.by_slug.insert(slug, files);
@@ -1398,6 +1527,51 @@ impl AppPlugins {
             .find(|f| f.kind == kind && f.matches(file_name, loader))
     }
 
+    /// The file extensions this game's install rules accept, lower-cased and
+    /// without the dot.
+    ///
+    /// What decides whether a dropped file is a MOD in the shape this game
+    /// wants — a Minecraft `.jar`, a resource-pack `.zip` — or an archive to be
+    /// unpacked. The rules already carry the answer in their `match.extensions`
+    /// and nothing else should be inventing a second list; a game that grew
+    /// support for a new packaging format gets it here for free.
+    ///
+    /// Empty means the game's rules match anything, in which case an import
+    /// falls back to "unpack it if it is an archive" — see
+    /// [`crate::local::store::suggest_payload`].
+    pub fn mod_extensions(&self, slug: &str) -> Vec<String> {
+        let mut out: Vec<String> = self
+            .for_slug(slug)
+            .iter()
+            .filter(|f| f.kind.is_manage())
+            .flat_map(|f| f.r#match.extensions.iter())
+            .map(|e| e.trim_start_matches('.').to_ascii_lowercase())
+            .collect();
+
+        out.sort();
+        out.dedup();
+
+        out
+    }
+
+    /// Where this game keeps mods, most-declared-first, `/`-separated.
+    ///
+    /// From `sandbox.json`'s `modTargets`, which the app already treats as the
+    /// informational answer to "where do this game's mods go". A game with no
+    /// `sandbox.json` returns nothing, and an import for it lands at the game's
+    /// root — which is the honest answer rather than a guess.
+    pub fn mod_targets(&self, slug: &str) -> Vec<String> {
+        self.sandbox_spec(slug)
+            .map(|spec| {
+                spec.deploy
+                    .mod_targets
+                    .iter()
+                    .map(|t| t.rel_path.clone())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     /// The launch spec for a game, if it has one.
     pub fn launch_for(&self, slug: &str, loader: Option<&str>) -> Option<&AppPluginFile> {
         self.for_slug(slug)
@@ -1474,6 +1648,73 @@ fn is_valid_slug(slug: &str) -> bool {
 
 /// Parse one file. `Ok(None)` means "not a plugin rule" (a README, an icon).
 fn parse_file(path: &Path, source: &str, slug: &str) -> AppResult<Option<AppPluginFile>> {
+    let name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or_default();
+
+    /*
+     * Read before parsing, and only once the NAME says this is a rule at all —
+     * `parse_named` decides that from the stem and the extension, so a game's
+     * README next to its rules costs a `file_name` call rather than a read.
+     */
+    if !names_a_rule(name) {
+        return Ok(None);
+    }
+
+    let raw = std::fs::read_to_string(path)
+        .map_err(|e| AppError::invalid(format!("Could not read the rule: {e}")))?;
+
+    parse_named(name, &raw, source, slug)
+}
+
+/// Most specific first, so `choose` can take the first match.
+///
+/// Shared by both loaders: a shipped rule and a dropped-in one have to be
+/// ordered by the same comparator or `choose` answers differently depending on
+/// where the file came from.
+fn sort_rules(a: &AppPluginFile, b: &AppPluginFile) -> std::cmp::Ordering {
+    b.r#match
+        .specificity()
+        .cmp(&a.r#match.specificity())
+        .then_with(|| a.source.cmp(&b.source))
+}
+
+/// Does this file name look like a rule, before anything reads it?
+fn names_a_rule(name: &str) -> bool {
+    let path = Path::new(name);
+
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
+        .unwrap_or_default();
+
+    if ext != "json" && ext != "yaml" && ext != "yml" {
+        return false;
+    }
+
+    path.file_stem()
+        .and_then(|s| s.to_str())
+        .map(|s| s.to_ascii_lowercase())
+        .and_then(|stem| AppPluginKind::from_stem(&stem))
+        .is_some()
+}
+
+/// Parse one rule from its bytes.
+///
+/// Takes the file NAME rather than a path because the two loaders disagree
+/// about whether there is a path at all — a compiled-in rule has contents and a
+/// name and nothing else — and everything the format decides (which kind, which
+/// syntax) is decided by the name.
+fn parse_named(
+    name: &str,
+    raw: &str,
+    source: &str,
+    slug: &str,
+) -> AppResult<Option<AppPluginFile>> {
+    let path = Path::new(name);
+
     let ext = path
         .extension()
         .and_then(|e| e.to_str())
@@ -1497,9 +1738,6 @@ fn parse_file(path: &Path, source: &str, slug: &str) -> AppResult<Option<AppPlug
         return Ok(None);
     };
 
-    let raw = std::fs::read_to_string(path)
-        .map_err(|e| AppError::invalid(format!("Could not read the rule: {e}")))?;
-
     /*
      * Both formats deserialise into the SAME struct, which is the whole reason
      * both can be supported for the price of one code path. YAML is a superset
@@ -1509,10 +1747,9 @@ fn parse_file(path: &Path, source: &str, slug: &str) -> AppResult<Option<AppPlug
      * the wrong error.
      */
     let mut parsed: AppPluginFile = if is_json {
-        serde_json::from_str(&raw).map_err(|e| AppError::invalid(format!("Invalid JSON: {e}")))?
+        serde_json::from_str(raw).map_err(|e| AppError::invalid(format!("Invalid JSON: {e}")))?
     } else {
-        serde_yaml_ng::from_str(&raw)
-            .map_err(|e| AppError::invalid(format!("Invalid YAML: {e}")))?
+        serde_yaml_ng::from_str(raw).map_err(|e| AppError::invalid(format!("Invalid YAML: {e}")))?
     };
 
     parsed.kind = kind;
@@ -1903,23 +2140,27 @@ manage:
         assert!(!m.applies("a.jar", None));
     }
 
-    /// The shipped examples are the documentation for this format. A field
-    /// renamed without updating them would ship a reference that does not load.
+    /// The shipped rules ARE the app's support for those games, and they are
+    /// also the documentation for this format. A field renamed without
+    /// updating them ships a binary that silently supports nothing.
+    ///
+    /// It runs against [`AppPlugins::shipped`] — what is compiled INTO the
+    /// binary — rather than against the directory, because those are two
+    /// different things and only one of them is what a user gets. A build
+    /// script that quietly stopped embedding a file would leave a
+    /// directory-reading test perfectly green.
     ///
     /// The teeth are in the SECOND half: parsing only proves the JSON/YAML is
     /// well-formed, while building each rule's real jail and resolving every
     /// step path through it is what catches a rule whose grants and step paths
-    /// disagree — the exact mistake an author copying an example inherits.
+    /// disagree — the exact mistake an author copying one inherits.
     #[test]
-    fn the_shipped_app_examples_all_load_and_resolve() {
-        // `core/` → `src-tauri/` → repo root.
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/plugins");
-
-        let plugins = AppPlugins::load(&root);
+    fn the_shipped_app_rules_all_load_and_resolve() {
+        let plugins = AppPlugins::shipped();
 
         assert!(
             plugins.errors().is_empty(),
-            "example app plugins failed to load: {:?}",
+            "shipped app plugins failed to load: {:?}",
             plugins.errors()
         );
 
@@ -1936,14 +2177,28 @@ manage:
          * own `supportedStrategies` excludes — which loads fine and then
          * refuses at deploy time, on somebody's machine rather than here.
          */
-        for slug in ["minecraft", "gtav"] {
+        /*
+         * Every shipped game, not a hardcoded pair. This is the check with
+         * teeth for a new game's rules: a preset naming a strategy the game
+         * excludes loads perfectly and then refuses at deploy time, on
+         * somebody's machine rather than here.
+         */
+        for slug in &slugs {
+            let slug = slug.as_str();
+
             let spec = plugins
                 .sandbox_spec(slug)
                 .unwrap_or_else(|| panic!("{slug} should ship a sandbox.json"));
 
             assert!(
                 !spec.presets.is_empty() && !spec.options.is_empty(),
-                "{slug}'s sandbox example should demonstrate both halves"
+                "{slug}'s sandbox rule should offer both presets and options"
+            );
+
+            assert!(
+                !spec.detect.is_empty(),
+                "{slug} declares no way to find itself on a machine, so a folder \
+                 scan can never match it"
             );
 
             for preset in &spec.presets {
@@ -2063,6 +2318,76 @@ manage:
         }
 
         assert!(checked >= 2, "expected several manage examples");
+    }
+
+    /// What is compiled in has to be what is on disk, or the repository stops
+    /// being the place to fix a rule.
+    #[test]
+    fn the_compiled_in_rules_match_the_repository() {
+        // `core/` → `src-tauri/` → repo root.
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join("plugins");
+
+        let on_disk = AppPlugins::load(&root);
+        let shipped = AppPlugins::shipped();
+
+        assert!(
+            !shipped.slugs().is_empty(),
+            "no app rules were compiled in — check core/build.rs"
+        );
+
+        assert_eq!(
+            on_disk.slugs(),
+            shipped.slugs(),
+            "plugins/app/ and the compiled-in copy disagree about which games exist"
+        );
+
+        for slug in shipped.slugs() {
+            let disk: Vec<&str> = on_disk
+                .for_slug(&slug)
+                .iter()
+                .map(|f| f.source.as_str())
+                .collect();
+            let built: Vec<&str> = shipped
+                .for_slug(&slug)
+                .iter()
+                .map(|f| f.source.as_str())
+                .collect();
+
+            assert_eq!(disk, built, "{slug}'s rules differ from the ones on disk");
+        }
+    }
+
+    /// A user's rules for a game replace the shipped ones outright.
+    ///
+    /// Merging them would order two authors' rules together by specificity and
+    /// answer `choose` with a rule neither of them expected to win.
+    #[test]
+    fn a_users_rules_replace_the_shipped_ones_for_that_game_only() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let dir = tmp.path().join("app").join("minecraft");
+        std::fs::create_dir_all(&dir).expect("mkdir");
+
+        std::fs::write(
+            dir.join("manage_mod.json"),
+            r#"{ "manifestVersion": 1, "label": "mine",
+                 "permissions": { "fs": [{ "root": "gameDir", "path": "mods", "write": true }] },
+                 "manage": { "install": [], "uninstall": [] } }"#,
+        )
+        .expect("write");
+
+        let plugins = AppPlugins::resolve(tmp.path());
+
+        let minecraft = plugins.for_slug("minecraft");
+
+        assert_eq!(minecraft.len(), 1, "the shipped minecraft rules survived");
+        assert_eq!(minecraft[0].label.as_deref(), Some("mine"));
+
+        assert!(
+            !plugins.for_slug("gtav").is_empty(),
+            "overriding one game dropped another"
+        );
     }
 
     /// Every `PathRef` a step touches, and whether it is written to.

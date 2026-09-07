@@ -575,6 +575,7 @@ mod tests {
             installer: None,
             server_query: None,
             theme: None,
+            manager: None,
         };
 
         let mut available: HashMap<&'static str, PathBuf> = HashMap::new();

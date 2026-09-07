@@ -147,6 +147,88 @@ pub fn run() {
             app.manage(state);
 
             /*
+             * Files dropped on the window are handled HERE, in Rust, and never
+             * as a path handed to the webview.
+             *
+             * Tauri delivers the drop to the window, which means the paths pass
+             * through this process before anything else sees them. So the
+             * frontend is given names and opaque tokens — see
+             * `tmc_core::local::vault` — and `commands::import` is the only
+             * thing that ever resolves one back to a path. That is what keeps
+             * `commands/mod.rs`'s "no command takes a path from the webview"
+             * rule true with drag and drop in the app.
+             *
+             * `dragDropEnabled` is ON in `tauri.conf.json` for exactly this. It
+             * also means the webview receives no HTML5 drag events, which is
+             * fine and is the point: an `ondrop` handler in the webview would
+             * be the untrusted half deciding what was dropped.
+             */
+            //
+            // The main window only, and by construction rather than by a label
+            // check: the web player's window is a remote page with no IPC to
+            // tell about a drop anyway.
+            if let Some(window) = app.get_webview_window("main") {
+                use tauri::{DragDropEvent, Emitter, WindowEvent};
+
+                let handle = app.handle().clone();
+
+                window.on_window_event(move |event| {
+                    let WindowEvent::DragDrop(drag) = event else {
+                        return;
+                    };
+
+                    /*
+                     * The hover half is emitted too, and has to be: with
+                     * `dragDropEnabled` on, the webview receives NO HTML5 drag
+                     * events at all — which is the point, since an `ondrop`
+                     * handler there would be the untrusted half deciding what
+                     * was dropped. Without these two the feature would have no
+                     * affordance whatsoever: the window would simply accept a
+                     * file with nothing on screen having suggested it would.
+                     *
+                     * They carry a count, never a name and never a path. What
+                     * is being dragged is not yet the app's business.
+                     */
+                    let paths = match drag {
+                        DragDropEvent::Enter { paths, .. } => {
+                            let _ = handle.emit("tmc://files-drag", paths.len());
+
+                            return;
+                        }
+                        DragDropEvent::Leave => {
+                            let _ = handle.emit("tmc://files-drag", 0usize);
+
+                            return;
+                        }
+                        DragDropEvent::Drop { paths, .. } => paths,
+                        _ => return,
+                    };
+
+                    let _ = handle.emit("tmc://files-drag", 0usize);
+
+                    let state = handle.state::<AppState>();
+
+                    let batch = commands::import::batch_from_drop(&state, paths.clone());
+
+                    if batch.files.is_empty() {
+                        return;
+                    }
+
+                    audit!(
+                        state.audit,
+                        Info,
+                        App,
+                        "import.drop",
+                        format!("{} file(s) dropped on the window", batch.files.len())
+                    );
+
+                    state.set_drop(batch.clone());
+
+                    let _ = handle.emit("tmc://files-dropped", &batch);
+                });
+            }
+
+            /*
              * The download queue's bridge to the webview, and the queue itself
              * restored from the last session. Both after `manage`, because both
              * reach the state through the handle.
@@ -180,6 +262,17 @@ pub fn run() {
             commands::settings::settings_reset,
             commands::fs::fs_roots,
             commands::fs::fs_list_dirs,
+            commands::import::import_dropped,
+            commands::import::import_preview,
+            commands::import::import_paths,
+            commands::import::import_unmanaged,
+            commands::import::import_managers,
+            commands::import::import_manager_scan,
+            commands::import::local_list,
+            commands::import::local_get,
+            commands::import::local_patch,
+            commands::import::local_delete,
+            commands::import::local_add_to_sandbox,
             commands::logs::log_read,
             commands::logs::log_clear,
             commands::logs::log_path,

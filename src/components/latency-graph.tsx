@@ -179,6 +179,45 @@ function runs(points: Point[]): Point[][] {
     return out
 }
 
+/**
+ * The x-spans of the failed probes, merged into bands.
+ *
+ * A timeout is drawn as a red column across the FULL height rather than a mark
+ * on the floor: a gap in the line and a stub at the bottom both read as "the
+ * chart is a bit sparse here", where the fact being reported is that the server
+ * did not answer at all. A full-height column cannot be mistaken for anything
+ * else, and it lands in the same place the missing point would have.
+ *
+ * Consecutive misses are merged into ONE rect rather than drawn per sample.
+ * Adjacent columns would otherwise seam or double-paint once the 0–100 viewBox
+ * is stretched to a 48px sparkline, which renders a steady outage as stripes.
+ */
+function misses(points: Point[]): { x: number; width: number }[] {
+    const span = Math.max(1, points.length - 1)
+    // Half a sample's spacing either side, so one miss is one column centred on
+    // where its point would have been.
+    const half = 100 / span / 2
+
+    const out: { x: number; width: number }[] = []
+
+    for (const point of points) {
+        if (point.rtt != null) continue
+
+        const x = Math.max(0, point.x - half)
+        const right = Math.min(100, point.x + half)
+        const last = out[out.length - 1]
+
+        if (last && x <= last.x + last.width + 0.001) {
+            last.width = right - last.x
+            continue
+        }
+
+        out.push({ x, width: right - x })
+    }
+
+    return out
+}
+
 function toPath(run: Point[]): string {
     if (run.length === 1) {
         // A single point has no line. Draw a hairline so it is visible at all.
@@ -224,13 +263,25 @@ export function LatencySparkline({
             aria-hidden="true"
             className={`shrink-0 ${className}`}
         >
+            {misses(points).map((band, i) => (
+                <rect
+                    key={`miss-${i}`}
+                    x={band.x}
+                    y="0"
+                    width={band.width}
+                    height="100"
+                    fill="var(--lat-dead)"
+                    opacity={0.55}
+                />
+            ))}
+
             {runs(points).map((run, i) => (
                 <path
                     key={i}
                     d={toPath(run)}
                     fill="none"
                     stroke={tone.stroke}
-                    strokeWidth={6}
+                    strokeWidth={1.5}
                     strokeLinecap="round"
                     strokeLinejoin="round"
                     vectorEffect="non-scaling-stroke"
@@ -330,36 +381,32 @@ export function LatencyChart({
 
                     {area && <path d={area} fill={`url(#${gradientId})`} />}
 
+                    {/* Failed probes as full-height columns, under the line
+                        so the line is never obscured by one. */}
+                    {misses(points).map((band, i) => (
+                        <rect
+                            key={`miss-${i}`}
+                            x={band.x}
+                            y="0"
+                            width={band.width}
+                            height="100"
+                            fill="var(--lat-dead)"
+                            opacity={0.3}
+                        />
+                    ))}
+
                     {segments.map((run, i) => (
                         <path
                             key={i}
                             d={toPath(run)}
                             fill="none"
                             stroke={tone.stroke}
-                            strokeWidth={2}
+                            strokeWidth={1.5}
                             strokeLinecap="round"
                             strokeLinejoin="round"
                             vectorEffect="non-scaling-stroke"
                         />
                     ))}
-
-                    {/* Failed probes as marks on the floor, so an outage is
-                        visible rather than merely a gap. */}
-                    {points
-                        .filter((p) => p.rtt == null)
-                        .map((p, i) => (
-                            <line
-                                key={`miss-${i}`}
-                                x1={p.x}
-                                y1="88"
-                                x2={p.x}
-                                y2="100"
-                                stroke="var(--danger)"
-                                strokeWidth={2}
-                                vectorEffect="non-scaling-stroke"
-                                opacity={0.6}
-                            />
-                        ))}
                 </svg>
 
                 <span className="absolute left-2 top-1 text-[0.6rem] text-muted">

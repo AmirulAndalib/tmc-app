@@ -20,6 +20,14 @@ import {
     RconProtocolSchema,
     RconReplySchema,
     RconServerSchema,
+    LocalModSchema,
+    DropBatchSchema,
+    ImportPreviewSchema,
+    ImportOutcomeSchema,
+    AdoptCandidateSchema,
+    ManagerInfoSchema,
+    ManagerCandidateSchema,
+    type ImportPayloadT,
     SandboxModSchema,
     SandboxRowSchema,
     SandboxSpecSchema,
@@ -722,4 +730,120 @@ export const ipc = {
 
     rconSuggestProtocol: (queryProtocol: string | null) =>
         call('rcon_suggest_protocol', RconProtocolSchema, { queryProtocol }),
+
+    // ---------------------------------------------------- Imported content
+    //
+    // Mods with no account behind them: dropped files, folders the game already
+    // had, other managers' libraries.
+    //
+    // Nothing here takes a filesystem path. Rust found every path these act on
+    // — the OS delivered a drop, or one of the two scans listed a directory —
+    // and hands back an opaque token; the webview says WHICH of the things you
+    // found, never THIS path. `tmc_core::local::vault` is where that is
+    // written down, including what it does not buy.
+
+    /**
+     * The files from the most recent drop on the window.
+     *
+     * A poll as well as an event, because the event fires whether or not
+     * anything is listening — a drop that lands during a route change would
+     * otherwise be silently lost, which reads as drag and drop being broken
+     * rather than as a race. Taking it CLEARS it, so a remount does not
+     * re-open a dialog for files already dealt with.
+     */
+    importDropped: () => call('import_dropped', DropBatchSchema),
+
+    /** What importing these would do, without doing any of it. */
+    importPreview: (tokens: string[], appId?: number) =>
+        call('import_preview', z.array(ImportPreviewSchema), { tokens, appId }),
+
+    /**
+     * Import them into the device's store.
+     *
+     * `sandboxId` also puts each one in that sandbox, which is what dropping
+     * onto a sandbox means. Nothing is deployed either way — that is a separate
+     * click through the same engine every subscribed mod goes through.
+     */
+    importPaths: (
+        tokens: string[],
+        opts?: {
+            appId?: number
+            sandboxId?: number
+            origin?: 'dropped' | 'adopted' | 'manager'
+            overrides?: {
+                token: string
+                name?: string
+                relPath?: string
+                payload?: ImportPayloadT
+            }[]
+        }
+    ) =>
+        call('import_paths', ImportOutcomeSchema, {
+            tokens,
+            appId: opts?.appId,
+            sandboxId: opts?.sandboxId,
+            origin: opts?.origin,
+            overrides: opts?.overrides,
+        }),
+
+    /**
+     * What is already in this sandbox's game folder that nothing here claims.
+     *
+     * Reads only the folders the game's own rules declare as mod targets, and
+     * subtracts every file the deployment ledger, an installed subscription or
+     * a previous adoption accounts for. Offering something the app already
+     * deployed would list one mod twice and make every one of its files
+     * conflict with itself.
+     */
+    importUnmanaged: (sandboxId: number) =>
+        call('import_unmanaged', z.array(AdoptCandidateSchema), { sandboxId }),
+
+    /** The mod managers this build can read a library out of. */
+    importManagers: () => call('import_managers', z.array(ManagerInfoSchema)),
+
+    /**
+     * Read one manager's own storage.
+     *
+     * Nothing there is modified, then or later: importing a result COPIES it,
+     * so going back to that manager tomorrow finds everything where it was.
+     */
+    importManagerScan: (id: string) =>
+        call('import_manager_scan', z.array(ManagerCandidateSchema), { id }),
+
+    localList: (appId?: number) =>
+        call('local_list', z.array(LocalModSchema), { appId }),
+
+    localGet: (id: number) => call('local_get', LocalModSchema.nullable(), { id }),
+
+    /**
+     * Rename it, re-version it, note something, or move where it lands.
+     *
+     * Changing `relPath` MOVES the files inside the app's store, which is why
+     * it is not a column write: a row that says `BepInEx/plugins` while its
+     * files sit under `mods` deploys to the wrong place and nothing downstream
+     * would notice. The sandboxes holding it need a redeploy afterwards.
+     */
+    localPatch: (
+        id: number,
+        patch: {
+            name?: string
+            version?: string
+            author?: string
+            notes?: string
+            appId?: number
+            appSlug?: string
+            relPath?: string
+        }
+    ) => call('local_patch', LocalModSchema, { id, patch }),
+
+    /**
+     * Forget it and delete its files.
+     *
+     * Returns the sandboxes that held it — they now have files in a game folder
+     * that only a redeploy will take out, and saying so is the caller's job.
+     */
+    localDelete: (id: number) => call('local_delete', z.array(z.number()), { id }),
+
+    localAddToSandbox: (sandboxId: number, id: number) =>
+        call('local_add_to_sandbox', z.string(), { sandboxId, id }),
 }

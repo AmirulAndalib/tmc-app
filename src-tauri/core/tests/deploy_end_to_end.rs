@@ -116,6 +116,9 @@ struct World {
     http: reqwest::Client,
     staging: PathBuf,
     backups: PathBuf,
+    /// The device's imported-mod store — shared across sandboxes, unlike
+    /// `staging`. See `tmc_core::local`.
+    local: PathBuf,
     game: PathBuf,
 }
 
@@ -139,10 +142,11 @@ fn world() -> World {
     let cache = base.join("cache");
     let staging = base.join("staging");
     let backups = base.join("backups");
+    let local = base.join("local-mods");
     let downloads = base.join("downloads");
     let plugin_dir = base.join("plugins");
 
-    for dir in [&game, &data, &cache, &staging, &backups, &downloads] {
+    for dir in [&game, &data, &cache, &staging, &backups, &downloads, &local] {
         std::fs::create_dir_all(dir).expect("mkdir");
     }
 
@@ -185,6 +189,7 @@ fn world() -> World {
         http: reqwest::Client::new(),
         staging,
         backups,
+        local,
         game,
         _tmp: tmp,
     }
@@ -201,6 +206,7 @@ impl World {
             downloads: None,
             staging_root: &self.staging,
             backup_root: &self.backups,
+            local_root: &self.local,
         }
     }
 
@@ -630,4 +636,207 @@ async fn a_game_file_a_mod_replaces_is_set_aside_and_put_back() {
         stock,
         "the shipped file came back, byte for byte"
     );
+}
+
+/// An imported mod and a subscribed one, in one sandbox, through one deploy.
+///
+/// The claim `tmc_core::local` makes is that a mod the user dropped in is
+/// deployed by exactly the code that deploys a subscribed one — same merge
+/// tree, same conflict report, same ledger, same purge. A claim like that is
+/// only worth anything if something checks it, and the cheap ways of checking
+/// it (unit-testing `deployable`) prove the part that was never in doubt.
+///
+/// So: one sandbox holding both, sharing a contested path, deployed for real.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_imported_mod_and_a_subscribed_one_deploy_through_one_ledger() {
+    use tmc_core::local::{store, LocalMod, NewLocalMod, Origin};
+
+    let world = world();
+
+    let port = serve(archive()).await;
+    let entry = subscribe(&world, port);
+
+    let bytes = reqwest::get(entry.file_url.clone().expect("url"))
+        .await
+        .expect("request")
+        .bytes()
+        .await
+        .expect("body");
+
+    std::fs::write(world.downloads_dir().join("cool.zip"), &bytes).expect("write");
+
+    let stock = snapshot(&world.game);
+
+    let sandbox = sandbox_with(&world, Strategy::Direct);
+    let ctx = world.ctx();
+
+    // ------------------------------------------------------- The subscription
+    let member = sandbox.mods.first().expect("one mod").clone();
+
+    assert!(
+        stage_mod(&world.db, &sandbox, &member, &entry, &ctx)
+            .await
+            .ok
+    );
+
+    // ---------------------------------------------------------- The import
+    //
+    // A zip somebody was handed, with no sidecar and no account behind it. It
+    // provides one new file and one the subscribed mod also provides, so the
+    // merge tree has something real to decide.
+    let dropped = world
+        .game
+        .parent()
+        .expect("parent")
+        .join("handed-to-me.zip");
+
+    std::fs::write(
+        &dropped,
+        zip_of(&[
+            ("mods/handmade.jar", "HANDMADE"),
+            ("mods/cool.jar", "IMPORTED VERSION"),
+        ]),
+    )
+    .expect("write");
+
+    let targets = vec!["mods".to_string()];
+
+    let prepared = store::prepare(
+        &world.local,
+        &dropped,
+        &store::ImportOptions {
+            mod_targets: &targets,
+            mod_extensions: &[],
+            payload: None,
+            rel_path: None,
+        },
+    )
+    .expect("prepare");
+
+    // The archive is already game-relative, so it is not nested inside `mods`
+    // a second time.
+    assert_eq!(prepared.rel_path, "");
+    assert_eq!(prepared.name, "handed-to-me");
+
+    let local_id = world
+        .db
+        .local_create(&NewLocalMod {
+            name: prepared.name.clone(),
+            app_id: Some(APP_ID),
+            app_slug: Some(SLUG.into()),
+            version: None,
+            author: None,
+            origin: Origin::Dropped,
+            origin_label: Some("handed-to-me.zip".into()),
+            rel_path: prepared.rel_path.clone(),
+            source: None,
+            files: prepared.files as i64,
+            bytes: prepared.bytes as i64,
+        })
+        .expect("create");
+
+    store::commit(&world.local, &prepared, local_id).expect("commit");
+
+    let imported = world.db.local_get(local_id).expect("get").expect("row");
+
+    world
+        .db
+        .sandbox_add_local(sandbox.id, &imported)
+        .expect("add");
+
+    // Importing writes to the app's own store and NOTHING else. The dropped
+    // file is still where it was and the game folder has not been touched.
+    assert!(dropped.is_file(), "the dropped file was consumed");
+    assert_eq!(snapshot(&world.game), stock, "importing touched the game");
+
+    // ------------------------------------------------------------- Deploy
+    let sandbox = world.db.sandbox_get(sandbox.id).expect("get").expect("row");
+
+    assert_eq!(sandbox.mods.len(), 2);
+
+    let report = deploy_sandbox(&world.db, &sandbox, &ctx, false).expect("deploy");
+
+    assert!(report.ok(), "{:?}", report.errors);
+
+    // Three distinct paths across two mods, in one ledger.
+    assert_eq!(report.placed, 3);
+
+    // The import was added second, so it has the higher priority and wins the
+    // contested path — by the ordinary rule, with no special case for being
+    // local.
+    assert_eq!(
+        std::fs::read_to_string(world.game.join("mods/cool.jar")).expect("deployed"),
+        "IMPORTED VERSION"
+    );
+    assert_eq!(
+        std::fs::read_to_string(world.game.join("mods/handmade.jar")).expect("deployed"),
+        "HANDMADE"
+    );
+    assert_eq!(
+        std::fs::read_to_string(world.game.join("mods/extra/data.bin")).expect("deployed"),
+        "DATA"
+    );
+
+    // And the conflict is REPORTED rather than silently resolved.
+    let contested = report
+        .conflicts
+        .iter()
+        .find(|c| c.path == "mods/cool.jar")
+        .expect("the contested path is in the report");
+
+    assert_eq!(contested.winner, imported.name);
+    assert_eq!(contested.losers, vec!["Cool Mod".to_string()]);
+
+    // ------------------------------------------------------------- Verify
+    let checked = verify_sandbox(&world.db, &sandbox, &ctx).expect("verify");
+
+    assert!(
+        checked.healthy(),
+        "{:?} missing, {:?} changed",
+        checked.missing,
+        checked.changed
+    );
+
+    // -------------------------------------------------------------- Purge
+    let purged = purge_sandbox(&world.db, &sandbox, &ctx).expect("purge");
+
+    assert_eq!(purged.removed, 3);
+    assert_eq!(
+        snapshot(&world.game),
+        stock,
+        "the game folder came back exactly as it was"
+    );
+
+    // Purging takes files OUT of the game. It does not touch the store — the
+    // import is still on this device and still in the sandbox, which is what
+    // makes redeploying it a click.
+    assert!(store::local_root(&world.local, local_id)
+        .join("mods/handmade.jar")
+        .is_file());
+    assert_eq!(
+        LocalMod::id_from_key(&imported.mod_key()),
+        Some(local_id),
+        "the ledger and the store agree on the identity"
+    );
+}
+
+/// A zip built in memory, for the import half of the test above.
+fn zip_of(entries: &[(&str, &str)]) -> Vec<u8> {
+    use std::io::Write as _;
+
+    let mut buf = std::io::Cursor::new(Vec::new());
+
+    {
+        let mut writer = zip::ZipWriter::new(&mut buf);
+        let options: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default();
+
+        for (name, body) in entries {
+            writer.start_file(*name, options).expect("entry");
+            writer.write_all(body.as_bytes()).expect("body");
+        }
+
+        writer.finish().expect("finish");
+    }
+
+    buf.into_inner()
 }

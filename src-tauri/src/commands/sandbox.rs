@@ -309,10 +309,9 @@ pub fn sandbox_delete(
     let plugins = state.app_plugins();
     let settings = state.settings.get();
     let roots = state.jail_roots();
-    let staging = state.paths.staging_dir();
-    let backups = state.paths.backup_dir();
+    let dirs = state.sandbox_dirs();
 
-    let ctx = state.sandbox_ctx(&plugins, &settings, &roots, &staging, &backups);
+    let ctx = state.sandbox_ctx(&plugins, &settings, &roots, &dirs);
 
     /*
      * Undeployed BEFORE the row is deleted. The ledger is the only record of
@@ -323,7 +322,10 @@ pub fn sandbox_delete(
     let report = purge_sandbox(&state.library, &sandbox, &ctx).unwrap_or_default();
 
     if !keep_files.unwrap_or(false) {
-        let _ = std::fs::remove_dir_all(tmc_core::deploy::stage_root(&staging, id));
+        // Staging only. The device's imported mods are NOT this sandbox's to
+        // delete — one import is routinely in several sandboxes, and deleting
+        // an import for good is its own command.
+        let _ = std::fs::remove_dir_all(tmc_core::deploy::stage_root(&dirs.staging, id));
     }
 
     state.library.sandbox_delete(id)?;
@@ -539,10 +541,9 @@ pub fn sandbox_remove_mod(
     let plugins = state.app_plugins();
     let settings = state.settings.get();
     let roots = state.jail_roots();
-    let staging = state.paths.staging_dir();
-    let backups = state.paths.backup_dir();
+    let dirs = state.sandbox_dirs();
 
-    let ctx = state.sandbox_ctx(&plugins, &settings, &roots, &staging, &backups);
+    let ctx = state.sandbox_ctx(&plugins, &settings, &roots, &dirs);
 
     tmc_core::library::deploy::unstage_mod(&state.library, id, &mod_key, &ctx);
 
@@ -961,10 +962,9 @@ pub async fn sandbox_install_item(
         let plugins = state.app_plugins();
         let settings = state.settings.get();
         let roots = state.jail_roots();
-        let staging = state.paths.staging_dir();
-        let backups = state.paths.backup_dir();
+        let dirs = state.sandbox_dirs();
 
-        let ctx = state.sandbox_ctx(&plugins, &settings, &roots, &staging, &backups);
+        let ctx = state.sandbox_ctx(&plugins, &settings, &roots, &dirs);
 
         report.staged = Some(stage_mod(&state.library, &sandbox, member, &entry, &ctx).await);
     }
@@ -1021,10 +1021,9 @@ pub async fn sandbox_stage(
     let plugins = state.app_plugins();
     let settings = state.settings.get();
     let roots = state.jail_roots();
-    let staging = state.paths.staging_dir();
-    let backups = state.paths.backup_dir();
+    let dirs = state.sandbox_dirs();
 
-    let ctx = state.sandbox_ctx(&plugins, &settings, &roots, &staging, &backups);
+    let ctx = state.sandbox_ctx(&plugins, &settings, &roots, &dirs);
 
     let force = force.unwrap_or(false);
 
@@ -1071,10 +1070,9 @@ pub fn sandbox_deploy(
     let plugins = state.app_plugins();
     let settings = state.settings.get();
     let roots = state.jail_roots();
-    let staging = state.paths.staging_dir();
-    let backups = state.paths.backup_dir();
+    let dirs = state.sandbox_dirs();
 
-    let ctx = state.sandbox_ctx(&plugins, &settings, &roots, &staging, &backups);
+    let ctx = state.sandbox_ctx(&plugins, &settings, &roots, &dirs);
 
     let mut report = deploy_sandbox(&state.library, &sandbox, &ctx, dry_run.unwrap_or(false))?;
 
@@ -1116,10 +1114,9 @@ pub fn sandbox_purge(state: State<'_, AppState>, id: i64) -> AppResult<PurgeRepo
     let plugins = state.app_plugins();
     let settings = state.settings.get();
     let roots = state.jail_roots();
-    let staging = state.paths.staging_dir();
-    let backups = state.paths.backup_dir();
+    let dirs = state.sandbox_dirs();
 
-    let ctx = state.sandbox_ctx(&plugins, &settings, &roots, &staging, &backups);
+    let ctx = state.sandbox_ctx(&plugins, &settings, &roots, &dirs);
 
     purge_sandbox(&state.library, &sandbox, &ctx)
 }
@@ -1135,10 +1132,9 @@ pub fn sandbox_verify(state: State<'_, AppState>, id: i64) -> AppResult<VerifyRe
     let plugins = state.app_plugins();
     let settings = state.settings.get();
     let roots = state.jail_roots();
-    let staging = state.paths.staging_dir();
-    let backups = state.paths.backup_dir();
+    let dirs = state.sandbox_dirs();
 
-    let ctx = state.sandbox_ctx(&plugins, &settings, &roots, &staging, &backups);
+    let ctx = state.sandbox_ctx(&plugins, &settings, &roots, &dirs);
 
     verify_sandbox(&state.library, &sandbox, &ctx)
 }
@@ -1239,10 +1235,9 @@ fn sandbox_plan(state: &State<'_, AppState>, id: i64) -> AppResult<LaunchPlan> {
     let plugins = state.app_plugins();
     let settings = state.settings.get();
     let roots = state.jail_roots();
-    let staging = state.paths.staging_dir();
-    let backups = state.paths.backup_dir();
+    let dirs = state.sandbox_dirs();
 
-    let ctx = state.sandbox_ctx(&plugins, &settings, &roots, &staging, &backups);
+    let ctx = state.sandbox_ctx(&plugins, &settings, &roots, &dirs);
 
     launch_plan(&state.library, &sandbox, &ctx)
 }
@@ -1258,10 +1253,9 @@ pub fn sandbox_strategies(state: State<'_, AppState>, id: i64) -> AppResult<Vec<
     let plugins = state.app_plugins();
     let settings = state.settings.get();
     let roots = state.jail_roots();
-    let staging = state.paths.staging_dir();
-    let backups = state.paths.backup_dir();
+    let dirs = state.sandbox_dirs();
 
-    let ctx = state.sandbox_ctx(&plugins, &settings, &roots, &staging, &backups);
+    let ctx = state.sandbox_ctx(&plugins, &settings, &roots, &dirs);
 
     strategies_for(&sandbox, &ctx)
 }
@@ -1287,10 +1281,9 @@ pub async fn sandbox_auto_update(state: State<'_, AppState>) -> AppResult<AutoUp
     let plugins = state.app_plugins();
     let settings = state.settings.get();
     let roots = state.jail_roots();
-    let staging = state.paths.staging_dir();
-    let backups = state.paths.backup_dir();
+    let dirs = state.sandbox_dirs();
 
-    let ctx = state.sandbox_ctx(&plugins, &settings, &roots, &staging, &backups);
+    let ctx = state.sandbox_ctx(&plugins, &settings, &roots, &dirs);
 
     autoupdate::run(&state.library, &ctx).await
 }

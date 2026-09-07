@@ -62,6 +62,16 @@ pub struct SandboxCtx<'a> {
     pub downloads: Option<&'a crate::download::DownloadManager>,
     /// Where every sandbox's staging folders live: `<staging>/<id>/<mod key>`.
     pub staging_root: &'a Path,
+    /// Where imported mods live: `<local>/<local mod id>`.
+    ///
+    /// A DEVICE-wide directory, not a per-sandbox one, and that asymmetry is
+    /// the point. A staged subscription is this sandbox's copy at this
+    /// sandbox's pinned release; an imported mod is one set of files the user
+    /// put on the machine once, and three sandboxes using it should be three
+    /// references rather than three copies. Deployment only ever READS a mod's
+    /// root, which is what makes sharing one safe — the same property that lets
+    /// two sandboxes share a staging folder.
+    pub local_root: &'a Path,
     /// Where displaced game files go: `<backups>/<id>/<relative path>`.
     pub backup_root: &'a Path,
 }
@@ -335,9 +345,20 @@ fn stage_context(entry: &LibraryEntry, sandbox: &Sandbox, file_name: &str) -> Ru
 
 /// Delete one mod's staging folder.
 pub fn unstage_mod(db: &LibraryDb, sandbox_id: i64, mod_key: &str, ctx: &SandboxCtx<'_>) {
-    let stage = deploy::stage_dir(ctx.staging_root, sandbox_id, mod_key);
+    /*
+     * An imported mod's files are NOT this sandbox's to delete. They live in
+     * the device's local store and are very likely in another sandbox as well,
+     * so removing one from a sandbox removes the row and leaves the files —
+     * which is also what makes putting it back a click rather than a re-import.
+     * Deleting an import for good is `local_delete`, which is a separate
+     * decision and says so.
+     */
+    if crate::local::LocalMod::id_from_key(mod_key).is_none() {
+        let stage = deploy::stage_dir(ctx.staging_root, sandbox_id, mod_key);
 
-    let _ = std::fs::remove_dir_all(stage);
+        let _ = std::fs::remove_dir_all(stage);
+    }
+
     let _ = db.sandbox_clear_staged(sandbox_id, mod_key);
 }
 
@@ -354,10 +375,26 @@ pub fn deployable(sandbox: &Sandbox, ctx: &SandboxCtx<'_>) -> Vec<deploy::Deploy
         .map(|m| deploy::DeployMod {
             key: m.mod_key.clone(),
             name: m.name.clone(),
-            root: deploy::stage_dir(ctx.staging_root, sandbox.id, &m.mod_key),
+            root: mod_root(sandbox.id, &m.mod_key, ctx),
             priority: m.priority,
         })
         .collect()
+}
+
+/// The folder holding one member's files, laid out as they belong under the
+/// game directory.
+///
+/// The one place the two sources of a mod meet, and deliberately the ONLY one:
+/// everything downstream — the merge tree, the conflict report, the ledger,
+/// the purge's "is this still ours" check — takes a root and does not ask where
+/// it came from. An imported mod therefore conflicts with a subscribed one in
+/// the same report, in the same load order, with no second code path to keep
+/// in step.
+fn mod_root(sandbox_id: i64, mod_key: &str, ctx: &SandboxCtx<'_>) -> PathBuf {
+    match crate::local::LocalMod::id_from_key(mod_key) {
+        Some(id) => crate::local::store::local_root(ctx.local_root, id),
+        None => deploy::stage_dir(ctx.staging_root, sandbox_id, mod_key),
+    }
 }
 
 /// Put a sandbox in front of the game.
@@ -813,6 +850,7 @@ mod tests {
             downloads: None,
             staging_root: &tmp.path().join("staging"),
             backup_root: &tmp.path().join("backups"),
+            local_root: &tmp.path().join("local-mods"),
         };
 
         let mods = deployable(&sandbox, &ctx);

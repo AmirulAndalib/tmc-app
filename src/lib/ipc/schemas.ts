@@ -1160,3 +1160,158 @@ export const AutoUpdateReportSchema = z.object({
 })
 
 export type AutoUpdateReportT = z.infer<typeof AutoUpdateReportSchema>
+
+// ------------------------------------------------- Imported (local) content
+
+/**
+ * How a mod that has no account behind it got onto this device.
+ *
+ * Kept because it is the first thing anybody asks about a row they do not
+ * recognise, and because the four have different repair stories — a dropped
+ * archive can be re-dropped, an adopted folder is still in the game directory,
+ * one from another manager is still in that manager.
+ */
+export const LocalOriginSchema = z.enum(['dropped', 'folder', 'adopted', 'manager'])
+
+export type LocalOriginT = z.infer<typeof LocalOriginSchema>
+
+/**
+ * What an imported archive's own `tmc.json` claimed, when it claimed an item on
+ * THIS site.
+ *
+ * A link and nothing more: nothing about an imported mod is synced, updated or
+ * reported because of it. Its use is the offer — "subscribe to this instead" —
+ * which is what turns a file into something the app can keep current.
+ */
+export const LocalSourceSchema = z.object({
+    kind: z.string(),
+    itemId: z.number(),
+    releaseId: z.number().nullish(),
+    webUrl: z.string().nullish(),
+})
+
+export const LocalModSchema = z.object({
+    id: z.number(),
+    name: z.string(),
+    appId: z.number().nullable(),
+    appSlug: z.string().nullable(),
+    version: z.string().nullable(),
+    author: z.string().nullable(),
+    notes: z.string().nullable(),
+    origin: LocalOriginSchema,
+    originLabel: z.string().nullable(),
+    /**
+     * Where its files land under the game folder. Editable, and editing it
+     * MOVES the files — see `localPatch`.
+     */
+    relPath: z.string(),
+    source: LocalSourceSchema.nullish(),
+    files: z.number(),
+    bytes: z.number(),
+    addedAt: z.string(),
+    updatedAt: z.string(),
+})
+
+export type LocalModT = z.infer<typeof LocalModSchema>
+
+/**
+ * How an import treats what it was given.
+ *
+ * The one genuinely ambiguous decision: a `.jar` is a zip and must not be
+ * unpacked, a Minecraft resource pack is a `.zip` and must not be either, and a
+ * mod distributed as a zip of loose files must be. Rust suggests from the
+ * game's own install rules; this is what lets the user overrule it.
+ */
+export const ImportPayloadSchema = z.enum(['file', 'unpack', 'folder'])
+
+export type ImportPayloadT = z.infer<typeof ImportPayloadSchema>
+
+/**
+ * One thing waiting to be imported.
+ *
+ * There is no path here, by construction. `token` is how the file is named back
+ * to Rust — see `tmc_core::local::vault` for what that indirection buys and
+ * what it does not.
+ */
+export const PendingFileSchema = z.object({
+    token: z.string(),
+    name: z.string(),
+    isDir: z.boolean(),
+    bytes: z.number(),
+    isArchive: z.boolean(),
+})
+
+export type PendingFileT = z.infer<typeof PendingFileSchema>
+
+export const DropBatchSchema = z.object({
+    at: z.number(),
+    files: z.array(PendingFileSchema),
+})
+
+export type DropBatchT = z.infer<typeof DropBatchSchema>
+
+export const ImportPreviewSchema = z.object({
+    token: z.string(),
+    name: z.string(),
+    isDir: z.boolean(),
+    bytes: z.number(),
+    payload: ImportPayloadSchema,
+    relPath: z.string(),
+    source: LocalSourceSchema.nullish(),
+    version: z.string().nullish(),
+    author: z.string().nullish(),
+})
+
+export type ImportPreviewT = z.infer<typeof ImportPreviewSchema>
+
+export const ImportOutcomeSchema = z.object({
+    imported: z.array(LocalModSchema),
+    /** One line per thing that did not import, naming it. */
+    failed: z.array(z.string()),
+    sandboxId: z.number().nullable(),
+})
+
+export type ImportOutcomeT = z.infer<typeof ImportOutcomeSchema>
+
+/** Something in the game folder the app cannot account for. */
+export const AdoptCandidateSchema = z.object({
+    token: z.string(),
+    name: z.string(),
+    relPath: z.string(),
+    isDir: z.boolean(),
+    files: z.number(),
+    bytes: z.number(),
+})
+
+export type AdoptCandidateT = z.infer<typeof AdoptCandidateSchema>
+
+/** A mod manager this build can read a library out of. */
+export const ManagerInfoSchema = z.object({
+    id: z.string(),
+    label: z.string(),
+    homepage: z.string().nullish(),
+    notes: z.array(z.string()),
+    /** The TMC games this descriptor can map. */
+    slugs: z.array(z.string()),
+})
+
+export type ManagerInfoT = z.infer<typeof ManagerInfoSchema>
+
+export const ManagerCandidateSchema = z.object({
+    token: z.string(),
+    manager: z.string(),
+    slug: z.string(),
+    gameDir: z.string(),
+    /** The profile or instance, when the manager's layout has one. */
+    group: z.string().nullish(),
+    name: z.string(),
+    version: z.string().nullish(),
+    author: z.string().nullish(),
+    website: z.string().nullish(),
+    relPath: z.string().nullish(),
+    isDir: z.boolean(),
+    files: z.number(),
+    bytes: z.number(),
+})
+
+export type ManagerCandidateT = z.infer<typeof ManagerCandidateSchema>

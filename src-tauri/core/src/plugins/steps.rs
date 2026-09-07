@@ -214,18 +214,37 @@ impl Executor<'_> {
                 let source = self.resolve(from, ctx, false)?;
                 let dest = self.resolve(to, ctx, true)?;
 
-                let written = self.extract(&source, &dest, *strip, include)?;
+                let written = extract_archive(&source, &dest, *strip, include)?;
 
                 audit!(
                     self.audit,
                     Info,
                     Install,
                     "plugin.extract",
-                    format!("{written} entries → {}", display(&dest)),
+                    format!("{} entries → {}", written.len(), display(&dest)),
                     plugin = self.manifest.id
                 );
 
-                applied.push(display(&dest));
+                /*
+                 * Every extracted FILE, not the destination directory.
+                 *
+                 * The journal is what `library::install::run_uninstall` sweeps,
+                 * and it sweeps by removing each recorded path — a directory
+                 * with `remove_dir_all`. Recording `Data` for a Skyrim mod, or
+                 * `scripts` for a GTA V one, therefore meant uninstalling one
+                 * mod deleted the shared folder every other mod had also
+                 * extracted into. The GTA V rule's own comment says it relies
+                 * on the journal for exactly this, which is what makes the
+                 * mismatch worth fixing here rather than in the rules: a rule
+                 * cannot enumerate what an archive contains, and this can.
+                 *
+                 * It is capped by MAX_EXTRACT_ENTRIES, so the row is bounded.
+                 * A large texture pack does produce a large list, and that is
+                 * the correct size for a record of what it wrote.
+                 */
+                for path in &written {
+                    applied.push(display(path));
+                }
             }
 
             Step::Copy { from, to } => {
@@ -478,171 +497,6 @@ impl Executor<'_> {
         Ok(())
     }
 
-    // -------------------------------------------------------------- Extract
-
-    fn extract(
-        &self,
-        source: &Path,
-        dest: &Path,
-        strip: u8,
-        include: &[String],
-    ) -> AppResult<usize> {
-        let name = source
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or_default()
-            .to_ascii_lowercase();
-
-        if name.ends_with(".zip") {
-            self.extract_zip(source, dest, strip, include)
-        } else if name.ends_with(".tar.gz") || name.ends_with(".tgz") {
-            let file = std::fs::File::open(source)?;
-            let decoder = flate2::read::GzDecoder::new(file);
-
-            self.extract_tar(tar::Archive::new(decoder), dest, strip, include)
-        } else if name.ends_with(".tar") {
-            let file = std::fs::File::open(source)?;
-
-            self.extract_tar(tar::Archive::new(file), dest, strip, include)
-        } else {
-            Err(AppError::invalid(
-                "Only .zip, .tar, .tar.gz and .tgz archives can be extracted.",
-            ))
-        }
-    }
-
-    fn extract_zip(
-        &self,
-        source: &Path,
-        dest: &Path,
-        strip: u8,
-        include: &[String],
-    ) -> AppResult<usize> {
-        let file = std::fs::File::open(source)?;
-
-        let mut archive = zip::ZipArchive::new(file)
-            .map_err(|e| AppError::invalid(format!("Not a readable zip: {e}")))?;
-
-        if archive.len() > MAX_EXTRACT_ENTRIES {
-            return Err(AppError::jail("Archive has too many entries."));
-        }
-
-        let mut total: u64 = 0;
-        let mut written = 0usize;
-
-        for i in 0..archive.len() {
-            let mut entry = archive
-                .by_index(i)
-                .map_err(|e| AppError::invalid(format!("Bad zip entry: {e}")))?;
-
-            /*
-             * `enclosed_name` is zip-rs's own zip-slip guard: it returns None
-             * for absolute paths, `..` components and Windows drive prefixes.
-             * We use it AND re-check through the jail, because it protects
-             * against the archive's own claims while the jail additionally
-             * protects against symlinks already on disk.
-             */
-            let Some(raw) = entry.enclosed_name() else {
-                return Err(AppError::jail("Archive contains an unsafe path."));
-            };
-
-            if entry.is_dir() {
-                continue;
-            }
-
-            let Some(relative) = strip_and_filter(&raw, strip, include) else {
-                continue;
-            };
-
-            total += entry.size();
-
-            if total > MAX_EXTRACT_BYTES {
-                return Err(AppError::jail(
-                    "Archive expands to more than the allowed size.",
-                ));
-            }
-
-            let target = crate::plugins::jail::join_relative(dest, &relative)?;
-
-            if !target.starts_with(dest) {
-                return Err(AppError::jail("Archive entry escapes its destination."));
-            }
-
-            ensure_parent(&target)?;
-
-            let mut out = std::fs::File::create(&target)?;
-            std::io::copy(&mut entry, &mut out)?;
-
-            written += 1;
-        }
-
-        Ok(written)
-    }
-
-    fn extract_tar<R: Read>(
-        &self,
-        mut archive: tar::Archive<R>,
-        dest: &Path,
-        strip: u8,
-        include: &[String],
-    ) -> AppResult<usize> {
-        let mut total: u64 = 0;
-        let mut written = 0usize;
-
-        for entry in archive.entries()? {
-            let mut entry = entry?;
-
-            /*
-             * Tar can carry symlinks and hardlinks, and both are a jail escape
-             * by construction: a `link → /etc` entry followed by a `link/passwd`
-             * entry writes outside any destination check that looks only at
-             * paths. Nothing a mod archive needs requires them.
-             */
-            let kind = entry.header().entry_type();
-
-            if !kind.is_file() && !kind.is_dir() {
-                return Err(AppError::jail("Archive contains a link or special file."));
-            }
-
-            if kind.is_dir() {
-                continue;
-            }
-
-            let raw = entry.path()?.into_owned();
-
-            let Some(relative) = strip_and_filter(&raw, strip, include) else {
-                continue;
-            };
-
-            total += entry.size();
-
-            if total > MAX_EXTRACT_BYTES {
-                return Err(AppError::jail(
-                    "Archive expands to more than the allowed size.",
-                ));
-            }
-
-            written += 1;
-
-            if written > MAX_EXTRACT_ENTRIES {
-                return Err(AppError::jail("Archive has too many entries."));
-            }
-
-            let target = crate::plugins::jail::join_relative(dest, &relative)?;
-
-            if !target.starts_with(dest) {
-                return Err(AppError::jail("Archive entry escapes its destination."));
-            }
-
-            ensure_parent(&target)?;
-
-            let mut out = std::fs::File::create(&target)?;
-            std::io::copy(&mut entry, &mut out)?;
-        }
-
-        Ok(written)
-    }
-
     // ------------------------------------------------------------ JSON patch
 
     fn patch_json(&self, target: &Path, pointer: &str, value: &serde_json::Value) -> AppResult<()> {
@@ -710,6 +564,176 @@ impl Executor<'_> {
 
         Ok(())
     }
+}
+
+// ------------------------------------------------------------------ Extract
+//
+// Free functions rather than methods on [`Executor`], because unpacking an
+// archive is also what happens to a file the USER dropped into the window —
+// see [`crate::local::store`]. Having one implementation of the zip-slip
+// guard, the expansion cap and tar's link refusal is the whole reason: two
+// would eventually differ, and the one that differed would be the one nobody
+// was reading.
+
+pub(crate) fn extract_archive(
+    source: &Path,
+    dest: &Path,
+    strip: u8,
+    include: &[String],
+) -> AppResult<Vec<PathBuf>> {
+    let name = source
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+
+    if name.ends_with(".zip") {
+        extract_zip(source, dest, strip, include)
+    } else if name.ends_with(".tar.gz") || name.ends_with(".tgz") {
+        let file = std::fs::File::open(source)?;
+        let decoder = flate2::read::GzDecoder::new(file);
+
+        extract_tar(tar::Archive::new(decoder), dest, strip, include)
+    } else if name.ends_with(".tar") {
+        let file = std::fs::File::open(source)?;
+
+        extract_tar(tar::Archive::new(file), dest, strip, include)
+    } else {
+        Err(AppError::invalid(
+            "Only .zip, .tar, .tar.gz and .tgz archives can be extracted.",
+        ))
+    }
+}
+
+/// The files written, in archive order — the caller journals them.
+fn extract_zip(
+    source: &Path,
+    dest: &Path,
+    strip: u8,
+    include: &[String],
+) -> AppResult<Vec<PathBuf>> {
+    let file = std::fs::File::open(source)?;
+
+    let mut archive = zip::ZipArchive::new(file)
+        .map_err(|e| AppError::invalid(format!("Not a readable zip: {e}")))?;
+
+    if archive.len() > MAX_EXTRACT_ENTRIES {
+        return Err(AppError::jail("Archive has too many entries."));
+    }
+
+    let mut total: u64 = 0;
+    let mut written: Vec<PathBuf> = Vec::new();
+
+    for i in 0..archive.len() {
+        let mut entry = archive
+            .by_index(i)
+            .map_err(|e| AppError::invalid(format!("Bad zip entry: {e}")))?;
+
+        /*
+         * `enclosed_name` is zip-rs's own zip-slip guard: it returns None
+         * for absolute paths, `..` components and Windows drive prefixes.
+         * We use it AND re-check through the jail, because it protects
+         * against the archive's own claims while the jail additionally
+         * protects against symlinks already on disk.
+         */
+        let Some(raw) = entry.enclosed_name() else {
+            return Err(AppError::jail("Archive contains an unsafe path."));
+        };
+
+        if entry.is_dir() {
+            continue;
+        }
+
+        let Some(relative) = strip_and_filter(&raw, strip, include) else {
+            continue;
+        };
+
+        total += entry.size();
+
+        if total > MAX_EXTRACT_BYTES {
+            return Err(AppError::jail(
+                "Archive expands to more than the allowed size.",
+            ));
+        }
+
+        let target = crate::plugins::jail::join_relative(dest, &relative)?;
+
+        if !target.starts_with(dest) {
+            return Err(AppError::jail("Archive entry escapes its destination."));
+        }
+
+        ensure_parent(&target)?;
+
+        let mut out = std::fs::File::create(&target)?;
+        std::io::copy(&mut entry, &mut out)?;
+
+        written.push(target);
+    }
+
+    Ok(written)
+}
+
+fn extract_tar<R: Read>(
+    mut archive: tar::Archive<R>,
+    dest: &Path,
+    strip: u8,
+    include: &[String],
+) -> AppResult<Vec<PathBuf>> {
+    let mut total: u64 = 0;
+    let mut written: Vec<PathBuf> = Vec::new();
+
+    for entry in archive.entries()? {
+        let mut entry = entry?;
+
+        /*
+         * Tar can carry symlinks and hardlinks, and both are a jail escape
+         * by construction: a `link → /etc` entry followed by a `link/passwd`
+         * entry writes outside any destination check that looks only at
+         * paths. Nothing a mod archive needs requires them.
+         */
+        let kind = entry.header().entry_type();
+
+        if !kind.is_file() && !kind.is_dir() {
+            return Err(AppError::jail("Archive contains a link or special file."));
+        }
+
+        if kind.is_dir() {
+            continue;
+        }
+
+        let raw = entry.path()?.into_owned();
+
+        let Some(relative) = strip_and_filter(&raw, strip, include) else {
+            continue;
+        };
+
+        total += entry.size();
+
+        if total > MAX_EXTRACT_BYTES {
+            return Err(AppError::jail(
+                "Archive expands to more than the allowed size.",
+            ));
+        }
+
+        if written.len() >= MAX_EXTRACT_ENTRIES {
+            return Err(AppError::jail("Archive has too many entries."));
+        }
+
+        let target = crate::plugins::jail::join_relative(dest, &relative)?;
+
+        if !target.starts_with(dest) {
+            return Err(AppError::jail("Archive entry escapes its destination."));
+        }
+
+        ensure_parent(&target)?;
+
+        let mut out = std::fs::File::create(&target)?;
+        std::io::copy(&mut entry, &mut out)?;
+
+        written.push(target);
+    }
+
+    Ok(written)
 }
 
 /// Apply `strip` and the include filter; `None` means "skip this entry".
@@ -858,6 +882,7 @@ mod tests {
             installer: None,
             server_query: None,
             theme: None,
+            manager: None,
         }
     }
 
@@ -892,6 +917,97 @@ mod tests {
         }];
 
         executor.run(&steps, ctx).await.ok
+    }
+
+    /// The journal names every extracted FILE, never the folder it went into.
+    ///
+    /// The regression this pins was a data-loss bug with a comment pointing
+    /// straight at it. `library::install::run_uninstall` sweeps the journal by
+    /// removing each recorded path, and a directory goes through
+    /// `remove_dir_all` — so an extract that recorded only its destination
+    /// meant uninstalling one mod deleted the shared folder every other mod had
+    /// extracted into. The shipped GTA V rule says in its own uninstall comment
+    /// that it relies on the journal for exactly this, and `gameDir/scripts` is
+    /// precisely such a shared folder.
+    #[tokio::test]
+    async fn extracting_journals_the_files_and_not_the_directory() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let game = tmp.path().join("game");
+        std::fs::create_dir_all(game.join("scripts")).expect("mkdir");
+
+        // A file another mod already put there. It must survive.
+        std::fs::write(game.join("scripts/other.lua"), "-- someone else's\n").expect("write");
+
+        let archive = tmp.path().join("mod.zip");
+        {
+            let file = std::fs::File::create(&archive).expect("create");
+            let mut zip = zip::ZipWriter::new(file);
+            let opts: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default()
+                .compression_method(zip::CompressionMethod::Stored);
+
+            for name in ["a.lua", "nested/b.lua"] {
+                zip.start_file(name, opts).expect("entry");
+                std::io::Write::write_all(&mut zip, b"body").expect("body");
+            }
+
+            zip.finish().expect("finish");
+        }
+
+        std::fs::copy(&archive, game.join("mod.zip")).expect("stage the archive");
+
+        let manifest = writable_manifest();
+        let jail = jail_over(&manifest, &game);
+        let audit = Audit::new(tmp.path().join("audit.jsonl"));
+
+        let executor = Executor {
+            manifest: &manifest,
+            jail: &jail,
+            http: &reqwest::Client::new(),
+            audit: &audit,
+            downloads: None,
+        };
+
+        let gd = crate::plugins::manifest::FsRoot::GameDir;
+
+        let report = executor
+            .run(
+                &[Step::Extract {
+                    from: PathRef {
+                        root: gd,
+                        path: "mod.zip".into(),
+                    },
+                    to: PathRef {
+                        root: gd,
+                        path: "scripts".into(),
+                    },
+                    strip: 0,
+                    include: vec![],
+                }],
+                &RunContext(HashMap::new()),
+            )
+            .await;
+
+        assert!(report.ok, "extract failed: {:?}", report.error);
+
+        let journal = &report.applied;
+
+        assert!(
+            journal.iter().any(|p| p.ends_with("a.lua"))
+                && journal.iter().any(|p| p.ends_with("b.lua")),
+            "the journal should name every extracted file: {journal:?}"
+        );
+        assert!(
+            !journal.iter().any(|p| p.ends_with("scripts")),
+            "the journal must not name the destination directory: {journal:?}"
+        );
+        assert!(
+            !journal.iter().any(|p| p.ends_with("other.lua")),
+            "only what this install wrote belongs in its journal: {journal:?}"
+        );
+        assert!(
+            game.join("scripts/other.lua").exists(),
+            "the other mod's file was disturbed"
+        );
     }
 
     /// A placeholder in a PATH is filled, exactly as one in a URL is.

@@ -10,6 +10,7 @@ use tmc_core::download::DownloadManager;
 use tmc_core::error::{AppError, AppResult};
 use tmc_core::launch::{plan as build_launch_plan, LaunchContext, LaunchOptions, LaunchPlan};
 use tmc_core::library::LibraryDb;
+use tmc_core::local::vault::PathVault;
 use tmc_core::logging::Audit;
 use tmc_core::net::LatencyStore;
 use tmc_core::plugins::apps::AppPlugins;
@@ -21,6 +22,17 @@ use tmc_core::session::{Session, SessionKind, Sessions};
 use tmc_core::settings::{AppSettings, SettingsStore};
 
 use crate::paths::AppPaths;
+
+/// The three directories a sandbox operation resolves against.
+pub struct SandboxDirs {
+    /// `<data>/staging` — per sandbox, per mod.
+    pub staging: PathBuf,
+    /// `<data>/backups` — what a deploy displaced.
+    pub backups: PathBuf,
+    /// `<data>/local-mods` — the device's imported mods, shared across
+    /// sandboxes. See `tmc_core::local`.
+    pub local: PathBuf,
+}
 
 /// Everything the commands need, assembled once at startup.
 ///
@@ -102,6 +114,22 @@ pub struct AppState {
     /// launch that will not need it.
     cipher: std::sync::OnceLock<LocalCipher>,
 
+    /// Paths this process found, addressable from the webview by token.
+    ///
+    /// Filled by the window's drag-drop handler and by the two import scans.
+    /// See [`PathVault`] for why the indirection exists at all.
+    pub vault: PathVault,
+
+    /// The most recent drop on the window, waiting to be collected.
+    ///
+    /// Held as well as emitted, because an event fires whether or not anything
+    /// is listening: a drop that lands during a route change would otherwise be
+    /// silently lost, which reads as drag and drop not working rather than as a
+    /// race. One slot, not a queue — a second drop before the first is handled
+    /// replaces it, which is what somebody dropping again after nothing seemed
+    /// to happen actually means.
+    drop: RwLock<Option<crate::commands::import::DropBatch>>,
+
     /// App-scoped install and launch rules (`plugins/app/<slug>/…`).
     ///
     /// An `Arc` behind an `RwLock` so a reload swaps the whole set in one write
@@ -173,7 +201,12 @@ impl AppState {
             Err(e) => tracing::warn!("could not requeue downloads: {}", e.detail()),
         }
 
-        let app_plugins = AppPlugins::load(&paths.plugins);
+        // `resolve`, not `load`: the rules the app SHIPS are compiled into the
+        // binary and the user's directory is an overlay on them. `load` reads
+        // only the overlay, which on a fresh install is empty — and an empty
+        // rule set is not an error anywhere, it is just an app that detects no
+        // games and launches nothing.
+        let app_plugins = AppPlugins::resolve(&paths.plugins);
 
         for (source, error) in app_plugins.errors() {
             tracing::warn!("app plugin {source} did not load: {error}");
@@ -239,9 +272,27 @@ impl AppState {
             scan_running: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             scan_cancel: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             cipher: std::sync::OnceLock::new(),
+            vault: PathVault::new(),
+            drop: RwLock::new(None),
             library,
             app_plugins: RwLock::new(Arc::new(app_plugins)),
         })
+    }
+
+    /// Record what was just dropped on the window.
+    pub fn set_drop(&self, batch: crate::commands::import::DropBatch) {
+        if let Ok(mut slot) = self.drop.write() {
+            *slot = Some(batch);
+        }
+    }
+
+    /// Collect it, once.
+    ///
+    /// Taken rather than read: a batch that has been handed to the UI has been
+    /// handled, and leaving it in place means a later remount re-opens an
+    /// import dialog for files the user already dealt with.
+    pub fn take_drop(&self) -> Option<crate::commands::import::DropBatch> {
+        self.drop.write().ok()?.take()
     }
 
     /// The app id for a game's plugin slug, from the cache.
@@ -377,14 +428,27 @@ impl AppState {
             .ok_or_else(|| AppError::internal("cipher was not initialised"))
     }
 
+    /// The three directories every sandbox operation resolves against.
+    ///
+    /// Held together rather than passed as three arguments, because they are
+    /// three answers to one question — "where does this device keep mod files?"
+    /// — and a call site that assembled two of them and forgot the third would
+    /// compile perfectly and deploy from the wrong place.
+    pub fn sandbox_dirs(&self) -> SandboxDirs {
+        SandboxDirs {
+            staging: self.paths.staging_dir(),
+            backups: self.paths.backup_dir(),
+            local: self.paths.local_mods_dir(),
+        }
+    }
+
     /// Everything a sandbox operation needs, assembled from this state.
     pub fn sandbox_ctx<'a>(
         &'a self,
         plugins: &'a tmc_core::plugins::apps::AppPlugins,
         settings: &'a AppSettings,
         roots: &'a tmc_core::plugins::JailRoots,
-        staging: &'a std::path::Path,
-        backups: &'a std::path::Path,
+        dirs: &'a SandboxDirs,
     ) -> tmc_core::library::deploy::SandboxCtx<'a> {
         tmc_core::library::deploy::SandboxCtx {
             plugins,
@@ -393,8 +457,9 @@ impl AppState {
             http: self.api.raw(),
             audit: &self.audit,
             downloads: Some(&self.downloads),
-            staging_root: staging,
-            backup_root: backups,
+            staging_root: &dirs.staging,
+            backup_root: &dirs.backups,
+            local_root: &dirs.local,
         }
     }
 
@@ -491,7 +556,7 @@ impl AppState {
     /// Re-read `plugins/app/`. Cheap, and the only way to pick up a rule the
     /// user just dropped in without restarting.
     pub fn reload_app_plugins(&self) {
-        let fresh = Arc::new(AppPlugins::load(&self.paths.plugins));
+        let fresh = Arc::new(AppPlugins::resolve(&self.paths.plugins));
 
         if let Ok(mut slot) = self.app_plugins.write() {
             *slot = fresh;

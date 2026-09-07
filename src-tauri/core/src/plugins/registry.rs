@@ -441,6 +441,9 @@ impl Registry {
         if manifest.theme.is_some() {
             kinds.push("theme".to_string());
         }
+        if manifest.manager.is_some() {
+            kinds.push("manager".to_string());
+        }
 
         let record = PluginRecord {
             id: manifest.id.clone(),

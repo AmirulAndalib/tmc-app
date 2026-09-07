@@ -41,7 +41,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::{AppError, AppResult};
 
 /// Schema version. Bumped whenever `migrate` gains a step.
-const SCHEMA_VERSION: i64 = 7;
+const SCHEMA_VERSION: i64 = 8;
 
 /// One subscribed item as this device knows it.
 ///
@@ -230,6 +230,7 @@ impl LibraryDb {
                     5 => conn.execute_batch(SCHEMA_V5)?,
                     6 => conn.execute_batch(SCHEMA_V6)?,
                     7 => conn.execute_batch(SCHEMA_V7)?,
+                    8 => conn.execute_batch(SCHEMA_V8)?,
                     _ => break,
                 }
 
@@ -311,6 +312,52 @@ const SCHEMA_V1: &str = r#"
                 );
 
                 CREATE INDEX IF NOT EXISTS install_app_idx ON install (app_id);
+"#;
+
+/// Mods that are on this machine without an account behind them.
+///
+/// Its own table rather than rows in `subscription`, and the reason is the same
+/// one that keeps `sandbox` out of `install`: `subscription` is a MIRROR of the
+/// account, rewritten by every sync, and a full sync deletes anything the
+/// server did not send. A dropped jar would not survive its first sync — which
+/// is the one behaviour an imported mod must never have.
+///
+/// It is also why there is no `latest_release_id` here. A local mod has no
+/// release history, no checksum from anybody and no URL to re-fetch; a column
+/// for one would be a column that is always null and an update path that is
+/// always a lie. See `crate::local`.
+///
+/// `source_*` is the one link back to the site, set only when an archive's own
+/// `tmc.json` named an item AND named this build's API base. It drives an
+/// offer — "subscribe to this instead" — and nothing automatic.
+const SCHEMA_V8: &str = r#"
+                CREATE TABLE IF NOT EXISTS local_mod (
+                    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name         TEXT NOT NULL,
+                    app_id       INTEGER,
+                    app_slug     TEXT,
+                    version      TEXT,
+                    author       TEXT,
+                    notes        TEXT,
+                    /* dropped | folder | adopted | manager */
+                    origin       TEXT NOT NULL,
+                    origin_label TEXT,
+                    /* Where its files sit under the game folder. May be ''. */
+                    rel_path     TEXT NOT NULL DEFAULT '',
+
+                    source_kind    TEXT,
+                    source_item    INTEGER,
+                    source_release INTEGER,
+                    source_url     TEXT,
+
+                    files        INTEGER NOT NULL DEFAULT 0,
+                    bytes        INTEGER NOT NULL DEFAULT 0,
+                    added_at     TEXT NOT NULL,
+                    updated_at   TEXT NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS local_mod_app_idx ON local_mod (app_id);
+                CREATE INDEX IF NOT EXISTS local_mod_origin_idx ON local_mod (origin);
 "#;
 
 /// Sandboxes, their mods, and what the last deploy of each put on disk.

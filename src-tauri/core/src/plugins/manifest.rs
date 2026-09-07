@@ -57,6 +57,17 @@ pub struct Manifest {
     pub server_query: Option<ServerQuery>,
     #[serde(default)]
     pub theme: Option<Theme>,
+
+    /// A mod manager this app can read an existing library out of.
+    ///
+    /// The fourth plugin type, and the one that reads rather than writes:
+    /// [`crate::plugins::managers`] describes where another manager keeps its
+    /// mods, and the app copies from there into its own store. It declares no
+    /// steps and needs no `fs` grant, because a scan never writes and the
+    /// copy is performed by the app against paths the SCAN found — see that
+    /// module's header for why a descriptor cannot name a path of its own.
+    #[serde(default)]
+    pub manager: Option<crate::plugins::managers::ManagerSpec>,
 }
 
 /// Everything a plugin may reach. Absent means denied — there is no wildcard
@@ -534,6 +545,20 @@ impl Manifest {
             out.push("Change the app's colours".into());
         }
 
+        /*
+         * Named as a READ, because that is all it is and the difference is the
+         * whole reason somebody would agree to it. A manager descriptor lists
+         * directories under a base the app resolved; it writes nothing, and
+         * importing from what it found is a separate click on a separate
+         * screen.
+         */
+        if let Some(manager) = &self.manager {
+            out.push(format!(
+                "Look for installed mods in {}'s own folders",
+                manager.label
+            ));
+        }
+
         out
     }
 }
@@ -622,6 +647,7 @@ mod tests {
             installer: None,
             server_query: None,
             theme: None,
+            manager: None,
         };
 
         assert!(m.allows_host("cdn.example.com"));

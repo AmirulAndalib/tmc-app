@@ -82,6 +82,22 @@ impl AppPaths {
         self.data.join("backups")
     }
 
+    /// Where imported mods live — one directory per local mod, holding its
+    /// files laid out as they belong under a game folder.
+    ///
+    /// In DATA for the same reason staging is, and one step stronger: an
+    /// imported mod is very often the ONLY copy on the machine. Somebody drops
+    /// a jar they were handed, deletes the download, and this is where it now
+    /// lives. A cache directory the OS may clear is exactly the wrong home for
+    /// that.
+    ///
+    /// Device-wide rather than per sandbox: one import is routinely in several
+    /// sandboxes, and deployment only ever reads a mod's folder. See
+    /// `tmc_core::local`.
+    pub fn local_mods_dir(&self) -> PathBuf {
+        self.data.join("local-mods")
+    }
+
     /// The device's library database.
     ///
     /// In the DATA directory, not the cache: it records what is on disk in the

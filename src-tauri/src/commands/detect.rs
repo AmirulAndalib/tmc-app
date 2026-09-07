@@ -106,7 +106,21 @@ fn annotate(game: DetectedGame, settings: &AppSettings, state: &AppState) -> Can
 #[tauri::command]
 pub fn detect_apply(state: State<'_, AppState>, slug: String, path: String) -> AppResult<()> {
     let app_id = app_id_for(&slug, &state).ok_or_else(|| {
-        AppError::invalid("The app does not know that game — nothing would use this folder.")
+        /*
+         * Name the half that is actually missing.
+         *
+         * Reaching here means the app HAS a rule for this game — that is the
+         * only reason the scan could name it — and the CATALOGUE has no row to
+         * key a game directory on. The old wording said the app did not know
+         * the game, which sent everybody to look at `plugins/app/` where the
+         * rule was sitting perfectly correctly, and never at the site.
+         */
+        AppError::invalid(format!(
+            "This build has rules for {slug}, but the site's catalogue has no \
+             app with that name — so there is nothing to attach the folder to. \
+             It usually means the game has not been added to the site yet, or \
+             that the rule's folder name and the game's URL name differ."
+        ))
     })?;
 
     let (_, stored) =

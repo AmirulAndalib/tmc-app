@@ -16,7 +16,7 @@
  * image and some are not read as broken.
  */
 
-import { FiBox, FiImage, FiLayers } from 'react-icons/fi'
+import { FiBox, FiHardDrive, FiImage, FiLayers } from 'react-icons/fi'
 
 const SIZES = {
     sm: 'h-6 w-6 rounded text-[10px]',
@@ -30,7 +30,14 @@ export function ItemThumb({
     className = '',
 }: {
     image: string | null | undefined
-    /** `mod`, `asset` or `collection` — decides the placeholder glyph. */
+    /**
+     * `mod`, `asset`, `collection` or `local` — decides the placeholder glyph.
+     *
+     * `local` is an imported mod, which never has an image: there is no item
+     * page behind it and nothing to fetch a cover from. Its own glyph is what
+     * stops a load order full of imports looking like a load order full of
+     * subscriptions whose artwork failed to load.
+     */
     kind?: string | null
     size?: keyof typeof SIZES
     className?: string
@@ -50,7 +57,13 @@ export function ItemThumb({
     }
 
     const Glyph =
-        kind === 'collection' ? FiLayers : kind === 'asset' ? FiImage : FiBox
+        kind === 'collection'
+            ? FiLayers
+            : kind === 'asset'
+              ? FiImage
+              : kind === 'local'
+                ? FiHardDrive
+                : FiBox
 
     return (
         <span

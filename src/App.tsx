@@ -10,6 +10,7 @@ import { LiveQueryProvider } from '~/lib/hooks/use-live-query'
 import { LibraryProvider } from '~/lib/library/provider'
 import { DownloadsProvider } from '~/lib/downloads/provider'
 import Shell from '~/components/shell'
+import DropImport from '~/components/drop-import'
 import AppsRoute from '~/routes/apps'
 import BrowseRoute from '~/routes/browse'
 import LibraryRoute from '~/routes/library'
@@ -157,6 +158,14 @@ export default function App() {
                                     screen rather than only on its own. */}
                                 <DownloadsProvider>
                                     <RouterProvider router={router} />
+
+                                    {/* Above the router as well, and it has to
+                                        be: a file dropped during a route change
+                                        must still be caught, and the overlay
+                                        that says a drop will be accepted has to
+                                        exist on every screen rather than on the
+                                        one that remembered to draw it. */}
+                                    <DropImport />
                                 </DownloadsProvider>
                             </LibraryProvider>
                         </LiveQueryProvider>

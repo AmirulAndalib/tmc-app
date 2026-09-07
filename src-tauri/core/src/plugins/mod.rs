@@ -1,6 +1,7 @@
 pub mod apps;
 pub mod config;
 pub mod jail;
+pub mod managers;
 pub mod manifest;
 pub mod query;
 pub mod registry;
@@ -149,6 +150,7 @@ mod tests {
             installer: None,
             server_query: None,
             theme: None,
+            manager: None,
         }
     }
 
