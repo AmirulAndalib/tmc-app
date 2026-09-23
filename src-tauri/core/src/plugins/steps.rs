@@ -612,6 +612,16 @@ fn extract_zip(
     strip: u8,
     include: &[String],
 ) -> AppResult<Vec<PathBuf>> {
+    extract_zip_within(source, dest, strip, include, MAX_EXTRACT_BYTES)
+}
+
+fn extract_zip_within(
+    source: &Path,
+    dest: &Path,
+    strip: u8,
+    include: &[String],
+    max_bytes: u64,
+) -> AppResult<Vec<PathBuf>> {
     let file = std::fs::File::open(source)?;
 
     let mut archive = zip::ZipArchive::new(file)
@@ -648,12 +658,12 @@ fn extract_zip(
             continue;
         };
 
-        total += entry.size();
+        let too_large = || AppError::jail("Archive expands to more than the allowed size.");
+        let remaining = max_bytes.saturating_sub(total);
 
-        if total > MAX_EXTRACT_BYTES {
-            return Err(AppError::jail(
-                "Archive expands to more than the allowed size.",
-            ));
+        // The declared size is a cheap early refusal, and nothing more.
+        if entry.size() > remaining {
+            return Err(too_large());
         }
 
         let target = crate::plugins::jail::join_relative(dest, &relative)?;
@@ -664,8 +674,24 @@ fn extract_zip(
 
         ensure_parent(&target)?;
 
+        /*
+         * The cap counts bytes actually WRITTEN. `entry.size()` is the
+         * archive's own claim, and zip-rs does not hold the decompressor to
+         * it — a deflate entry declaring one byte inflates to whatever it
+         * inflates to, and the CRC mismatch surfaces only after every byte is
+         * on disk. So the copy is bounded by what is left of the budget.
+         */
         let mut out = std::fs::File::create(&target)?;
-        std::io::copy(&mut entry, &mut out)?;
+        let copied = std::io::copy(&mut (&mut entry).take(remaining + 1), &mut out)?;
+
+        if copied > remaining {
+            drop(out);
+            let _ = std::fs::remove_file(&target);
+
+            return Err(too_large());
+        }
+
+        total += copied;
 
         written.push(target);
     }
@@ -929,6 +955,82 @@ mod tests {
     /// extracted into. The shipped GTA V rule says in its own uninstall comment
     /// that it relies on the journal for exactly this, and `gameDir/scripts` is
     /// precisely such a shared folder.
+    /// A zip entry whose central directory claims one byte but whose data is
+    /// 64 KiB. The byte cap must count what is written, not what the archive
+    /// says, or a lying header walks straight past the zip-bomb limit.
+    #[test]
+    fn a_zip_entry_lying_about_its_size_cannot_pass_the_byte_cap() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let archive = tmp.path().join("bomb.zip");
+        let body = vec![b'A'; 64 * 1024];
+
+        let mut bytes = Vec::new();
+        {
+            let mut zip = zip::ZipWriter::new(std::io::Cursor::new(&mut bytes));
+            let opts: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default()
+                .compression_method(zip::CompressionMethod::Deflated);
+
+            zip.start_file("big.bin", opts).expect("entry");
+            std::io::Write::write_all(&mut zip, &body).expect("body");
+            zip.finish().expect("finish");
+        }
+
+        // Rewrite the uncompressed size in both the local and central headers.
+        let patch = |bytes: &mut Vec<u8>, sig: &[u8; 4], offset: usize| {
+            let at = bytes
+                .windows(4)
+                .position(|w| w == sig)
+                .expect("header present");
+            bytes[at + offset..at + offset + 4].copy_from_slice(&1u32.to_le_bytes());
+        };
+        patch(&mut bytes, b"PK\x03\x04", 22);
+        patch(&mut bytes, b"PK\x01\x02", 24);
+
+        std::fs::write(&archive, &bytes).expect("write archive");
+
+        let dest = tmp.path().join("out");
+        std::fs::create_dir_all(&dest).expect("mkdir");
+
+        let result = extract_zip_within(&archive, &dest, 0, &[], 1024);
+
+        let err = result.expect_err("a lying entry was extracted whole");
+        assert!(
+            err.to_string().contains("allowed size"),
+            "refused for the wrong reason: {err}"
+        );
+        assert!(
+            std::fs::metadata(dest.join("big.bin")).map_or(0, |m| m.len()) <= 1024,
+            "more than the cap reached the disk"
+        );
+    }
+
+    #[test]
+    fn a_zip_within_the_byte_cap_still_extracts() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let archive = tmp.path().join("ok.zip");
+        {
+            let file = std::fs::File::create(&archive).expect("create");
+            let mut zip = zip::ZipWriter::new(file);
+            let opts: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default()
+                .compression_method(zip::CompressionMethod::Deflated);
+
+            for name in ["a.txt", "b.txt"] {
+                zip.start_file(name, opts).expect("entry");
+                std::io::Write::write_all(&mut zip, &[b'x'; 512]).expect("body");
+            }
+            zip.finish().expect("finish");
+        }
+
+        let dest = tmp.path().join("out");
+        std::fs::create_dir_all(&dest).expect("mkdir");
+
+        // Exactly at the cap is allowed.
+        let written = extract_zip_within(&archive, &dest, 0, &[], 1024).expect("extract");
+
+        assert_eq!(written.len(), 2);
+        assert_eq!(std::fs::read(dest.join("b.txt")).expect("read").len(), 512);
+    }
+
     #[tokio::test]
     async fn extracting_journals_the_files_and_not_the_directory() {
         let tmp = tempfile::tempdir().expect("tempdir");
