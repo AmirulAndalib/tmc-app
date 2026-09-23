@@ -131,6 +131,36 @@ fn client() -> AppResult<&'static reqwest::Client> {
         .ok_or_else(|| AppError::internal("could not build the query HTTP client"))
 }
 
+/// Reads a reply body, refusing it as soon as it passes `cap`.
+///
+/// The cap is enforced WHILE reading rather than on the finished buffer. The
+/// client decompresses gzip transparently, so a few kilobytes on the wire can
+/// inflate to gigabytes inside the timeout, and `bytes()` would hold every one
+/// of them before the length check ever ran.
+async fn read_capped(mut response: reqwest::Response, cap: usize) -> AppResult<Vec<u8>> {
+    let too_large = || AppError::invalid("The status document is implausibly large.");
+
+    if response.content_length().is_some_and(|n| n > cap as u64) {
+        return Err(too_large());
+    }
+
+    let mut body = Vec::new();
+
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|e| AppError::Network(format!("The reply was cut short: {e}")))?
+    {
+        if body.len().saturating_add(chunk.len()) > cap {
+            return Err(too_large());
+        }
+
+        body.extend_from_slice(&chunk);
+    }
+
+    Ok(body)
+}
+
 pub async fn query(
     addr: SocketAddr,
     timeout: Duration,
@@ -163,16 +193,7 @@ pub async fn query(
         )));
     }
 
-    let body = response
-        .bytes()
-        .await
-        .map_err(|e| AppError::Network(format!("The reply was cut short: {e}")))?;
-
-    if body.len() > MAX_BODY {
-        return Err(AppError::invalid(
-            "The status document is implausibly large.",
-        ));
-    }
+    let body = read_capped(response, MAX_BODY).await?;
 
     let reply: Reply = serde_json::from_slice(&body)
         .map_err(|_| AppError::invalid("The server's reply was not a Nitrado status document."))?;
@@ -233,6 +254,53 @@ fn clamp_count(raw: Option<i64>) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Serves one plain-HTTP reply with no Content-Length, so the only thing
+    /// that can stop the read is the cap applied while streaming.
+    async fn serve_once(body_len: usize) -> SocketAddr {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let addr = listener.local_addr().expect("addr");
+
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("accept");
+            let mut request = [0u8; 1024];
+            let _ = socket.read(&mut request).await;
+
+            let _ = socket
+                .write_all(b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n")
+                .await;
+            let _ = socket.write_all(&vec![b' '; body_len]).await;
+        });
+
+        addr
+    }
+
+    #[tokio::test]
+    async fn an_oversized_body_is_refused_while_it_streams() {
+        let addr = serve_once(MAX_BODY * 4).await;
+        let response = reqwest::get(format!("http://{addr}/"))
+            .await
+            .expect("response");
+
+        assert!(read_capped(response, MAX_BODY).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn a_body_under_the_cap_is_read_whole() {
+        let addr = serve_once(1024).await;
+        let response = reqwest::get(format!("http://{addr}/"))
+            .await
+            .expect("response");
+
+        assert_eq!(
+            read_capped(response, MAX_BODY).await.expect("body").len(),
+            1024
+        );
+    }
 
     fn parse(body: &str) -> Reply {
         serde_json::from_str(body).expect("parse")
