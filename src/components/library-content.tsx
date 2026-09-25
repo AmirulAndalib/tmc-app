@@ -11,6 +11,7 @@ import {
 } from 'react-icons/fi'
 
 import { useLibrary } from '~/lib/library/provider'
+import { openExternally } from '~/lib/external'
 import { useAppIcons } from '~/lib/hooks/use-app-icons'
 import { GameIcon } from '~/components/game-icon'
 import { ItemThumb } from '~/components/item-thumb'
@@ -196,16 +197,21 @@ function LibraryRow({ row }: { row: LibraryRowT }) {
                     </button>
                 ) : null}
 
-                <a
-                    href={row.webUrl}
-                    target="_blank"
-                    rel="noreferrer"
+                {/* Through the opener, like the article cards, not
+                    `<a target="_blank">`: the app installs no new-window
+                    handler, so a blank-target link is left to each platform's
+                    webview (an in-app window on WebView2, nothing at all on
+                    WebKitGTK) instead of the system browser, and it bypasses
+                    the opener's `https://*` scope. */}
+                <button
+                    type="button"
+                    onClick={() => void openExternally(row)}
                     aria-label="Open on the website"
                     title="Open on the website"
                     className="rounded-lg border border-border p-2 text-muted hover:text-foreground"
                 >
                     <FiExternalLink className="h-4 w-4" />
-                </a>
+                </button>
             </div>
         </div>
     )
