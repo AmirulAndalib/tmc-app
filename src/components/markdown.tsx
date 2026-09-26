@@ -128,14 +128,21 @@ function tokenise(source: string): Block[] {
     return blocks
 }
 
-/** `https:` and `http:` only — no `javascript:`, no `data:`, no `file:`. */
-function safeHref(raw: string): string | null {
+/**
+ * `https:` only — no `javascript:`, no `data:`, no `file:`, and no `http:`.
+ *
+ * `http:` used to be let through here, and was then refused one step later:
+ * `tauri-plugin-opener` is scoped to `https://*` (see the capability), so an
+ * `http://` link rendered as a live, underlined link whose click rejected into
+ * a `void` and did nothing at all. Refusing it here instead renders the link
+ * as its own text — the reader can still see and copy the address, which is
+ * more than a button that silently does nothing gave them.
+ */
+export function safeHref(raw: string): string | null {
     try {
         const url = new URL(raw)
 
-        return url.protocol === 'https:' || url.protocol === 'http:'
-            ? url.toString()
-            : null
+        return url.protocol === 'https:' ? url.toString() : null
     } catch {
         return null
     }

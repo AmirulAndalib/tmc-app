@@ -118,8 +118,21 @@ pub async fn query(
      * A Minecraft server keeps the connection open after answering, so an
      * EOF-driven read would sit there until the deadline on every single query.
      */
+    /*
+     * One deadline for the whole reply, not a timeout per read: a per-read
+     * timeout is refreshed by every byte, so a server dribbling the status
+     * JSON one byte at a time would hold this query open for days.
+     */
+    let deadline = tokio::time::Instant::now() + timeout;
+
     loop {
-        let read = match tokio::time::timeout(timeout, stream.read(&mut chunk)).await {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+
+        if remaining.is_zero() {
+            break;
+        }
+
+        let read = match tokio::time::timeout(remaining, stream.read(&mut chunk)).await {
             Ok(Ok(0)) => break,
             Ok(Ok(n)) => n,
             Ok(Err(_)) | Err(_) => break,
@@ -372,6 +385,47 @@ fn parse_legacy(raw: &[u8], port: u16, rtt: u32) -> AppResult<ServerQueryResult>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A "server" that declares a huge status packet and then dribbles it one
+    /// byte at a time, each inside the timeout. The query must give up at the
+    /// deadline rather than once MAX_STATUS_JSON bytes have trickled in.
+    #[tokio::test]
+    async fn a_trickled_status_reply_is_bounded_by_one_deadline() {
+        use tokio::io::AsyncWriteExt;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let addr = listener.local_addr().expect("addr");
+
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("accept");
+
+            // A length prefix of 200 000, which is never satisfied.
+            if socket.write_all(&varint(200_000)).await.is_err() {
+                return;
+            }
+
+            loop {
+                if socket.write_all(b"x").await.is_err() {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        });
+
+        let timeout = std::time::Duration::from_millis(300);
+        let started = std::time::Instant::now();
+
+        // The reply is incomplete, so this is an error; what matters is when.
+        let _ = query(addr, "localhost", timeout).await;
+
+        assert!(
+            started.elapsed() < timeout * 4,
+            "a trickle held the query open for {:?}",
+            started.elapsed()
+        );
+    }
 
     #[test]
     fn varints_round_trip_the_protocols_examples() {

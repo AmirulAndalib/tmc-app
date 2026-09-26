@@ -205,8 +205,22 @@ pub async fn tcp_exchange(
     let mut out = Vec::with_capacity(4096);
     let mut chunk = [0u8; 4096];
 
+    /*
+     * The deadline covers the whole reply, not each read. A per-read timeout is
+     * refreshed by every byte, so a server dribbling one byte just inside it
+     * would hold this exchange — and the batch awaiting it — open for as long
+     * as MAX_TCP_RESPONSE bytes take at that pace: days, not seconds.
+     */
+    let deadline = tokio::time::Instant::now() + timeout;
+
     loop {
-        let read = match tokio::time::timeout(timeout, stream.read(&mut chunk)).await {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+
+        if remaining.is_zero() {
+            break;
+        }
+
+        let read = match tokio::time::timeout(remaining, stream.read(&mut chunk)).await {
             Ok(Ok(0)) => break,
             Ok(Ok(n)) => n,
             // A read timeout with data already in hand is how most of these
@@ -231,4 +245,44 @@ pub async fn tcp_exchange(
 
 pub fn elapsed_ms(started: Instant) -> u32 {
     started.elapsed().as_millis().min(u128::from(u32::MAX)) as u32
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::net::TcpListener;
+
+    /// A server that never stops sending, one byte at a time, each well inside
+    /// the timeout. The exchange must still end at the deadline rather than
+    /// once MAX_TCP_RESPONSE bytes have trickled in.
+    #[tokio::test]
+    async fn a_trickling_tcp_reply_is_bounded_by_one_deadline() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr = listener.local_addr().expect("addr");
+
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("accept");
+
+            loop {
+                if socket.write_all(b"x").await.is_err() {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        });
+
+        let timeout = Duration::from_millis(300);
+        let started = Instant::now();
+
+        let (raw, _) = tcp_exchange(addr, b"ping", timeout)
+            .await
+            .expect("exchange");
+
+        assert!(!raw.is_empty());
+        assert!(
+            started.elapsed() < timeout * 3,
+            "a trickle held the exchange open for {:?}",
+            started.elapsed()
+        );
+    }
 }
