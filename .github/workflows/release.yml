@@ -94,31 +94,51 @@ jobs:
             # `createUpdaterArtifacts` is off in `tauri.conf.json` and turned on
             # here instead, because with it on and no key `tauri build` fails —
             # which would break `npm run desktop:build` for everybody who does
-            # not have one. So it is enabled exactly when both halves are
+            # not have one. So it is enabled exactly when the private key is
             # present, and its absence is a warning rather than a failure: a
             # release nobody can auto-update is still a release people can
             # download, and failing the build would mean no release at all.
             #
-            # TMC_UPDATER_PUBKEY is a repository VARIABLE, not a secret. It is a
-            # public key; storing it as a secret would only mean nobody can read
-            # back what a build was signed against.
+            # The PUBLIC key is `src-tauri/updater.pub`, compiled in by
+            # `build.rs`; the `TMC_UPDATER_PUBKEY` variable overrides it for a
+            # fork signing with its own pair. The two halves must match — a
+            # mismatch is a release every installed app refuses after the
+            # download, so it is checked below before anything is built.
+            #
+            # TMC_UPDATER_ENDPOINT is the public `latest.json` this workflow
+            # uploads to the downloads bucket; compiled in as the updater's
+            # default so a release updates from S3 with nothing on the site.
+            # Without S3_PUBLIC_URL the app falls back to the site's route.
             - name: Build
               shell: bash
               env:
                   TMC_UPDATER_PUBKEY: ${{ vars.TMC_UPDATER_PUBKEY }}
+                  TMC_UPDATER_ENDPOINT: ${{ vars.TMC_UPDATER_ENDPOINT }}
+                  S3_PUBLIC_URL: ${{ vars.S3_PUBLIC_URL || secrets.S3_PUBLIC_URL }}
                   TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
                   TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
               run: |
                   extra=()
 
-                  if [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ] && [ -n "${TMC_UPDATER_PUBKEY:-}" ]; then
+                  if [ -z "${TMC_UPDATER_ENDPOINT:-}" ] && [ -n "${S3_PUBLIC_URL:-}" ]; then
+                      export TMC_UPDATER_ENDPOINT="${S3_PUBLIC_URL%/}/downloads/tmc-app/latest.json"
+                  fi
+                  echo "Updater endpoint: ${TMC_UPDATER_ENDPOINT:-(the site's /api/app/v1/update route)}"
+
+                  if [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
                       extra=(--config '{"bundle":{"createUpdaterArtifacts":true}}')
                       echo "Signing updater artifacts."
                   else
-                      echo "::warning::No updater key configured (needs the TMC_UPDATER_PUBKEY variable AND the TAURI_SIGNING_PRIVATE_KEY secret). This release will be download-only — the app will show its banner and open the download page rather than installing."
+                      echo "::warning::No TAURI_SIGNING_PRIVATE_KEY secret, so this release is unsigned and download-only: installed apps will show the banner and open the download page rather than installing. See docs/RELEASING.md."
                   fi
 
                   npx tauri build ${{ matrix.args }} "${extra[@]}"
+
+                  # A signature the compiled-in key cannot verify is caught
+                  # here rather than by every user after a download.
+                  if [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
+                      node scripts/verify-updater-signature.mjs src-tauri/target
+                  fi
 
             # WINDOWS ALSO SHIPS THE BARE EXE, AND NO BUNDLER PRODUCES IT.
             #
@@ -224,12 +244,92 @@ jobs:
                   sha256sum $(ls | grep -v '\.sig$') > checksums.txt
                   cat checksums.txt
 
+            # THE DOWNLOADS BUCKET: every file of the release under its
+            # version, then the updater manifests LAST.
+            #
+            # The bucket is website-city's uploads bucket (`S3_*` there), and
+            # the secrets carry the same names so one set of values serves
+            # both. `downloads/tmc-app/<version>/` holds the installers, their
+            # `.sig` files, checksums.txt and that version's latest.json;
+            # `downloads/tmc-app/latest.json` (stable) and `latest-beta.json`
+            # are the switches the app's updater reads, so they are written
+            # only after everything they point at exists. A pre-release tag
+            # (`v1.2.0-beta.1`) moves only the beta switch.
+            #
+            # Skipped, loudly, without the bucket secrets: the GitHub release
+            # below still happens, and the app then learns about updates from
+            # the site's route instead.
+            - name: Upload to the downloads bucket
+              id: s3
+              shell: bash
+              env:
+                  TAG: ${{ github.event.inputs.tag || github.ref_name }}
+                  S3_BUCKET: ${{ secrets.S3_BUCKET }}
+                  S3_REGION: ${{ secrets.S3_REGION }}
+                  S3_ENDPOINT: ${{ secrets.S3_ENDPOINT }}
+                  S3_FORCE_PATH_STYLE: ${{ vars.S3_FORCE_PATH_STYLE || secrets.S3_FORCE_PATH_STYLE }}
+                  S3_PUBLIC_URL: ${{ vars.S3_PUBLIC_URL || secrets.S3_PUBLIC_URL }}
+                  AWS_ACCESS_KEY_ID: ${{ secrets.S3_ACCESS_KEY }}
+                  AWS_SECRET_ACCESS_KEY: ${{ secrets.S3_ACCESS_SECRET }}
+                  # Newer AWS CLIs send checksum headers several
+                  # S3-compatible stores (R2, B2, MinIO builds) reject.
+                  AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+                  AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
+              run: |
+                  if [ -z "${S3_BUCKET:-}" ] || [ -z "${AWS_ACCESS_KEY_ID:-}" ] || [ -z "${AWS_SECRET_ACCESS_KEY:-}" ] || [ -z "${S3_PUBLIC_URL:-}" ]; then
+                      echo "::warning::The downloads bucket is not configured (S3_BUCKET, S3_ACCESS_KEY, S3_ACCESS_SECRET secrets and S3_PUBLIC_URL), so nothing was uploaded to it. See docs/RELEASING.md."
+                      exit 0
+                  fi
+
+                  version="${TAG#v}"
+                  prefix="downloads/tmc-app"
+                  base="${S3_PUBLIC_URL%/}/${prefix}/${version}"
+                  export AWS_DEFAULT_REGION="${S3_REGION:-us-east-1}"
+
+                  s3=(aws s3)
+                  if [ -n "${S3_ENDPOINT:-}" ]; then s3+=(--endpoint-url "$S3_ENDPOINT"); fi
+                  if [ "${S3_FORCE_PATH_STYLE:-}" = "true" ] || [ "${S3_FORCE_PATH_STYLE:-}" = "1" ]; then
+                      aws configure set default.s3.addressing_style path
+                  fi
+
+                  manifest=""
+                  if ls artifacts/*.sig >/dev/null 2>&1; then
+                      node scripts/updater-manifest.mjs --dir artifacts --version "$version" \
+                          --base-url "$base" --out latest.json
+                      cp latest.json artifacts/latest.json
+                      manifest=latest.json
+                  else
+                      echo "::warning::This release is unsigned, so no updater manifest was written."
+                  fi
+
+                  # Versioned files never change once published.
+                  "${s3[@]}" cp artifacts/ "s3://${S3_BUCKET}/${prefix}/${version}/" --recursive \
+                      --cache-control "public, max-age=31536000, immutable"
+
+                  if [ -n "$manifest" ]; then
+                      for channel in beta stable; do
+                          if [ "$channel" = stable ] && [[ "$version" == *-* ]]; then
+                              echo "Pre-release: leaving the stable manifest alone."
+                              continue
+                          fi
+                          name=latest.json
+                          [ "$channel" = beta ] && name=latest-beta.json
+                          "${s3[@]}" cp "$manifest" "s3://${S3_BUCKET}/${prefix}/${name}" \
+                              --content-type application/json --cache-control "no-cache, max-age=0"
+                          echo "Updated ${S3_PUBLIC_URL%/}/${prefix}/${name}"
+                      done
+                  fi
+
+                  echo "base-url=$base" >> "$GITHUB_OUTPUT"
+
             - name: Publish
               env:
                   GH_TOKEN: ${{ github.token }}
                   TAG: ${{ github.event.inputs.tag || github.ref_name }}
               run: |
-                  gh release create "$TAG" --title "TMC $TAG" --generate-notes --draft=false \
+                  prerelease=()
+                  case "$TAG" in *-*) prerelease=(--prerelease) ;; esac
+                  gh release create "$TAG" --title "TMC $TAG" --generate-notes --draft=false "${prerelease[@]}" \
                     || echo "release already exists, uploading into it"
                   gh release upload "$TAG" artifacts/* --clobber
 
@@ -255,6 +355,7 @@ jobs:
               env:
                   TMC_RELEASE_TOKEN: ${{ secrets.TMC_RELEASE_TOKEN }}
                   TMC_SITE_URL: ${{ vars.TMC_SITE_URL }}
+                  S3_BASE_URL: ${{ steps.s3.outputs.base-url }}
                   TAG: ${{ github.event.inputs.tag || github.ref_name }}
               run: |
                   if [ -z "${TMC_RELEASE_TOKEN:-}" ]; then
@@ -279,9 +380,13 @@ jobs:
                       site=(--site "$TMC_SITE_URL")
                   fi
 
+                  # The bucket's copy when there is one — it is where the
+                  # static manifest points too — else the GitHub release.
+                  base="${S3_BASE_URL:-https://github.com/${{ github.repository }}/releases/download/${TAG}}"
+
                   node scripts/publish-release.mjs \
                       --dir artifacts \
                       --version "${TAG#v}" \
-                      --base-url "https://github.com/${{ github.repository }}/releases/download/${TAG}" \
+                      --base-url "$base" \
                       "${site[@]}" \
                       --promote

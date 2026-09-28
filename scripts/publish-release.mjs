@@ -30,6 +30,8 @@
 import fs from 'node:fs'
 import path from 'node:path'
 
+import { classify } from './release-targets.mjs'
+
 const argv = process.argv.slice(2)
 const flag = (name, fallback = '') => {
     const i = argv.indexOf(`--${name}`)
@@ -49,63 +51,6 @@ const TOKEN = (process.env.TMC_RELEASE_TOKEN ?? '').trim()
 function die(message) {
     console.error(`\n${message}\n`)
     process.exit(1)
-}
-
-/**
- * Filename → update target.
- *
- * Ordered, and the order matters twice. `.app.tar.gz` is tested before the
- * generic archive rules because it IS a tarball; and NSIS is preferred over the
- * MSI for Windows because the `.exe` setup is the recommended download — the
- * MSI does not bootstrap the WebView2 runtime, since wixl has no launch
- * conditions and cannot even warn (see docs/BUILDING.md).
- *
- * The architecture tests are deliberately loose: Tauri spells the same
- * architecture `amd64`, `x86_64` and `x64` depending on which bundler produced
- * the file, and a rule that knew only one of those would silently skip a
- * platform.
- */
-const RULES = [
-    {
-        target: 'DARWIN_UNIVERSAL',
-        rank: 0,
-        test: (n) => n.endsWith('.app.tar.gz'),
-    },
-    {
-        target: 'LINUX_AARCH64',
-        rank: 0,
-        test: (n) => n.endsWith('.AppImage') && /aarch64|arm64/i.test(n),
-    },
-    {
-        target: 'LINUX_X86_64',
-        rank: 0,
-        test: (n) => n.endsWith('.AppImage') && /amd64|x86_64|x64/i.test(n),
-    },
-    {
-        target: 'WINDOWS_AARCH64',
-        rank: 0,
-        test: (n) => n.endsWith('-setup.exe') && /aarch64|arm64/i.test(n),
-    },
-    {
-        target: 'WINDOWS_X86_64',
-        rank: 0,
-        test: (n) => n.endsWith('-setup.exe') && /x64|x86_64|amd64/i.test(n),
-    },
-    // The MSI is the fallback for each Windows target, never the first choice.
-    {
-        target: 'WINDOWS_AARCH64',
-        rank: 1,
-        test: (n) => n.endsWith('.msi') && /aarch64|arm64/i.test(n),
-    },
-    {
-        target: 'WINDOWS_X86_64',
-        rank: 1,
-        test: (n) => n.endsWith('.msi') && /x64|x86_64|amd64/i.test(n),
-    },
-]
-
-function classify(name) {
-    return RULES.find((rule) => rule.test(name)) ?? null
 }
 
 async function main() {
@@ -154,7 +99,9 @@ async function main() {
         const existing = chosen.get(rule.target)
 
         if (existing && existing.rank <= rule.rank) {
-            console.log(`skip   ${artifact} (${rule.target} already has a better artifact)`)
+            console.log(
+                `skip   ${artifact} (${rule.target} already has a better artifact)`
+            )
             continue
         }
 

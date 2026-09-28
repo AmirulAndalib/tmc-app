@@ -24,7 +24,7 @@ export default defineConfig(() => ({
      * pins the markup in place, and this app's markup is still moving.
      */
     test: {
-        include: ['src/**/*.test.ts'],
+        include: ['src/**/*.test.ts', 'scripts/**/*.test.mjs'],
         environment: 'node',
     },
 

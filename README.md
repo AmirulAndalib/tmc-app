@@ -15,6 +15,11 @@ The **official** [TMC App](https://moddingcommunity.com/tmc-app), built with [Ta
 - **Join from a link**: A `tmc://play/<host>:<port>` link from the website opens the app on that server — showing which game is running there and the latency measured from *your* machine — with the ways you can actually join it. It never joins on its own.
 - **Find fun games or servers**: Our gaming platform relies on third-party communities creating games and servers. Browse these games and servers right through our app and connect to them with one click!
 - **Assets**: Automatically download and install game assets onto servers where the game supports it (integrated games only).
+- **Game pages**: Every game has its own page — play it, see its busiest servers, and browse its **leaderboards** for any stat its servers record, with your own rank and figures beside them.
+- **Friends & parties**: Your friends list with who is online and which game and server they are on (one click to their server), friend requests, "Add friend" on any profile, party invites, and the party you are in — the same friends and parties the games themselves show.
+
+### Staying Up To Date
+- **Automatic updates**: The app checks for a new version on launch and installs it itself — every update is signature-checked against a key built into the app before anything is replaced. Pick the **Stable** or **Beta** channel, or press **Check for updates**, under Settings → App → Updates. Administrators can point the updater at a different source and key there too. See [`docs/RELEASING.md`](docs/RELEASING.md).
 
 ## Device Support
 | Platform | Status |
@@ -68,8 +73,9 @@ npm run build:windows    # portable exe, .exe setup and .msi — FROM LINUX
 The Windows build cross-compiles: `cargo-xwin` for the compile, `makensis` for
 the setup, `wixl` for the MSI. macOS is the one target that genuinely needs its
 own machine, and comes from CI. [`docs/BUILDING.md`](docs/BUILDING.md) has the
-prerequisites, the caveats (unsigned binaries, WebView2 in the MSI) and the
-release process.
+prerequisites and the caveats (unsigned binaries, WebView2 in the MSI);
+[`docs/RELEASING.md`](docs/RELEASING.md) has the release process, the S3
+downloads bucket and the updater's signing key.
 
 ## Contributing Plugins
 A plugin is a folder with a `plugin.json` in it. See `examples/plugins/` for a
