@@ -12,6 +12,7 @@ import {
     FiDownloadCloud,
     FiLayers,
     FiTerminal,
+    FiUsers,
 } from 'react-icons/fi'
 import type { IconType } from 'react-icons'
 
@@ -79,6 +80,15 @@ const TABS: Tab[] = [
         to: '/apps',
         label: 'Apps',
         icon: FiGrid,
+    },
+    {
+        // Friends, their presence and the party you are in — the same routes a
+        // Dot game's own friends panel speaks, so the two agree. Rail only: the
+        // bottom bar is already at the count where labels stop being legible.
+        to: '/friends',
+        label: 'Friends',
+        icon: FiUsers,
+        compact: false,
     },
     { to: '/browse/mod', label: 'Mods', icon: FiPackage, match: ['/view/mod'] },
     { to: '/browse/asset', label: 'Assets', icon: FiBox, match: ['/view/asset'] },

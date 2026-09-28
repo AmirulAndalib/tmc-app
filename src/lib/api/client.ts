@@ -28,6 +28,17 @@ import {
     type SubKindT,
     type UserSettingsT,
 } from './contract'
+import {
+    FriendListSchema,
+    FriendRequestSentSchema,
+    FriendRequestsSchema,
+    NothingSchema,
+    PartyInvitesSchema,
+    PartyLeaveSchema,
+    PartyMineSchema,
+    StatsMeSchema,
+    StatsTopSchema,
+} from './social'
 
 /**
  * The website API, as the app sees it.
@@ -352,4 +363,55 @@ export const api = {
             itemId,
             ...patch,
         }),
+
+    // ------------------------------------------------ Friends, parties, stats
+    /*
+     * The game backbone's player routes (website-city `docs/api/app-social.md`).
+     * Every one is signed-in only, and every one accepts the device token Rust
+     * holds — so the webview still never sees a credential, and a game running
+     * in the web player and this app share the site's rate-limit buckets rather
+     * than each getting their own.
+     *
+     * Schemas are in `./social`, not the contract: see that file's header.
+     */
+
+    friends: () => get('/friends', FriendListSchema, undefined, true),
+
+    friendRequests: () =>
+        get('/friends/requests', FriendRequestsSchema, undefined, true),
+
+    /** Asking somebody who already asked you accepts them — the site's rule. */
+    friendRequest: (userId: string) =>
+        send('POST', '/friends/request', FriendRequestSentSchema, { userId }),
+
+    friendRespond: (requestId: number, accept: boolean) =>
+        send('POST', '/friends/respond', NothingSchema, { requestId, accept }),
+
+    friendCancel: (requestId: number) =>
+        send('POST', '/friends/cancel', NothingSchema, { requestId }),
+
+    friendRemove: (userId: string) =>
+        send('POST', '/friends/remove', NothingSchema, { userId }),
+
+    /** The caller's party, or null. */
+    partyMine: () => get('/party/mine', PartyMineSchema, undefined, true),
+
+    partyInvites: () => get('/party/invites', PartyInvitesSchema, undefined, true),
+
+    /** Accepting also JOINS, so capacity and bans still decide. */
+    partyInviteRespond: (inviteId: string, accept: boolean) =>
+        send('POST', '/party/invite/respond', NothingSchema, { inviteId, accept }),
+
+    partyLeave: (id: string) =>
+        send('POST', '/party/leave', PartyLeaveSchema, { id }),
+
+    /**
+     * One stat of one game as a ranking, with the signed-in member's own row.
+     * Signed-in only: `self` is derived from the member's app-scoped key.
+     */
+    statsTop: (app: number, stat: string, limit = 25, offset = 0) =>
+        get('/stats/top', StatsTopSchema, { app, stat, limit, offset }, true),
+
+    /** Every value the signed-in member holds in one game. */
+    statsMe: (app: number) => get('/stats/me', StatsMeSchema, { app }, true),
 }

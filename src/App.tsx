@@ -12,6 +12,8 @@ import { DownloadsProvider } from '~/lib/downloads/provider'
 import Shell from '~/components/shell'
 import DropImport from '~/components/drop-import'
 import AppsRoute from '~/routes/apps'
+import GameRoute from '~/routes/game'
+import FriendsRoute from '~/routes/friends'
 import BrowseRoute from '~/routes/browse'
 import JoinRoute from '~/routes/join'
 import LibraryRoute from '~/routes/library'
@@ -43,6 +45,8 @@ const router = createHashRouter([
         children: [
             { index: true, element: <Navigate to="/apps" replace /> },
             { path: 'apps', element: <AppsRoute /> },
+            { path: 'apps/:id', element: <GameRoute /> },
+            { path: 'friends', element: <FriendsRoute /> },
             { path: 'browse/:kind', element: <BrowseRoute /> },
             { path: 'view/:kind/:id', element: <ViewRoute /> },
             { path: 'join', element: <JoinRoute /> },

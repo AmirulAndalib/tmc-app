@@ -32,6 +32,7 @@ import SubscribeButton from '~/components/subscribe-button'
 import Dependencies from '~/components/dependencies'
 import Gallery from '~/components/gallery'
 import ReportButton from '~/components/report-button'
+import AddFriendButton from '~/components/add-friend-button'
 import Reviews from '~/components/reviews'
 
 /**
@@ -469,7 +470,10 @@ export default function ViewRoute() {
                     <Reviews kind={summary.kind} id={Number(summary.id)} />
                 )}
 
-                <div className="flex justify-end">
+                <div className="flex items-start justify-end gap-2">
+                    {summary.kind === 'user' && (
+                        <AddFriendButton userId={summary.id} />
+                    )}
                     <ReportButton
                         kind={summary.kind}
                         id={summary.id}
