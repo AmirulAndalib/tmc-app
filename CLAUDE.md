@@ -1299,6 +1299,23 @@ and report a connection error for a connection nobody asked for. Dropping the
 pair starts the game at its own menu, which is what "launch with no server"
 means.
 
+**A Godot export reads its game's arguments only after a bare `--`.** Its
+`OS.get_cmdline_user_args()` is everything after the separator, and the engine
+silently ignores an argument it does not recognise — so `tmc.x86_64 --connect
+host:port` starts, draws its menu and joins nothing. The template
+`dot-server-deploy`'s `./server export-native` publishes is
+`["--", "--connect", "{host}:{port}"]`, and `build::is_separator` is why the
+separator is never popped as if it were the flag a missing value belonged to.
+`games::tests::real_godot_export_receives_the_server_through_the_plan` runs a
+real export through `plan` (ignored by default; set `TMC_GODOT_BUILD_DIR` to an
+unpacked `tmc-linux-x64.zip`) and checks the address reached the game.
+
+**A release Godot export block-buffers stdout into a pipe**, so a game stopped
+by a signal — including `Sessions::stop`'s SIGKILL — loses whatever it printed
+since the last 4 KB. That is the game's setting to change
+(`application/run/flush_stdout_on_print`), not something the launcher can fix
+from outside; the test above wraps the plan in `stdbuf -oL` for the same reason.
+
 ## Updating the app
 
 Two halves, and which one a build has depends on one compile-time value.
@@ -2731,13 +2748,14 @@ Honest list, so nothing here reads as finished when it is not:
 - **Writes.** The app is read-only against the API for publishing — no
   commenting or uploading. Reviews, review votes, reports, subscriptions,
   sandboxes and play-time reports DO write.
-- **Native builds to actually install.** The whole path exists on both sides —
+- **Native builds, published.** The whole path exists on both sides —
   `AppNativeBuild`, `/apps/:id/build`, the installer, the updater and the
-  Library view — and nothing has published a row yet, because
-  `dot-server-deploy/export_presets.cfg` has only a `Web` preset. Until a
-  desktop preset exists and `scripts/publish-native-build.ts` has been run
-  against its output, the TMC Games tab correctly says there is nothing
-  published for this machine.
+  Library view — and `dot-server-deploy`'s `./server export-native` now builds
+  the Linux, Windows and macOS clients and prints the publishing command. Until
+  somebody runs `scripts/publish-native-build.ts` against that output (with
+  `--args "--,--connect,{host}:{port}"` — the separator matters, see "The
+  launch arguments are a vector"), the TMC Games tab correctly says there is
+  nothing published for this machine.
 - **A measurable virtual launch.** A USVFS launch is recorded as a
   `SessionKind::Handoff` — not because nothing of ours started it, but because
   `inject::launch` does not return the process handle, so there is no exit to

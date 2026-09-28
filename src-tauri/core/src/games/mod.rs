@@ -791,6 +791,140 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// A REAL Godot export, started through this module's own plan.
+    ///
+    /// Ignored by default because it needs a build on disk; run it with
+    ///
+    /// ```text
+    /// TMC_GODOT_BUILD_DIR=/path/to/unpacked/linux-x64 \
+    ///   cargo test -p tmc-core real_godot_export -- --ignored --nocapture
+    /// ```
+    ///
+    /// pointing at an unpacked `dot-server-deploy` `tmc-linux-x64.zip`. The
+    /// template is the one `./server export-native` publishes, with `--headless`
+    /// in front so it runs on a box with no display. Nothing listens on the
+    /// port: what is being proven is that the ADDRESS reached the game through
+    /// `OS.get_cmdline_user_args()`, which it only does after the separator.
+    ///
+    /// The process is stopped with SIGINT rather than SIGKILL because an export
+    /// block-buffers stdout into a pipe, and Godot flushes it on the way out of
+    /// an interrupt — a killed one takes its whole log with it.
+    #[cfg(unix)]
+    #[test]
+    #[ignore = "needs a Godot export on disk: set TMC_GODOT_BUILD_DIR"]
+    fn real_godot_export_receives_the_server_through_the_plan() {
+        use std::io::Read;
+        use std::process::{Command, Stdio};
+        use std::time::{Duration, Instant};
+
+        let Ok(dir) = std::env::var("TMC_GODOT_BUILD_DIR") else {
+            eprintln!("TMC_GODOT_BUILD_DIR is not set; nothing to launch");
+            return;
+        };
+        let entry = std::env::var("TMC_GODOT_BUILD_ENTRY").unwrap_or_else(|_| "tmc.x86_64".into());
+
+        let row = InstalledGame {
+            app_id: 1,
+            slug: Some("godot".into()),
+            name: "TMC".into(),
+            platform: "LINUX_X64".into(),
+            version: "0.0.0".into(),
+            dir,
+            entry: Some(entry),
+            args: vec![
+                "--headless".into(),
+                "--".into(),
+                "--connect".into(),
+                "{host}:{port}".into(),
+            ],
+            size_bytes: 1,
+            installed_ms: 0,
+            updated_ms: 0,
+            auto_update: false,
+        };
+
+        let launch = plan(
+            &row,
+            &LaunchContext {
+                app_id: 1,
+                host: Some("127.0.0.1".into()),
+                port: Some(6099),
+                ..Default::default()
+            },
+        )
+        .expect("plan");
+
+        assert_eq!(
+            launch.args,
+            vec!["--headless", "--", "--connect", "127.0.0.1:6099"]
+        );
+
+        /*
+         * `stdbuf -oL` in front, and ONLY in this test. A release export
+         * block-buffers stdout into a pipe (`flush_stdout_on_print` is off
+         * outside debug builds), and a process stopped by a signal takes the
+         * unflushed buffer with it — so without it this reads nothing at all,
+         * whatever the game did. The program and arguments after it are the
+         * plan's, untouched.
+         */
+        let program = launch.program.as_deref().expect("a process launch");
+        let mut command = if Command::new("stdbuf").arg("--version").output().is_ok() {
+            let mut c = Command::new("stdbuf");
+            c.args(["-oL", "-eL", program]);
+            c
+        } else {
+            Command::new(program)
+        };
+
+        let mut child = command
+            .args(&launch.args)
+            .current_dir(launch.cwd.as_deref().expect("a working directory"))
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("the export starts");
+
+        // Long enough to boot, read its arguments and try the address; the
+        // shell then sits at its menu forever, which is why this is bounded.
+        let started = Instant::now();
+        while started.elapsed() < Duration::from_secs(8) {
+            if child.try_wait().expect("wait").is_some() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+
+        // SAFETY: the child has not been reaped (no `wait` has returned), so
+        // its pid is still ours.
+        unsafe {
+            libc::kill(child.id() as libc::pid_t, libc::SIGINT);
+        }
+
+        let mut output = String::new();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while child.try_wait().expect("wait").is_none() {
+            if Instant::now() > deadline {
+                let _ = child.kill();
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        let _ = child.wait();
+        if let Some(mut out) = child.stdout.take() {
+            let _ = out.read_to_string(&mut output);
+        }
+        if let Some(mut err) = child.stderr.take() {
+            let _ = err.read_to_string(&mut output);
+        }
+
+        eprintln!("{output}");
+        assert!(
+            output.contains("connecting address=127.0.0.1:6099"),
+            "the export never tried the address it was launched with"
+        );
+    }
+
     #[test]
     fn a_launch_plan_names_the_executable_and_joins_a_server() {
         let root = temp("plan");
