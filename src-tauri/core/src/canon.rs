@@ -112,10 +112,11 @@ pub fn strip_verbatim(text: &str) -> Option<String> {
     let plain = if let Some(rest) = text.strip_prefix(VERBATIM_UNC) {
         // `\\?\UNC\server\share\…` → `\\server\share\…`
         format!(r"\\{rest}")
-    } else if let Some(rest) = text.strip_prefix(VERBATIM) {
+    } else {
         // `\\?\F:\…` → `F:\…`. A drive letter and nothing else: everything
         // else after the prefix is a volume GUID or a device path, neither of
-        // which has a shorter spelling.
+        // which has a shorter spelling. No verbatim prefix at all is `None`.
+        let rest = text.strip_prefix(VERBATIM)?;
         let mut chars = rest.chars();
 
         if !chars.next()?.is_ascii_alphabetic() || chars.next()? != ':' {
@@ -126,8 +127,6 @@ pub fn strip_verbatim(text: &str) -> Option<String> {
             Some('\\') | None => rest.to_string(),
             _ => return None,
         }
-    } else {
-        return None;
     };
 
     if plain.len() >= MAX_PATH {

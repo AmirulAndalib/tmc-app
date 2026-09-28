@@ -21,6 +21,16 @@ permissions:
     contents: write
     packages: read
 
+# ONE Rust toolchain for CI and releases, pinned rather than `stable`.
+#
+# A new stable ships new clippy lints, and `-D warnings` turns each into an
+# error — so an unpinned toolchain can fail a release tag on code that passed
+# review the day before (1.98's `question_mark` did exactly that). Bumping is a
+# one-line change here AND in the other workflow, made on a branch, so the new
+# lints fail a pull request first rather than a tag.
+env:
+    RUST_TOOLCHAIN: '1.98'
+
 jobs:
     build:
         strategy:
@@ -52,8 +62,9 @@ jobs:
                   registry-url: https://npm.pkg.github.com
                   scope: '@modcommunity'
 
-            - uses: dtolnay/rust-toolchain@stable
+            - uses: dtolnay/rust-toolchain@master
               with:
+                  toolchain: ${{ env.RUST_TOOLCHAIN }}
                   targets: ${{ matrix.name == 'macos' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
 
             - uses: Swatinem/rust-cache@v2
