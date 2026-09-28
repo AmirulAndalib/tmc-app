@@ -204,7 +204,15 @@ pub fn build_args(template: &[String], ctx: &LaunchContext) -> Vec<String> {
     let mut out: Vec<String> = Vec::with_capacity(template.len());
 
     for element in template {
-        match substitute(element, ctx) {
+        /*
+         * A separator only ever comes from the template. A substituted value
+         * that IS one (`{opt:x}` = `--`, a locale of `++`) would move where
+         * the engine's arguments end, so it counts as no value at all.
+         */
+        let value = substitute(element, ctx)
+            .filter(|v| is_separator(element) || !is_separator(v));
+
+        match value {
             Some(value) => out.push(value),
             None => {
                 /*
@@ -397,6 +405,29 @@ mod tests {
         );
         assert!(is_separator("--") && is_separator("++"));
         assert!(!is_separator("--connect") && !is_separator("-"));
+    }
+
+    #[test]
+    fn a_substituted_value_can_never_become_a_separator() {
+        let mut c = ctx();
+        c.options.insert("name".into(), "--".into());
+        c.locale = Some("++".into());
+
+        assert_eq!(
+            build_args(
+                &[
+                    "--lang".into(),
+                    "{locale}".into(),
+                    "--".into(),
+                    "--name".into(),
+                    "{opt:name}".into(),
+                    "--x".into(),
+                    "a{opt:name}".into(),
+                ],
+                &c,
+            ),
+            vec!["--", "--x", "a--"]
+        );
     }
 
     #[test]
