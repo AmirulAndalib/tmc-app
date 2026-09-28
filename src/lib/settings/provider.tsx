@@ -37,7 +37,12 @@ type SettingsContextT = {
     /** True while the account's settings are being fetched or are unavailable. */
     userPending: boolean
     setApp: (
-        patch: Partial<Omit<AppSettingsT, 'gameDirs' | 'downloadDir'>>
+        patch: Partial<
+            Omit<
+                AppSettingsT,
+                'gameDirs' | 'downloadDir' | 'updaterEndpoint' | 'updaterPubkey'
+            >
+        >
     ) => Promise<void>
     setUser: (patch: Partial<UserSettingsT>) => Promise<void>
     resetApp: () => Promise<void>
@@ -91,7 +96,14 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     })
 
     const setApp = useCallback(
-        async (patch: Partial<Omit<AppSettingsT, 'gameDirs' | 'downloadDir'>>) => {
+        async (
+            patch: Partial<
+                Omit<
+                    AppSettingsT,
+                    'gameDirs' | 'downloadDir' | 'updaterEndpoint' | 'updaterPubkey'
+                >
+            >
+        ) => {
             setAppState(await ipc.settingsPatch(patch))
         },
         []

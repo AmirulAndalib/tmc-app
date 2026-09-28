@@ -36,3 +36,7 @@ src-tauri/gen/apple
 *.p12
 *.mobileprovision
 .tauri/
+
+# The updater signing keypair (`npx tauri signer generate`). The PRIVATE half
+# and its password go into GitHub secrets and nowhere else; see docs/RELEASING.md.
+.secrets/

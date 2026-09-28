@@ -61,6 +61,7 @@ import {
     PluginRecordSchema,
     TrustedKeySchema,
     UpdateCheckSchema,
+    UpdaterStatusSchema,
     PollOutcomeSchema,
     QueryOutcomeSchema,
     RunReportSchema,
@@ -129,7 +130,12 @@ export const ipc = {
      * that so the refusal is a compile error rather than a runtime one.
      */
     settingsPatch: (
-        patch: Partial<Omit<AppSettingsT, 'gameDirs' | 'downloadDir'>>
+        patch: Partial<
+            Omit<
+                AppSettingsT,
+                'gameDirs' | 'downloadDir' | 'updaterEndpoint' | 'updaterPubkey'
+            >
+        >
     ) => call('settings_patch', AppSettingsSchema, { patch }),
 
     /**
@@ -208,10 +214,10 @@ export const ipc = {
         call('plugin_inspect', PluginPreviewSchema, { dir }),
 
     /**
-     * Ask the site whether this build is out of date.
+     * Ask whether this build is out of date: the updater's manifest when a
+     * signing key is configured, else the site's `/version`.
      *
-     * Answers with a version and a link, never with an artifact: the app does
-     * not update itself. See `commands/api.rs`.
+     * Reports and installs nothing. See `commands/api.rs`.
      */
     updateCheck: () => call('update_check', UpdateCheckSchema),
 
@@ -228,6 +234,17 @@ export const ipc = {
      * close their app is not this command's call.
      */
     updateInstall: () => call('update_install', UpdateCheckSchema),
+
+    /** Where updates come from, which key they need, and whether this build can install. */
+    updaterStatus: () => call('updater_status', UpdaterStatusSchema),
+
+    /**
+     * Override the update endpoint and/or public key; `null` or `''` clears
+     * either back to the built-in one. Validated and Security-audited in Rust —
+     * this chooses what the app installs over itself.
+     */
+    updaterSetSource: (endpoint: string | null, pubkey: string | null) =>
+        call('updater_set_source', UpdaterStatusSchema, { endpoint, pubkey }),
 
     /** Every publishing key the user trusts. */
     pluginTrustedKeys: () => call('plugin_trusted_keys', z.array(TrustedKeySchema)),

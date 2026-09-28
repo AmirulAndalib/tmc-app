@@ -62,41 +62,26 @@ pub fn run() {
     let builder = builder.plugin(tauri_plugin_deep_link::init());
 
     /*
-     * SELF-UPDATING, AND THE ONE CONDITION IT IS GATED ON.
+     * SELF-UPDATING. The plugin is ALWAYS registered on desktop; whether an
+     * update can be INSTALLED is decided per call.
      *
      * The plugin's entire security model is that it verifies a minisign
-     * signature against a public key before it installs anything. That key is
-     * compiled in from `TMC_UPDATER_PUBKEY` and the private half lives only in
-     * the release pipeline, so a build made without one has no way to tell a
-     * real update from an attacker's — and the right behaviour for such a build
-     * is to have NO updater, not an updater that trusts what it downloads.
+     * signature against a public key before it installs anything. Which key,
+     * and which endpoint, are resolved on every check by
+     * `tmc_core::updater::resolve` — the Settings override, else the key and
+     * endpoint compiled in (`TMC_UPDATER_PUBKEY`, which `build.rs` fills from
+     * `updater.pub`, and `TMC_UPDATER_ENDPOINT`), else no key at all — and
+     * handed to `updater_builder().pubkey(..)` there. A build with no key
+     * anywhere refuses to install rather than trusting what it downloads, and
+     * says so in Settings; it never crashes and never checks unsigned.
      *
-     * Hence `option_env!` and not a default: there is no placeholder key,
-     * because a placeholder is a key nobody holds the other half of, and the
-     * failure it produces (every update refused, after the download) is one
-     * nobody can diagnose from the outside. With no key the app keeps exactly
-     * the behaviour it had before this existed — it checks, and offers the
-     * download page in a browser.
-     *
-     * `tauri.conf.json` carries an EMPTY `plugins.updater` block, which the
-     * compiled-in key overrides. It is there because the plugin's own config
-     * requires a `pubkey` field to deserialise at all; it is empty because a
-     * placeholder is a key nobody holds the other half of.
+     * Registering unconditionally is what lets a key supplied at RUNTIME work:
+     * `updater_builder()` reads the plugin's managed state and panics without
+     * it. `tauri.conf.json` carries an empty `plugins.updater` block because the
+     * plugin's config needs a `pubkey` field to deserialise; nothing reads it.
      */
     #[cfg(desktop)]
-    let builder = match option_env!("TMC_UPDATER_PUBKEY").map(str::trim) {
-        Some(pubkey) if !pubkey.is_empty() => builder.plugin(
-            /*
-             * Only the key is set here. The ENDPOINT is supplied per call in
-             * `commands::api::update_install`, because it is built from
-             * `api_base()` and this registration happens once for the life of
-             * a binary that may be pointed at a different site than the one
-             * `tauri.conf.json` could have named.
-             */
-            tauri_plugin_updater::Builder::new().pubkey(pubkey).build(),
-        ),
-        _ => builder,
-    };
+    let builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
 
     builder
         .setup(|app| {
@@ -294,6 +279,8 @@ pub fn run() {
             commands::api::update_check,
             #[cfg(desktop)]
             commands::api::update_install,
+            commands::api::updater_status,
+            commands::api::updater_set_source,
             commands::settings::settings_get,
             commands::settings::settings_patch,
             commands::settings::settings_set_game_dir,
