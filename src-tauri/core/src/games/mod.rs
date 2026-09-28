@@ -888,17 +888,24 @@ mod tests {
         // Long enough to boot, read its arguments and try the address; the
         // shell then sits at its menu forever, which is why this is bounded.
         let started = Instant::now();
+        let mut exited = false;
         while started.elapsed() < Duration::from_secs(8) {
             if child.try_wait().expect("wait").is_some() {
+                exited = true;
                 break;
             }
             std::thread::sleep(Duration::from_millis(100));
         }
 
-        // SAFETY: the child has not been reaped (no `wait` has returned), so
-        // its pid is still ours.
-        unsafe {
-            libc::kill(child.id() as libc::pid_t, libc::SIGINT);
+        // Only a child that is still running is signalled: once `try_wait`
+        // has returned `Some` it is reaped and its pid may belong to
+        // something else.
+        if !exited {
+            // SAFETY: `try_wait` last returned `None`, so the child is unreaped
+            // and its pid is still ours.
+            unsafe {
+                libc::kill(child.id() as libc::pid_t, libc::SIGINT);
+            }
         }
 
         let mut output = String::new();

@@ -3,9 +3,12 @@
 #
 # This is the ONLY path that produces a macOS build. Windows and Linux both
 # cross-build from a Linux box (`scripts/build-windows.sh`), and that is the
-# fast local loop — but macOS needs the Apple SDK, and a .app that has not been
-# signed and notarised on a real macOS runner is one Gatekeeper refuses to open
-# without a right-click dance. See docs/BUILDING.md.
+# fast local loop — but macOS needs the Apple SDK and a real macOS runner.
+#
+# THE macOS BUILD IS UNSIGNED AND NOT NOTARISED: no APPLE_* secrets are passed
+# to `tauri build` below, so Gatekeeper refuses to open it without a
+# right-click → Open. Code signing and notarisation arrive when the APPLE_*
+# signing secrets are added to the Build step. See docs/BUILDING.md.
 name: release
 
 on:
