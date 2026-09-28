@@ -5,7 +5,11 @@ git tag v0.3.0 && git push origin v0.3.0        # a release
 git tag v0.4.0-beta.1 && git push origin v0.4.0-beta.1   # a beta
 ```
 
-That is the whole ceremony once the secrets below exist.
+Bump `version` in `src-tauri/tauri.conf.json` (and `package.json`,
+`src-tauri/Cargo.toml`) to match first and tag that commit: the workflow
+refuses a tag that differs, because a manifest newer than the binary it points
+at is an update every installed app takes again on every check. Beyond that,
+this is the whole ceremony once the secrets below exist.
 `.github/workflows/release.yml` then:
 
 1. **Builds and signs** on Linux (AppImage, deb), Windows (NSIS setup, MSI,
@@ -162,6 +166,9 @@ WebView2. The manifest writes `{os}-{arch}` for the preferred file and
 **A rollback** is re-uploading the previous version's `latest.json` over
 `downloads/tmc-app/latest.json` (it is kept in that version's directory), and,
 if the site is used, re-publishing it with `--promote`.
+That stops the bad version reaching anybody else; it does not take back
+those who already installed it, since the updater never offers an older
+version. Undoing it for them is a new, higher version.
 
 ## The Rust toolchain is pinned
 
