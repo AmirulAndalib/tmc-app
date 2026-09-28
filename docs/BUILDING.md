@@ -122,11 +122,12 @@ variables (`APPLE_CERTIFICATE`, `APPLE_ID`, `APPLE_TEAM_ID`, …) do the rest.
 git tag v0.2.0 && git push origin v0.2.0
 ```
 
-`.github/workflows/release.yml` builds on all three desktop platforms, collects
-the bundles, writes `checksums.txt`, publishes them to the GitHub release and —
-once the signing key and release token below are configured — publishes the
-release to the website so installed copies of the app update themselves. There
-is no manual step.
+`.github/workflows/release.yml` builds on all three desktop platforms, signs
+the bundles, writes `checksums.txt`, uploads everything plus the updater's
+`latest.json` to the S3 downloads bucket, publishes the GitHub release and —
+with the release token set — tells the website too. Installed copies of the app
+update themselves from the bucket's `latest.json`. There is no manual step; the
+secrets it needs are listed in [`RELEASING.md`](RELEASING.md).
 
 `checksums.txt` is not decoration: `scripts/install.sh` **refuses to install**
 a release that does not have one, so a release published by hand without it is
@@ -137,92 +138,12 @@ falling back to a `PACKAGES_TOKEN` secret (a PAT with `read:packages`) where
 the package does not grant this repository access. That is also the answer to
 "I cannot `npm install` on my own Windows machine": you do not have to.
 
-## The update signing key
+## The update signing key, the downloads bucket and auto-update
 
-The app can install its own updates, and the only thing that makes that safe is
-a signature it checks against a public key compiled into the binary. **Both
-halves of that key belong to THIS repository.** Nothing about it goes into
-website-city — that side only ever stores the signature string, which is public.
-
-Without a key nothing breaks: the release is built unsigned, the app shows its
-"there is a newer version" banner, and the button opens the download page in a
-browser. With one, the same banner's button installs.
-
-### One-time setup
-
-Generate the pair on a machine you trust. It is never committed:
-
-```bash
-npm run tauri signer generate -- -w ~/.tauri/tmc-updater.key
-```
-
-That writes two files and prints the public key:
-
-| File | Which half | Where it goes |
-| --- | --- | --- |
-| `~/.tauri/tmc-updater.key.pub` | **public** | GitHub → this repo → Settings → Secrets and variables → Actions → **Variables** → `TMC_UPDATER_PUBKEY` |
-| `~/.tauri/tmc-updater.key` | **private** | the same page → **Secrets** → `TAURI_SIGNING_PRIVATE_KEY` |
-| the password you chose | — | **Secrets** → `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` |
-
-Paste the *contents* of each file, not its path. The public one is a variable
-rather than a secret deliberately: it is a public key, and hiding it would only
-mean nobody can read back what a build was signed against.
-
-**Keep the private key.** It is not recoverable, and losing it means every
-installed copy of the app stops accepting updates until its users reinstall by
-hand — a new key cannot sign for the old one.
-
-Building locally still needs nothing. `TMC_UPDATER_PUBKEY` is read through
-`option_env!`, so a developer build simply has no updater.
-
-### Publishing a release so the app will install it
-
-**Nothing to do.** `git push origin v0.2.0` is the whole release: the workflow
-signs each bundle, uploads the artifacts and their `.sig` files to the GitHub
-release, and then posts the lot to the site in one call, which writes every
-platform's row and moves `app.version.latest` in one transaction. Users are
-offered the update from the moment that returns.
-
-That needs one more secret, alongside the signing pair above:
-
-| Name | Kind | Value |
-| --- | --- | --- |
-| `TMC_RELEASE_TOKEN` | **Secret** | the same value as `APP_RELEASE_TOKEN` on the website |
-| `TMC_SITE_URL` | Variable, optional | only for a fork or a staging deployment; defaults to production |
-
-Generate the token once with `openssl rand -hex 32`, put it in the website's
-environment as `APP_RELEASE_TOKEN`, and in this repository as
-`TMC_RELEASE_TOKEN`. With it unset the release still builds and publishes to
-GitHub — the job warns and skips this step, because a release that was cut and
-not announced is fixable in a minute while a failed job has to be re-run against
-a tag that already has artifacts on it.
-
-`scripts/publish-release.mjs` is what the job runs, and it works by hand too:
-
-```bash
-TMC_RELEASE_TOKEN=… node scripts/publish-release.mjs \
-  --dir artifacts --version 0.2.0 \
-  --base-url https://github.com/…/releases/download/v0.2.0 \
-  --promote --dry-run
-```
-
-It maps bundle filenames to update targets — that mapping lives here rather than
-in the workflow because the names are this repository's business, and a shell
-glob in YAML is the thing most likely to break quietly when a bundler renames
-its output. `--dry-run` prints what it would send.
-
-Two details it encodes:
-
-  * **macOS ships the `.app.tar.gz`, not the `.dmg`.** A disk image is something
-    a person mounts, not something an updater unpacks over a running app.
-  * **Windows prefers the `-setup.exe` over the `.msi`.** The MSI does not
-    bootstrap the WebView2 runtime — wixl has no launch conditions, so it cannot
-    even warn — which is why the `.exe` is the recommended download.
-
-`--promote` is what moves `app.version.latest`, and that setting is what offers
-the release to anybody. The workflow sends it in the same request as the
-artifacts, so there is no window where it names a version some machines have no
-build for. A rollback is re-publishing the previous version with `--promote`.
+Moved to [`RELEASING.md`](RELEASING.md): the signing keypair (the public half is
+`src-tauri/updater.pub`, compiled into every build), the GitHub secrets and
+variables the release workflow reads, the S3 downloads bucket and its
+`latest.json`, and the in-app updater settings.
 
 ## Installing
 

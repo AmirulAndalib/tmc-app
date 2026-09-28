@@ -1,0 +1,172 @@
+# Releasing TMC, and how it updates itself
+
+```bash
+git tag v0.3.0 && git push origin v0.3.0        # a release
+git tag v0.4.0-beta.1 && git push origin v0.4.0-beta.1   # a beta
+```
+
+That is the whole ceremony once the secrets below exist.
+`.github/workflows/release.yml` then:
+
+1. **Builds and signs** on Linux (AppImage, deb), Windows (NSIS setup, MSI,
+   portable exe) and macOS (universal `.app` + `.dmg`). With
+   `TAURI_SIGNING_PRIVATE_KEY` set it turns on `createUpdaterArtifacts`, so
+   every updatable bundle gets a `.sig`, and then runs
+   `scripts/verify-updater-signature.mjs`, which **fails the job** if those
+   signatures do not verify against the public key the app is compiled with.
+2. **Uploads to the downloads bucket**: every file under
+   `downloads/tmc-app/<version>/` (immutable cache headers), plus that
+   version's `latest.json`; then — last, because they are the switch —
+   `downloads/tmc-app/latest-beta.json` and, for a non-pre-release tag,
+   `downloads/tmc-app/latest.json` (`no-cache`).
+3. **Publishes the GitHub release** with the same files (pre-release tags are
+   marked as such), which `scripts/install.sh` and the README links use.
+4. **Tells the site** (`POST /api/app/v1/releases`) when `TMC_RELEASE_TOKEN` is
+   set, with the bucket's URLs. Optional — see below.
+
+Each optional step that is not configured is a **warning, not a failure**: an
+unsigned release is still downloadable, and a release with no bucket still
+lands on GitHub.
+
+## Where the app looks for updates
+
+`tmc_core::updater::resolve` decides, on every check, from three places:
+
+| Input | Settings override | Compiled into the build | Last resort |
+| --- | --- | --- | --- |
+| endpoint | Settings → App → Updates → *Update source* | `TMC_UPDATER_ENDPOINT` — the release workflow sets it to `<S3_PUBLIC_URL>/downloads/tmc-app/latest.json` | the site's `/api/app/v1/update/{{target}}/{{arch}}/{{current_version}}` |
+| public key | the same form | `src-tauri/updater.pub` (or `TMC_UPDATER_PUBKEY` in the build environment) | **none: the app cannot install, and says so** |
+
+The **beta** channel (Settings → App → Updates → Channel) reads
+`latest-beta.json` instead of `latest.json`; an endpoint containing
+`{{channel}}` gets `stable`/`beta` substituted instead.
+
+`update_check` asks the updater's endpoint first (fetching the manifest only),
+and falls back to the site's `/version` when there is no key or the endpoint
+cannot be reached — so the "newer version" banner works on every build, and its
+button installs whenever a key is configured.
+
+### The public key is in the repository
+
+`src-tauri/updater.pub` is the public half of the release key and
+`src-tauri/build.rs` compiles it into **every** build, a developer's included.
+It is public by definition; the private half exists only in GitHub secrets and
+on the machine of whoever generated it. A fork that signs its own releases sets
+the `TMC_UPDATER_PUBKEY` repository variable (or replaces the file) — the
+environment wins over the file.
+
+`scripts/fixtures/signed.txt.sig` was signed with the private key, and
+`scripts/verify-updater-signature.test.mjs` checks it against `updater.pub` on
+every `npm run check`, so the two halves provably match.
+
+### The overrides, and what they cost
+
+Settings → App → Updates → **Update source (administrators)** takes an endpoint
+and a public key. They exist so a staging bucket, a fork or a rotated key can be
+tested without a rebuild. The key decides what the app will install over
+itself, so:
+
+- they are **not** part of a settings patch (`settings_patch` refuses
+  `updaterEndpoint`/`updaterPubkey`); they move only through
+  `updater_set_source`, which validates them — HTTPS only, no credentials in the
+  URL, and a key that decodes as a minisign public key;
+- every change is written to the audit log at **Security** level, which cannot
+  be switched off;
+- the section is shown expanded, marked *overridden*, while either is set, and
+  *Use the built-in source* clears both.
+
+With no key compiled in and none set, the app does not crash and does not
+install: Settings says "No update signing key is configured" and the banner
+offers the download page.
+
+## One-time setup
+
+### 1. The signing keypair
+
+Already generated for this repository (2026-09-27) into `.secrets/`, which is
+gitignored:
+
+| File | What it is | Where it goes |
+| --- | --- | --- |
+| `.secrets/tmc-updater.key.pub` | public key | already committed as `src-tauri/updater.pub` |
+| `.secrets/tmc-updater.key` | **private key** | GitHub secret `TAURI_SIGNING_PRIVATE_KEY` (paste the file's contents) |
+| `.secrets/tmc-updater.key.password` | its password | GitHub secret `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` |
+
+**Back up the private key and its password somewhere other than this
+machine** (a password manager). It cannot be recovered, and losing it means
+every installed copy stops accepting updates until its user reinstalls by hand —
+a new key cannot sign for the old one. After it is in GitHub and backed up, the
+`.secrets/` copy can be deleted.
+
+To start over with a new pair (only before the first signed release ships, or
+as a deliberate rotation that strands existing installs):
+
+```bash
+npx tauri signer generate --ci -p "<password>" -w .secrets/tmc-updater.key
+cp .secrets/tmc-updater.key.pub src-tauri/updater.pub
+npx tauri signer sign -f .secrets/tmc-updater.key -p "<password>" scripts/fixtures/signed.txt
+```
+
+### 2. GitHub secrets and variables
+
+GitHub → this repository → Settings → Secrets and variables → Actions.
+
+| Name | Kind | Value | Needed for |
+| --- | --- | --- | --- |
+| `TAURI_SIGNING_PRIVATE_KEY` | Secret | contents of `.secrets/tmc-updater.key` | signed, auto-installable releases |
+| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Secret | contents of `.secrets/tmc-updater.key.password` | the same |
+| `S3_BUCKET` | Secret | website-city's `S3_BUCKET` (the uploads bucket) | the downloads bucket |
+| `S3_REGION` | Secret | website-city's `S3_REGION` | the same |
+| `S3_ACCESS_KEY` | Secret | website-city's `S3_ACCESS_KEY` (or a key scoped to `downloads/tmc-app/*`) | the same |
+| `S3_ACCESS_SECRET` | Secret | website-city's `S3_ACCESS_SECRET` | the same |
+| `S3_ENDPOINT` | Secret, optional | website-city's `S3_ENDPOINT`, for a non-AWS store (R2, B2, MinIO) | the same |
+| `S3_FORCE_PATH_STYLE` | Variable, optional | `true` when website-city sets it (MinIO) | the same |
+| `S3_PUBLIC_URL` | **Variable** | the public base the bucket is served from — website-city's `NEXT_PUBLIC_CDN_URL`, e.g. `https://cdn.moddingcommunity.com` | the updater endpoint compiled into the app, and the URLs in `latest.json` |
+| `TMC_RELEASE_TOKEN` | Secret, optional | the same value as `APP_RELEASE_TOKEN` on the website | announcing the release to the site's `/version` and `/update` routes |
+| `TMC_SITE_URL` | Variable, optional | a staging site | the same |
+| `TMC_UPDATER_PUBKEY` | Variable, optional | a different public key | a fork signing its own releases |
+| `TMC_UPDATER_ENDPOINT` | Variable, optional | a different default manifest URL | overriding the bucket default |
+
+The secret names match website-city's `.env` (`S3_BUCKET`, `S3_REGION`,
+`S3_ACCESS_KEY`, `S3_ACCESS_SECRET`, `S3_ENDPOINT`) so one set of values serves
+both. `S3_PUBLIC_URL` is a variable because it is not secret and it is compiled
+into the app; a secret of that name is accepted too.
+
+The bucket must serve `downloads/tmc-app/*` publicly at `S3_PUBLIC_URL`
+(website-city's uploads are already served that way through the CDN). The
+workflow does not set ACLs, since several S3-compatible stores reject them.
+
+## Doing it by hand
+
+```bash
+# the manifest for a directory of signed artifacts
+node scripts/updater-manifest.mjs --dir artifacts --version 0.3.0 \
+  --base-url https://cdn.example.com/downloads/tmc-app/0.3.0 --out latest.json
+
+# check signatures against the compiled-in key
+node scripts/verify-updater-signature.mjs artifacts
+
+# tell the site (prints what it would send)
+TMC_RELEASE_TOKEN=… node scripts/publish-release.mjs --dir artifacts \
+  --version 0.3.0 --base-url https://cdn.example.com/downloads/tmc-app/0.3.0 \
+  --promote --dry-run
+```
+
+`scripts/release-targets.mjs` is the one table mapping bundle filenames to
+platforms, shared by the manifest and the site publish: macOS ships the
+`.app.tar.gz` (a `.dmg` is mounted, not unpacked over a running app), and
+Windows prefers the NSIS `-setup.exe` over the `.msi`, which does not bootstrap
+WebView2. The manifest writes `{os}-{arch}` for the preferred file and
+`{os}-{arch}-{bundle}` for each, so an MSI install updates from the MSI.
+
+**A rollback** is re-uploading the previous version's `latest.json` over
+`downloads/tmc-app/latest.json` (it is kept in that version's directory), and,
+if the site is used, re-publishing it with `--promote`.
+
+## The Rust toolchain is pinned
+
+Both workflows install `RUST_TOOLCHAIN` (currently `1.98`) instead of floating
+`stable`. A new stable brings new clippy lints and `-D warnings` makes each an
+error, which once failed a release tag on code that had passed review. Bump it
+in `ci.yml` and `release.yml` together, on a branch, so a new lint fails a pull
+request rather than a tag.

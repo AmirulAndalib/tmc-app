@@ -125,6 +125,7 @@ genuinely need a window belongs on that side of the line.
 | `auth.rs` | PKCE, device-grant state, in-memory access token |
 | `secure.rs` | Keychain / Credential Manager / Secret Service, file fallback on mobile. Keyed per API base |
 | `settings.rs` | App-local settings (`settings.json`), clamped on read |
+| `updater.rs` | **Where app updates come from and which key they need.** Override → compiled → fallback |
 | `anchor.rs` | **What a jail anchor may be.** Guards `gameDirs` / `downloadDir` |
 | `canon.rs` | Resolving a path, in the spelling everything else uses. The one door to `canonicalize` |
 | `crypto.rs` | The device key, and what it does and does not buy |
@@ -230,7 +231,8 @@ genuinely need a window belongs on that side of the line.
 | `lib/external.ts` | Which content kinds are handed to the system browser |
 | `components/shell.tsx` | Sidebar ≥768px, bottom tabs below |
 | `components/titlebar.tsx` | The app's own window frame — see "Cross-platform" |
-| `components/update-banner.tsx` | "There is a newer version", and nothing more. Never installs anything |
+| `components/update-banner.tsx` | "There is a newer version", with an Install button when this build can verify one |
+| `components/updater-settings.tsx` | Settings → App → Updates: channel, check now, and the endpoint/key overrides |
 | `components/folder-picker.tsx` | The in-app folder chooser, over `commands/fs.rs` |
 | `components/game-icon.tsx` | A game's artwork, with a deterministic initials fallback |
 | `components/item-thumb.tsx` | An item's cover in a list, from the LOCAL library row |
@@ -1331,93 +1333,76 @@ from outside; the test above wraps the plan in `stdbuf -oL` for the same reason.
 
 ## Updating the app
 
-Two halves, and which one a build has depends on one compile-time value.
+`docs/RELEASING.md` is the operator's guide — the secrets, the bucket, the
+keypair. What belongs here is the shape and the rules.
 
 | | `update_check` | `update_install` |
 | --- | --- | --- |
-| Asks | `/api/app/v1/version` | `/api/app/v1/update/:target/:arch/:current` |
-| Answers | a version and a download page | a signed artifact |
-| Needs | nothing | `TMC_UPDATER_PUBKEY` compiled in, and desktop |
-| Does | opens a browser | replaces the running program |
+| Asks | the updater's endpoint (manifest only), else `/api/app/v1/version` | the updater's endpoint |
+| Answers | a version, and a download page when it came from the site | a signed artifact |
+| Needs | nothing | a public key from somewhere, and desktop |
+| Does | reports | replaces the running program |
 
-**`installable` on the check is what the banner reads**, so it offers the button
-it can honour. An "Update" that turns out to open a browser is worse than a
-"Get it" that says what it does — and the link half is not dead code, because it
-is the answer on mobile and for a Linux package manager's own build.
+**Both inputs are resolved per call by `tmc_core::updater::resolve`**: the
+Settings override, else what was compiled in, else the fallback. The endpoint's
+compiled default is `TMC_UPDATER_ENDPOINT` — the static `latest.json` the
+release workflow uploads to the S3 downloads bucket, which needs nothing on the
+site — and its fallback is the site's `/update/:target/:arch/:current` route.
+The key's compiled default is `src-tauri/updater.pub`, which `build.rs` turns
+into `TMC_UPDATER_PUBKEY` unless the environment sets one; there is no
+fallback key. The beta channel reads `latest-beta.json`.
+
+**The plugin is registered unconditionally on desktop** and handed the key with
+`updater_builder().pubkey(..)` on each call. `updater_builder()` panics without
+the plugin's managed state, so registering it only when a key was compiled in —
+as this used to — is what made a runtime key impossible.
 
 ### The signature is the entire security model
 
-`tauri-plugin-updater` verifies a minisign signature against a public key
-compiled into the binary before it installs anything. TLS says who served the
-bytes; it says nothing about what they are. An unsigned self-updater converts a
-compromise of the website's database into a compromise of every machine running
-the app, which is a far larger blast radius than anything else in this tree.
+`tauri-plugin-updater` verifies a minisign signature against the resolved key
+before it installs anything. TLS says who served the bytes; it says nothing
+about what they are. An unsigned self-updater converts a compromise of a bucket
+or the website's database into a compromise of every machine running the app.
 
 So:
 
-  * **There is no placeholder key.** `option_env!("TMC_UPDATER_PUBKEY")` and no
-    default — a build without one registers no updater and `update_install`
-    refuses with a sentence saying so. A placeholder would be a key nobody holds
-    the other half of, and the failure it produces (every update refused, after
-    the download) is the hardest kind to diagnose from outside.
-  * **`tauri.conf.json`'s `plugins.updater` block is empty on purpose.** The
-    plugin's own config requires a `pubkey` field to deserialise at all; the
-    compiled-in key overrides it, and `endpoints` is filled per call because the
-    URL comes from `api_base()` and that file is static.
+  * **There is no placeholder key.** The key in `updater.pub` is a real one
+    whose private half is a GitHub secret; with no key anywhere the app has no
+    way to install and says so in Settings. It does not crash and it never
+    installs unchecked.
+  * **The two halves are proven to match, twice.** `scripts/fixtures/
+    signed.txt.sig` was signed with the private key and a vitest checks it
+    against `updater.pub`; the release job runs
+    `scripts/verify-updater-signature.mjs` over its own bundles and fails if
+    they do not verify. A mismatched pair otherwise builds, signs and uploads
+    perfectly and is refused by every user after the download.
+  * **`updaterEndpoint`/`updaterPubkey` are not settings a patch can touch.**
+    Like the jail roots, `SettingsStore::patch` refuses them
+    (`UPDATER_SOURCE_FIELDS`); `updater_set_source` validates them (HTTPS, no
+    credentials, a real minisign key), `sanitise` re-validates a hand-edited
+    file, and every change is audited at Security level. This IS a widening:
+    script in the webview could call that command and choose what installs
+    next. It was asked for — a fork, a staging bucket or a rotated key without
+    a rebuild — and SECURITY.md lists it with the other deliberate gaps.
   * **`AppRelease.signature` is a required column** on the website, the
-    publishing script refuses without one and explains why, and there is no
-    "unsigned for now" branch — because that branch is the one somebody ships by
-    accident.
-
-### Setting it up
-
-**Both halves of the key belong to THIS repository.** Nothing about it goes into
-website-city — that side only ever stores the signature string, which is public.
-`docs/BUILDING.md` has the full walkthrough; the shape is:
-
-| Half | Name | Where |
-| --- | --- | --- |
-| public | `TMC_UPDATER_PUBKEY` | a repository **variable**, read at build time by `option_env!` |
-| private | `TAURI_SIGNING_PRIVATE_KEY` | a repository **secret**, read by `tauri build` |
-| its password | `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | a repository **secret** |
-
-`src-tauri/build.rs` carries the `rerun-if-env-changed` that makes a rebuild
-notice the first one changing — without it a build first made with no key keeps
-having no key forever, and the symptom is an app that silently has no updater
-after somebody configured one.
-
-**`createUpdaterArtifacts` is off in `tauri.conf.json` and turned on by the
-release workflow**, because with it on and no key `tauri build` FAILS — which
-would break `npm run desktop:build` for every developer. CI enables it exactly
-when both halves are present, and its absence is a warning rather than a failed
-job: a release nobody can auto-update is still a release people can download.
+    publishing script refuses without one, and there is no "unsigned for now"
+    branch — because that branch is the one somebody ships by accident.
 
 ### Cutting a release is pushing a tag
 
-`release.yml` signs each bundle, uploads the artifacts and their `.sig` files to
-the GitHub release, and then posts the lot to `POST /api/app/v1/releases` — one
-call carrying every platform AND the promotion, which the site writes in one
-transaction.
+`release.yml` signs each bundle, verifies the signatures, uploads everything to
+`downloads/tmc-app/<version>/` on the bucket, writes `latest-beta.json` (and,
+for a non-pre-release tag, `latest.json`) LAST because they are the switch,
+publishes the GitHub release, and — when `TMC_RELEASE_TOKEN` is set — posts the
+lot to `POST /api/app/v1/releases` in one call so the site's routes agree.
+Every step that is not configured warns and skips.
 
-**That is one call on purpose.** `app.version.latest` is the switch and nothing
-reaches anybody until it names a version, so publishing platform by platform and
-promoting afterwards leaves a window where it names a version some machines have
-no build for — and what a user on one of those gets is being told there is an
-update and then handed a 404. A rollback is re-publishing the previous version.
-
-`scripts/publish-release.mjs` maps bundle filenames to update targets, and that
-mapping lives in this repository rather than in the workflow because the names
-are this repository's business: a shell glob in YAML is the thing most likely to
-break quietly when a bundler renames its output, in a language with no way to
-test it. Two decisions it encodes — macOS ships the `.app.tar.gz` rather than
-the `.dmg` (a disk image is something a person mounts, not something an updater
-unpacks over a running app), and Windows prefers the `-setup.exe` over the
-`.msi`, which does not bootstrap WebView2.
-
-It needs `TMC_RELEASE_TOKEN` (matching the site's `APP_RELEASE_TOKEN`). Without
-it the job warns and skips, rather than failing: a release that was cut and not
-announced is fixable in a minute, while a failed release job has to be re-run
-against a tag that already has artifacts on it.
+`scripts/release-targets.mjs` is the one filename → platform table, shared by
+the static manifest (`updater-manifest.mjs`) and the site publish
+(`publish-release.mjs`), and pinned by a vitest. macOS ships the
+`.app.tar.gz`, not the `.dmg`; Windows prefers the `-setup.exe` over the
+`.msi`, which does not bootstrap WebView2; the manifest carries
+`{os}-{arch}-{bundle}` keys too, so an MSI install updates from the MSI.
 
 ### Three refusals worth keeping
 
@@ -1427,10 +1412,11 @@ against a tag that already has artifacts on it.
   * **It does not relaunch.** Deciding for somebody that now is the moment to
     close their app is not the command's call, so the banner gains a third state
     — "installed, restart to finish" — and keeps showing it even after the
-    notice was dismissed. Saying "done" and leaving them on the old version is
-    how an updater earns a reputation for not working.
-  * **`204` means current.** The plugin treats anything else as a manifest, so
-    an up-to-date client answered with a 200 would be cheerfully downgraded.
+    notice was dismissed.
+  * **The site's route answers `204` for current.** The plugin treats anything
+    else as a manifest, so an up-to-date client answered with a 200 would be
+    cheerfully downgraded. The static manifest needs no such care: the plugin
+    only installs a version newer than its own.
 
 ## Play sessions
 
@@ -2753,11 +2739,6 @@ changed it, and the lookup costs nothing.
 
 Honest list, so nothing here reads as finished when it is not:
 
-- **A signing key for the app updater.** Everything else is built — see
-  "Updating the app" — and a build compiled without `TMC_UPDATER_PUBKEY`
-  registers no updater at all and keeps the browser-download banner. Generating
-  the pair and putting the private half in the release pipeline is a ceremony
-  nobody but the person who cuts releases can perform, and it is the last step.
 - **Writes.** The app is read-only against the API for publishing — no
   commenting or uploading. Reviews, review votes, reports, subscriptions,
   sandboxes and play-time reports DO write.
