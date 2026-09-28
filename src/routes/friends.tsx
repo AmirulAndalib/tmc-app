@@ -130,6 +130,13 @@ function SignedIn() {
 
             <PartySection party={party.data ?? null} error={party.error} />
 
+            {/* Otherwise a drifted schema on these is an empty page, not an error. */}
+            {[party.error, invites.error, requests.error]
+                .filter(Boolean)
+                .map((error, i) => (
+                    <Muted key={i}>{messageOf(error)}</Muted>
+                ))}
+
             {(invites.data?.length ?? 0) > 0 && (
                 <Section title="Party invites">
                     {invites.data?.map((invite) => (
