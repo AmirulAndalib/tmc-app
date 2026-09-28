@@ -124,45 +124,111 @@ mod tests {
 
 // ------------------------------------------------------------------ Updates
 
+use tmc_core::updater::{Compiled, UpdaterSource};
+
 /// What an update check found.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateCheck {
     /// This build.
     pub current: String,
-    /// The newest the site knows about, or `None` when it says nothing.
+    /// The newest version found, or `None` when nothing says anything.
     pub latest: Option<String>,
-    /// Where to get it. Absolute https, already validated server-side.
+    /// Where to get it in a browser. Absolute https, validated here.
     pub download: Option<String>,
     /// Whether `latest` is actually ahead of `current`.
     pub outdated: bool,
     /// Whether THIS build can install the update itself.
     ///
-    /// False for a build compiled without `TMC_UPDATER_PUBKEY` and false on
-    /// mobile, where an app replacing its own binary is not a thing the OS
-    /// permits. Published so the banner offers the button it can actually
-    /// honour: "Update" that turns out to open a browser is worse than
-    /// "Download" that says what it does.
+    /// False on mobile, where an app replacing its own binary is not a thing
+    /// the OS permits, and false when no signing key is configured anywhere —
+    /// see [`tmc_core::updater`]. Published so the banner offers the button it
+    /// can actually honour: "Update" that turns out to open a browser is worse
+    /// than "Download" that says what it does.
     pub installable: bool,
 }
 
-/// Ask the site whether this build is out of date.
+/// The compiled-in half of the updater's inputs.
 ///
-/// **This does not update anything.** The shape of the answer says so: no
-/// artifact, no signature, no checksum. A user who is behind is offered a link
-/// to the download page, which opens in their real browser.
+/// `TMC_UPDATER_PUBKEY` is filled by `build.rs` from `updater.pub` when the
+/// environment does not set it; `TMC_UPDATER_ENDPOINT` is the public
+/// `latest.json` the release workflow uploads (`downloads/tmc-app/latest.json`
+/// under the S3 bucket's public URL) and is unset in a developer build, which
+/// then asks the site.
+fn compiled() -> Compiled<'static> {
+    Compiled {
+        pubkey: option_env!("TMC_UPDATER_PUBKEY"),
+        endpoint: option_env!("TMC_UPDATER_ENDPOINT"),
+    }
+}
+
+/// Where this check goes and which key it trusts, right now.
+fn updater_source(state: &AppState) -> UpdaterSource {
+    let settings = state.settings.get();
+
+    tmc_core::updater::resolve(
+        settings.updater_endpoint.as_deref(),
+        settings.updater_pubkey.as_deref(),
+        &settings.update_channel,
+        compiled(),
+        tmc_core::api::api_base(),
+    )
+}
+
+/// Whether this build, as configured, can install an update itself.
+pub fn updater_available(state: &AppState) -> bool {
+    cfg!(desktop) && updater_source(state).pubkey.is_some()
+}
+
+/// Ask whether this build is out of date.
 ///
-/// It is deliberately not [`update_install`] with a different name. This is the
-/// answer every build can give — including one compiled without a signing key,
-/// which has no updater at all — so it stays the honest floor and the fallback
-/// for a platform the updater does not cover. `UpdateCheck::installable` is
-/// what tells the UI which of the two it is looking at.
+/// **This does not update anything.** Two sources, in order:
+///
+///   1. With a key configured on desktop, the updater's own endpoint — by
+///      default the static `latest.json` on the downloads bucket, which works
+///      with nothing configured on the site. `check()` only fetches and parses
+///      the manifest; nothing is downloaded and no signature is needed yet.
+///   2. Otherwise, or when that fails, the site's `/version` — the honest
+///      floor every build has, including mobile and a build with no key, which
+///      is answered with a download page to open in a browser.
 ///
 /// Unauthenticated, because a freshly-installed app that has not signed in yet
 /// is precisely the one most likely to be out of date.
 #[tauri::command]
-pub async fn update_check(state: State<'_, AppState>) -> AppResult<UpdateCheck> {
+pub async fn update_check(
+    #[allow(unused_variables)] app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> AppResult<UpdateCheck> {
     let current = state.version.clone();
+    let installable = updater_available(&state);
+
+    #[cfg(desktop)]
+    if installable {
+        match updater_manifest(&app, &state).await {
+            Ok(latest) => {
+                let outdated = latest
+                    .as_deref()
+                    .is_some_and(|latest| is_newer(latest, &current));
+
+                if outdated {
+                    audit_available(&state, &current, latest.as_deref());
+                }
+
+                return Ok(UpdateCheck {
+                    current,
+                    latest,
+                    download: None,
+                    outdated,
+                    installable,
+                });
+            }
+            Err(e) => {
+                // Fall through to the site: an unreachable bucket must not
+                // hide an update the site knows about.
+                tracing::warn!("updater manifest check failed: {}", e.detail());
+            }
+        }
+    }
 
     let body = state
         .api
@@ -187,13 +253,7 @@ pub async fn update_check(state: State<'_, AppState>) -> AppResult<UpdateCheck> 
         .is_some_and(|latest| is_newer(latest, &current));
 
     if outdated {
-        audit!(
-            state.audit,
-            Info,
-            App,
-            "app.update.available",
-            format!("{current} → {}", latest.as_deref().unwrap_or("?"))
-        );
+        audit_available(&state, &current, latest.as_deref());
     }
 
     Ok(UpdateCheck {
@@ -201,34 +261,73 @@ pub async fn update_check(state: State<'_, AppState>) -> AppResult<UpdateCheck> 
         latest,
         download,
         outdated,
-        installable: updater_available(),
+        installable,
     })
 }
 
-/// Whether this build carries a working updater.
+fn audit_available(state: &AppState, current: &str, latest: Option<&str>) {
+    audit!(
+        state.audit,
+        Info,
+        App,
+        "app.update.available",
+        format!("{current} → {}", latest.unwrap_or("?"))
+    );
+}
+
+/// An updater built from the resolved source, with its key set per call.
 ///
-/// Desktop, and a signing public key compiled in. The key is the whole security
-/// model — the plugin verifies a minisign signature before it installs anything
-/// — so a build without one is a build that cannot tell a real update from an
-/// attacker's, and the correct behaviour for it is to have no updater rather
-/// than a trusting one. See `lib.rs` for why there is no placeholder key.
-pub fn updater_available() -> bool {
-    cfg!(desktop)
-        && option_env!("TMC_UPDATER_PUBKEY")
-            .map(str::trim)
-            .is_some_and(|key| !key.is_empty())
+/// Refuses when there is no key, which is the "no updater" state — the plugin
+/// is registered either way, so this is the one gate.
+#[cfg(desktop)]
+fn build_updater(
+    app: &tauri::AppHandle,
+    source: &UpdaterSource,
+) -> AppResult<tauri_plugin_updater::Updater> {
+    use tauri_plugin_updater::UpdaterExt;
+
+    let Some(pubkey) = source.pubkey.as_deref() else {
+        return Err(AppError::invalid(
+            "This build has no update signing key configured, so it cannot install updates. Use the download page, or set a key under Settings → App → Updates.",
+        ));
+    };
+
+    let endpoint = source
+        .endpoint
+        .parse()
+        .map_err(|_| AppError::internal("the update endpoint did not parse"))?;
+
+    app.updater_builder()
+        .pubkey(pubkey)
+        .endpoints(vec![endpoint])
+        .map_err(|e| AppError::internal(format!("updater: {e}")))?
+        .build()
+        .map_err(|e| AppError::internal(format!("updater: {e}")))
+}
+
+/// The version the updater's manifest offers, without downloading anything.
+#[cfg(desktop)]
+async fn updater_manifest(app: &tauri::AppHandle, state: &AppState) -> AppResult<Option<String>> {
+    let updater = build_updater(app, &updater_source(state))?;
+
+    let found = updater
+        .check()
+        .await
+        .map_err(|e| AppError::internal(format!("update check: {e}")))?;
+
+    Ok(found.map(|u| u.version))
 }
 
 /// Download the update, verify its signature, and install it.
 ///
 /// **The signature is the only thing making this safe**, and it is checked by
-/// the plugin against the key compiled into this binary — not by the server,
-/// not by TLS. TLS says who served the bytes; it says nothing about what they
-/// are, and this call replaces the program the user is running.
+/// the plugin against the resolved key — not by the server, not by TLS. TLS
+/// says who served the bytes; it says nothing about what they are, and this
+/// call replaces the program the user is running.
 ///
 /// Three refusals, all of them before anything is fetched:
 ///
-///   * a build with no key compiled in has no updater and says so;
+///   * a build with no key anywhere has no updater and says so;
 ///   * a check that finds nothing newer does nothing, rather than reinstalling
 ///     the version already running;
 ///   * a running game blocks it. Restarting the app out from under a supervisor
@@ -245,39 +344,14 @@ pub async fn update_install(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> AppResult<UpdateCheck> {
-    use tauri_plugin_updater::UpdaterExt;
-
-    if !updater_available() {
-        return Err(AppError::invalid(
-            "This build cannot install updates itself. Use the download page.",
-        ));
-    }
-
     if !state.sessions.running().is_empty() {
         return Err(AppError::invalid(
             "A game is running. Close it before updating the app.",
         ));
     }
 
-    /*
-     * Endpoints are set HERE rather than in `tauri.conf.json`, because the
-     * config is static and the base is not: a build pointed at the dev site has
-     * to ask the dev site. It is the same rule every other URL in this app
-     * follows, and `api_base()` has already validated the scheme and host.
-     */
-    let endpoint = format!(
-        "{}/api/app/v1/update/{{{{target}}}}/{{{{arch}}}}/{{{{current_version}}}}",
-        tmc_core::api::api_base().trim_end_matches('/')
-    )
-    .parse()
-    .map_err(|_| AppError::internal("the update endpoint did not parse"))?;
-
-    let updater = app
-        .updater_builder()
-        .endpoints(vec![endpoint])
-        .map_err(|e| AppError::internal(format!("updater: {e}")))?
-        .build()
-        .map_err(|e| AppError::internal(format!("updater: {e}")))?;
+    let source = updater_source(&state);
+    let updater = build_updater(&app, &source)?;
 
     let found = updater
         .check()
@@ -303,7 +377,10 @@ pub async fn update_install(
         Security,
         App,
         "app.update.install",
-        format!("{current} → {version}")
+        format!(
+            "{current} → {version} from {} (key: {:?})",
+            source.endpoint, source.key_origin
+        )
     );
 
     update
@@ -318,4 +395,81 @@ pub async fn update_install(
         outdated: true,
         installable: true,
     })
+}
+
+/// What Settings → App → Updates shows.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdaterStatus {
+    /// Desktop, and a key resolved from somewhere.
+    pub available: bool,
+    /// False on mobile, where there is no self-updater whatever is configured.
+    pub supported: bool,
+    #[serde(flatten)]
+    pub source: UpdaterSource,
+    /// Whether a key was compiled into this binary, so the screen can say
+    /// "clear the override to go back to the built-in key" truthfully.
+    pub compiled_key: bool,
+    /// The endpoint this build falls back to with no override.
+    pub compiled_endpoint: String,
+    /// The overrides as stored, for the form to show.
+    pub endpoint_override: Option<String>,
+    pub pubkey_override: Option<String>,
+}
+
+#[tauri::command]
+pub fn updater_status(state: State<'_, AppState>) -> UpdaterStatus {
+    let settings = state.settings.get();
+    let source = updater_source(&state);
+    let base =
+        tmc_core::updater::resolve(None, None, "stable", compiled(), tmc_core::api::api_base());
+
+    UpdaterStatus {
+        available: cfg!(desktop) && source.pubkey.is_some(),
+        supported: cfg!(desktop),
+        source,
+        compiled_key: base.pubkey.is_some(),
+        compiled_endpoint: base.endpoint,
+        endpoint_override: settings.updater_endpoint,
+        pubkey_override: settings.updater_pubkey,
+    }
+}
+
+/// Override where updates come from and which key they must carry.
+///
+/// `null` or an empty string clears either one, back to what this build was
+/// compiled with. Both are validated in `tmc-core` before anything is written.
+///
+/// **This chooses what the app will install over itself**, so it is its own
+/// command rather than a field in `settings_patch` (which refuses both), and it
+/// is audited at **Security** level with the values stored — an entry turning
+/// logging off cannot suppress. The screen that calls it says the same thing
+/// to the person pressing Save.
+#[tauri::command]
+pub fn updater_set_source(
+    state: State<'_, AppState>,
+    endpoint: Option<String>,
+    pubkey: Option<String>,
+) -> AppResult<UpdaterStatus> {
+    let next = state
+        .settings
+        .set_updater_source(endpoint.as_deref(), pubkey.as_deref())?;
+
+    audit!(
+        state.audit,
+        Security,
+        Settings,
+        "settings.updater_source",
+        format!(
+            "Updater source changed: endpoint {}, key {}",
+            next.updater_endpoint.as_deref().unwrap_or("(built-in)"),
+            if next.updater_pubkey.is_some() {
+                "overridden"
+            } else {
+                "(built-in)"
+            }
+        )
+    );
+
+    Ok(updater_status(state))
 }

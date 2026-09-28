@@ -6,6 +6,7 @@ import { ipc } from '~/lib/ipc/commands'
 import { useApiEnv } from '~/lib/api/env'
 import { useSettings } from '~/lib/settings/provider'
 import { Row, Section, Select, Toggle } from '~/components/form'
+import UpdaterSettings from '~/components/updater-settings'
 
 /**
  * The speed-limit presets, in bytes per second.
@@ -296,6 +297,7 @@ export default function AppSettingsRoute() {
                         />
                     }
                 />
+                <UpdaterSettings />
             </Section>
 
             {/*

@@ -48,6 +48,16 @@ pub struct AppSettings {
     pub game_dirs: std::collections::BTreeMap<String, String>,
     /// Check for app updates on launch.
     pub auto_update_check: bool,
+    /// Which release channel the app's own updater reads: `stable` or `beta`.
+    /// A preference, and patchable — it chooses between two manifests the
+    /// release workflow signs, never which signatures are trusted.
+    pub update_channel: String,
+    /// Where the app's own updates are fetched from, overriding the one
+    /// compiled in. **Not patchable** — see [`UPDATER_SOURCE_FIELDS`].
+    pub updater_endpoint: Option<String>,
+    /// The minisign public key updates must be signed with, overriding the
+    /// one compiled in. **Not patchable** — see [`UPDATER_SOURCE_FIELDS`].
+    pub updater_pubkey: Option<String>,
     /// Ping servers in the browser as their rows come into view.
     pub live_latency: bool,
     /// How often the visible set is re-queried, in milliseconds.
@@ -115,6 +125,9 @@ impl Default for AppSettings {
             download_dir: None,
             game_dirs: Default::default(),
             auto_update_check: true,
+            update_channel: "stable".into(),
+            updater_endpoint: None,
+            updater_pubkey: None,
             live_latency: true,
             latency_interval_ms: 1_000,
             latency_concurrency: 8,
@@ -169,6 +182,25 @@ impl AppSettings {
             self.theme = "system".into();
         }
 
+        if !crate::updater::CHANNELS.contains(&self.update_channel.as_str()) {
+            self.update_channel = "stable".into();
+        }
+
+        /*
+         * A hand-edited file is a way to set these without the command's
+         * validation, so the same validation runs on read: a value the
+         * command would refuse is dropped rather than trusted. Dropping falls
+         * back to the compiled source, which is the safe direction.
+         */
+        self.updater_endpoint = self
+            .updater_endpoint
+            .take()
+            .and_then(|e| crate::updater::validate_endpoint(&e).ok());
+        self.updater_pubkey = self
+            .updater_pubkey
+            .take()
+            .and_then(|k| crate::updater::validate_pubkey(&k).ok());
+
         /*
          * The jail roots are not re-validated here — that is `set_game_dir`'s
          * job and `patch` refuses to carry them at all — but they are RESPELT.
@@ -205,6 +237,14 @@ impl AppSettings {
 /// Named with the wire (camelCase) spelling because that is what arrives in a
 /// patch from the webview.
 pub const JAIL_ROOT_FIELDS: &[&str] = &["gameDirs", "downloadDir"];
+
+/// The settings that decide what the app's updater TRUSTS.
+///
+/// Refused by [`SettingsStore::patch`] for the reason the jail roots are: a
+/// public-key override chooses which signatures install over this program, so
+/// it moves only through [`SettingsStore::set_updater_source`], which
+/// validates both values and whose caller audits the change at Security level.
+pub const UPDATER_SOURCE_FIELDS: &[&str] = &["updaterEndpoint", "updaterPubkey"];
 
 pub struct SettingsStore {
     path: PathBuf,
@@ -264,6 +304,14 @@ impl SettingsStore {
                 if over.contains_key(*field) {
                     return Err(AppError::invalid(format!(
                         "`{field}` is a jail root and cannot be set through a settings patch."
+                    )));
+                }
+            }
+
+            for field in UPDATER_SOURCE_FIELDS {
+                if over.contains_key(*field) {
+                    return Err(AppError::invalid(format!(
+                        "`{field}` decides what the updater trusts and cannot be set through a settings patch."
                     )));
                 }
             }
@@ -353,6 +401,36 @@ impl SettingsStore {
 
     /// Sanitise, persist and publish. Shared by the setters above so a new one
     /// cannot forget the clamp or the in-memory update.
+    /// Override where updates come from and which key they must carry, or
+    /// clear either with `None` (or an empty string).
+    ///
+    /// Both are validated before anything is written — an https endpoint with
+    /// no credentials, and a key that decodes as a minisign public key — so a
+    /// typo is refused here rather than becoming "every update fails its
+    /// signature". The caller audits the stored values at Security level.
+    pub fn set_updater_source(
+        &self,
+        endpoint: Option<&str>,
+        pubkey: Option<&str>,
+    ) -> AppResult<AppSettings> {
+        fn blank(v: Option<&str>) -> Option<&str> {
+            v.map(str::trim).filter(|v| !v.is_empty())
+        }
+
+        let endpoint = blank(endpoint)
+            .map(crate::updater::validate_endpoint)
+            .transpose()?;
+        let pubkey = blank(pubkey)
+            .map(crate::updater::validate_pubkey)
+            .transpose()?;
+
+        let mut next = self.get();
+        next.updater_endpoint = endpoint;
+        next.updater_pubkey = pubkey;
+
+        self.commit(next)
+    }
+
     fn commit(&self, mut next: AppSettings) -> AppResult<AppSettings> {
         next.sanitise();
 
@@ -429,6 +507,70 @@ mod tests {
                 "`{field}` must not be settable through a patch"
             );
         }
+    }
+
+    /// A patch is the surface the webview reaches directly; what the updater
+    /// trusts moves only through `set_updater_source`.
+    #[test]
+    fn a_patch_cannot_change_what_the_updater_trusts() {
+        let store = TempStore::new("updater-patch");
+
+        for field in UPDATER_SOURCE_FIELDS {
+            let patch = serde_json::json!({ *field: "https://evil.example/latest.json" });
+
+            assert!(
+                store.1.patch(patch).is_err(),
+                "`{field}` must not be patchable"
+            );
+        }
+
+        // The channel is a preference and IS patchable, clamped to the two.
+        let next = store
+            .1
+            .patch(serde_json::json!({ "updateChannel": "beta" }))
+            .expect("channel");
+        assert_eq!(next.update_channel, "beta");
+
+        let next = store
+            .1
+            .patch(serde_json::json!({ "updateChannel": "nightly" }))
+            .expect("channel");
+        assert_eq!(next.update_channel, "stable");
+    }
+
+    #[test]
+    fn the_updater_source_is_validated_stored_and_cleared() {
+        let store = TempStore::new("updater-source");
+        let key = crate::updater::TEST_PUBKEY;
+
+        assert!(store
+            .1
+            .set_updater_source(Some("http://evil.example/latest.json"), None)
+            .is_err());
+        assert!(store.1.set_updater_source(None, Some("not a key")).is_err());
+        assert_eq!(
+            store.1.get().updater_endpoint,
+            None,
+            "a refusal writes nothing"
+        );
+
+        let set = store
+            .1
+            .set_updater_source(Some(" https://cdn.example/latest.json "), Some(key))
+            .expect("valid");
+        assert_eq!(
+            set.updater_endpoint.as_deref(),
+            Some("https://cdn.example/latest.json")
+        );
+        assert!(set.updater_pubkey.is_some());
+
+        // Survives a reload, which re-validates on read.
+        let reloaded = SettingsStore::load(store.0.join("settings.json")).get();
+        assert_eq!(reloaded.updater_endpoint, set.updater_endpoint);
+
+        let cleared = store.1.set_updater_source(Some(""), None).expect("clear");
+        assert_eq!(cleared.updater_endpoint, None);
+        assert_eq!(cleared.updater_pubkey, None);
     }
 
     /// The refusal must be scoped to those two fields and nothing else, or

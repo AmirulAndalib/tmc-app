@@ -34,6 +34,7 @@ pub mod rcon;
 pub mod secure;
 pub mod session;
 pub mod settings;
+pub mod updater;
 pub mod version;
 
 pub use error::{AppError, AppResult};

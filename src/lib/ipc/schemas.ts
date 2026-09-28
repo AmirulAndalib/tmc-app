@@ -75,6 +75,11 @@ export const AppSettingsSchema = z.object({
     downloadDir: z.string().nullable(),
     gameDirs: z.record(z.string(), z.string()),
     autoUpdateCheck: z.boolean(),
+    /** `stable` or `beta` — which signed manifest the updater reads. */
+    updateChannel: z.enum(['stable', 'beta']).default('stable'),
+    /** Set only through `updater_set_source`; a patch carrying either is refused. */
+    updaterEndpoint: z.string().nullable().default(null),
+    updaterPubkey: z.string().nullable().default(null),
     liveLatency: z.boolean(),
     latencyIntervalMs: z.number(),
     latencyConcurrency: z.number(),
@@ -317,6 +322,31 @@ export const UpdateCheckSchema = z.object({
 })
 
 export type UpdateCheckT = z.infer<typeof UpdateCheckSchema>
+
+export const UpdaterOriginSchema = z.enum(['override', 'compiled', 'site'])
+export type UpdaterOriginT = z.infer<typeof UpdaterOriginSchema>
+
+/**
+ * Where the app's own updates come from and which key they must carry, as
+ * resolved right now (`tmc_core::updater::resolve`), plus the stored overrides
+ * for the Settings form. `available` false with `supported` true is the "no
+ * signing key configured" state — shown, never a crash.
+ */
+export const UpdaterStatusSchema = z.object({
+    available: z.boolean(),
+    supported: z.boolean(),
+    endpoint: z.string(),
+    endpointOrigin: UpdaterOriginSchema,
+    pubkey: z.string().nullable(),
+    keyOrigin: UpdaterOriginSchema.nullable(),
+    channel: z.enum(['stable', 'beta']),
+    compiledKey: z.boolean(),
+    compiledEndpoint: z.string(),
+    endpointOverride: z.string().nullable(),
+    pubkeyOverride: z.string().nullable(),
+})
+
+export type UpdaterStatusT = z.infer<typeof UpdaterStatusSchema>
 
 export const PluginRecordSchema = z.object({
     id: z.string(),
