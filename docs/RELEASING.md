@@ -36,10 +36,10 @@ lands on GitHub.
 
 `tmc_core::updater::resolve` decides, on every check, from three places:
 
-| Input | Settings override | Compiled into the build | Last resort |
+| Input | `settings.json` override | Compiled into the build | Last resort |
 | --- | --- | --- | --- |
-| endpoint | Settings → App → Updates → *Update source* | `TMC_UPDATER_ENDPOINT` — the release workflow sets it to `<S3_PUBLIC_URL>/downloads/tmc-app/latest.json` | the site's `/api/app/v1/update/{{target}}/{{arch}}/{{current_version}}` |
-| public key | the same form | `src-tauri/updater.pub` (or `TMC_UPDATER_PUBKEY` in the build environment) | **none: the app cannot install, and says so** |
+| endpoint | `updaterEndpoint` in the app's `settings.json` (hand-edited) | `TMC_UPDATER_ENDPOINT` — the release workflow sets it to `<S3_PUBLIC_URL>/downloads/tmc-app/latest.json` | the site's `/api/app/v1/update/{{target}}/{{arch}}/{{current_version}}` |
+| public key | `updaterPubkey` in the same file | `src-tauri/updater.pub` (or `TMC_UPDATER_PUBKEY` in the build environment) | **none: the app cannot install, and says so** |
 
 The **beta** channel (Settings → App → Updates → Channel) reads
 `latest-beta.json` instead of `latest.json`; an endpoint containing
@@ -65,19 +65,24 @@ every `npm run check`, so the two halves provably match.
 
 ### The overrides, and what they cost
 
-Settings → App → Updates → **Update source (administrators)** takes an endpoint
-and a public key. They exist so a staging bucket, a fork or a rotated key can be
-tested without a rebuild. The key decides what the app will install over
-itself, so:
+An administrator can set `updaterEndpoint` (an HTTPS manifest URL) and
+`updaterPubkey` (the text `tauri signer generate` printed) in the app's
+`settings.json`, **with the app closed** (a running app rewrites the file from
+memory). They exist so a staging bucket, a fork or a rotated key can be tested
+without a rebuild. The key decides what the app will install over itself, so:
 
-- they are **not** part of a settings patch (`settings_patch` refuses
-  `updaterEndpoint`/`updaterPubkey`); they move only through
-  `updater_set_source`, which validates them — HTTPS only, no credentials in the
-  URL, and a key that decodes as a minisign public key;
-- every change is written to the audit log at **Security** level, which cannot
-  be switched off;
-- the section is shown expanded, marked *overridden*, while either is set, and
-  *Use the built-in source* clears both.
+- **nothing in the app can set them.** `settings_patch` refuses both and there
+  is no command for them — the webview is assumed hostile, and code that can
+  write `settings.json` already runs as the user;
+- they are validated when the file is read — HTTPS only, no credentials in the
+  URL, and a key that decodes as a minisign public key — and an invalid value
+  is dropped, falling back to the built-in source;
+- while either is in force it is written to the audit log at **Security**
+  level at every start, which cannot be switched off, and it survives
+  *Reset settings*;
+- Settings → App → Updates → **Update source (administrators)** shows them
+  read-only, expanded and marked *overridden*. Deleting the keys from the file
+  returns to the built-in source.
 
 With no key compiled in and none set, the app does not crash and does not
 install: Settings says "No update signing key is configured" and the banner

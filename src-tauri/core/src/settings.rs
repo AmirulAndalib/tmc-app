@@ -240,10 +240,12 @@ pub const JAIL_ROOT_FIELDS: &[&str] = &["gameDirs", "downloadDir"];
 
 /// The settings that decide what the app's updater TRUSTS.
 ///
-/// Refused by [`SettingsStore::patch`] for the reason the jail roots are: a
-/// public-key override chooses which signatures install over this program, so
-/// it moves only through [`SettingsStore::set_updater_source`], which
-/// validates both values and whose caller audits the change at Security level.
+/// Refused by [`SettingsStore::patch`], and settable by NO command: a
+/// public-key override chooses which signatures install over this program, and
+/// the webview is assumed hostile. They are read only from a hand-edited
+/// `settings.json` (validated on read, invalid values dropped) or come from the
+/// build environment; an override in force is audited at Security level at
+/// startup. Code that can write `settings.json` already owns the machine.
 pub const UPDATER_SOURCE_FIELDS: &[&str] = &["updaterEndpoint", "updaterPubkey"];
 
 pub struct SettingsStore {
@@ -401,36 +403,6 @@ impl SettingsStore {
 
     /// Sanitise, persist and publish. Shared by the setters above so a new one
     /// cannot forget the clamp or the in-memory update.
-    /// Override where updates come from and which key they must carry, or
-    /// clear either with `None` (or an empty string).
-    ///
-    /// Both are validated before anything is written — an https endpoint with
-    /// no credentials, and a key that decodes as a minisign public key — so a
-    /// typo is refused here rather than becoming "every update fails its
-    /// signature". The caller audits the stored values at Security level.
-    pub fn set_updater_source(
-        &self,
-        endpoint: Option<&str>,
-        pubkey: Option<&str>,
-    ) -> AppResult<AppSettings> {
-        fn blank(v: Option<&str>) -> Option<&str> {
-            v.map(str::trim).filter(|v| !v.is_empty())
-        }
-
-        let endpoint = blank(endpoint)
-            .map(crate::updater::validate_endpoint)
-            .transpose()?;
-        let pubkey = blank(pubkey)
-            .map(crate::updater::validate_pubkey)
-            .transpose()?;
-
-        let mut next = self.get();
-        next.updater_endpoint = endpoint;
-        next.updater_pubkey = pubkey;
-
-        self.commit(next)
-    }
-
     fn commit(&self, mut next: AppSettings) -> AppResult<AppSettings> {
         next.sanitise();
 
@@ -457,7 +429,16 @@ impl SettingsStore {
     }
 
     pub fn reset(&self) -> AppResult<AppSettings> {
-        let fresh = AppSettings::default();
+        /*
+         * The updater overrides survive a reset: an admin put them in the file
+         * by hand, and no command can put them back.
+         */
+        let kept = self.get();
+        let fresh = AppSettings {
+            updater_endpoint: kept.updater_endpoint,
+            updater_pubkey: kept.updater_pubkey,
+            ..AppSettings::default()
+        };
         self.write(&fresh)?;
 
         if let Ok(mut cur) = self.current.write() {
@@ -510,7 +491,7 @@ mod tests {
     }
 
     /// A patch is the surface the webview reaches directly; what the updater
-    /// trusts moves only through `set_updater_source`.
+    /// trusts is not settable from there at all.
     #[test]
     fn a_patch_cannot_change_what_the_updater_trusts() {
         let store = TempStore::new("updater-patch");
@@ -539,38 +520,36 @@ mod tests {
     }
 
     #[test]
-    fn the_updater_source_is_validated_stored_and_cleared() {
+    fn a_hand_edited_updater_source_is_validated_on_read_and_survives_reset() {
         let store = TempStore::new("updater-source");
+        let file = store.0.join("settings.json");
         let key = crate::updater::TEST_PUBKEY;
 
-        assert!(store
-            .1
-            .set_updater_source(Some("http://evil.example/latest.json"), None)
-            .is_err());
-        assert!(store.1.set_updater_source(None, Some("not a key")).is_err());
-        assert_eq!(
-            store.1.get().updater_endpoint,
-            None,
-            "a refusal writes nothing"
-        );
+        let write = |endpoint: &str, pubkey: &str| {
+            std::fs::write(
+                &file,
+                serde_json::json!({ "updaterEndpoint": endpoint, "updaterPubkey": pubkey })
+                    .to_string(),
+            )
+            .expect("write");
+        };
 
-        let set = store
-            .1
-            .set_updater_source(Some(" https://cdn.example/latest.json "), Some(key))
-            .expect("valid");
+        write("http://evil.example/latest.json", "not a key");
+        let refused = SettingsStore::load(file.clone()).get();
+        assert_eq!(refused.updater_endpoint, None, "invalid is dropped");
+        assert_eq!(refused.updater_pubkey, None);
+
+        write("https://cdn.example/latest.json", key);
+        let loaded = SettingsStore::load(file.clone());
         assert_eq!(
-            set.updater_endpoint.as_deref(),
+            loaded.get().updater_endpoint.as_deref(),
             Some("https://cdn.example/latest.json")
         );
-        assert!(set.updater_pubkey.is_some());
+        assert_eq!(loaded.get().updater_pubkey.as_deref(), Some(key));
 
-        // Survives a reload, which re-validates on read.
-        let reloaded = SettingsStore::load(store.0.join("settings.json")).get();
-        assert_eq!(reloaded.updater_endpoint, set.updater_endpoint);
-
-        let cleared = store.1.set_updater_source(Some(""), None).expect("clear");
-        assert_eq!(cleared.updater_endpoint, None);
-        assert_eq!(cleared.updater_pubkey, None);
+        let fresh = loaded.reset().expect("reset");
+        assert_eq!(fresh.updater_pubkey.as_deref(), Some(key), "reset keeps it");
+        assert!(SettingsStore::load(file).get().updater_endpoint.is_some());
     }
 
     /// The refusal must be scoped to those two fields and nothing else, or

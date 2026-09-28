@@ -161,6 +161,29 @@ impl AppState {
         let audit = Arc::new(Audit::new(paths.audit_file()));
         audit.set_verbose(current.verbose_logging);
 
+        /*
+         * The updater overrides can only have come from a hand-edited
+         * settings.json (no command sets them), so the one moment they can be
+         * recorded is when they are read. Security level, every start.
+         */
+        if current.updater_endpoint.is_some() || current.updater_pubkey.is_some() {
+            tmc_core::audit!(
+                audit,
+                Security,
+                Settings,
+                "settings.updater_source",
+                format!(
+                    "Updater source overridden in settings.json: endpoint {}, key {}",
+                    current.updater_endpoint.as_deref().unwrap_or("(built-in)"),
+                    if current.updater_pubkey.is_some() {
+                        "overridden"
+                    } else {
+                        "(built-in)"
+                    }
+                )
+            );
+        }
+
         let secure = Arc::new(SecureStore::new(&paths.data));
 
         let auth = Arc::new(AuthState::new());

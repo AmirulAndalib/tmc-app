@@ -238,14 +238,6 @@ export const ipc = {
     /** Where updates come from, which key they need, and whether this build can install. */
     updaterStatus: () => call('updater_status', UpdaterStatusSchema),
 
-    /**
-     * Override the update endpoint and/or public key; `null` or `''` clears
-     * either back to the built-in one. Validated and Security-audited in Rust —
-     * this chooses what the app installs over itself.
-     */
-    updaterSetSource: (endpoint: string | null, pubkey: string | null) =>
-        call('updater_set_source', UpdaterStatusSchema, { endpoint, pubkey }),
-
     /** Every publishing key the user trusts. */
     pluginTrustedKeys: () => call('plugin_trusted_keys', z.array(TrustedKeySchema)),
     /**

@@ -77,7 +77,7 @@ export const AppSettingsSchema = z.object({
     autoUpdateCheck: z.boolean(),
     /** `stable` or `beta` — which signed manifest the updater reads. */
     updateChannel: z.enum(['stable', 'beta']).default('stable'),
-    /** Set only through `updater_set_source`; a patch carrying either is refused. */
+    /** Only from a hand-edited settings.json; no command sets them, and a patch carrying either is refused. */
     updaterEndpoint: z.string().nullable().default(null),
     updaterPubkey: z.string().nullable().default(null),
     liveLatency: z.boolean(),

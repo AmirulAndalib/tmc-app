@@ -288,7 +288,7 @@ fn build_updater(
 
     let Some(pubkey) = source.pubkey.as_deref() else {
         return Err(AppError::invalid(
-            "This build has no update signing key configured, so it cannot install updates. Use the download page, or set a key under Settings → App → Updates.",
+            "This build has no update signing key configured, so it cannot install updates. Use the download page, or have an administrator set `updaterPubkey` in settings.json.",
         ));
     };
 
@@ -433,43 +433,4 @@ pub fn updater_status(state: State<'_, AppState>) -> UpdaterStatus {
         endpoint_override: settings.updater_endpoint,
         pubkey_override: settings.updater_pubkey,
     }
-}
-
-/// Override where updates come from and which key they must carry.
-///
-/// `null` or an empty string clears either one, back to what this build was
-/// compiled with. Both are validated in `tmc-core` before anything is written.
-///
-/// **This chooses what the app will install over itself**, so it is its own
-/// command rather than a field in `settings_patch` (which refuses both), and it
-/// is audited at **Security** level with the values stored — an entry turning
-/// logging off cannot suppress. The screen that calls it says the same thing
-/// to the person pressing Save.
-#[tauri::command]
-pub fn updater_set_source(
-    state: State<'_, AppState>,
-    endpoint: Option<String>,
-    pubkey: Option<String>,
-) -> AppResult<UpdaterStatus> {
-    let next = state
-        .settings
-        .set_updater_source(endpoint.as_deref(), pubkey.as_deref())?;
-
-    audit!(
-        state.audit,
-        Security,
-        Settings,
-        "settings.updater_source",
-        format!(
-            "Updater source changed: endpoint {}, key {}",
-            next.updater_endpoint.as_deref().unwrap_or("(built-in)"),
-            if next.updater_pubkey.is_some() {
-                "overridden"
-            } else {
-                "(built-in)"
-            }
-        )
-    );
-
-    Ok(updater_status(state))
 }

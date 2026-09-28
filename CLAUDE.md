@@ -232,7 +232,7 @@ genuinely need a window belongs on that side of the line.
 | `components/shell.tsx` | Sidebar ≥768px, bottom tabs below |
 | `components/titlebar.tsx` | The app's own window frame — see "Cross-platform" |
 | `components/update-banner.tsx` | "There is a newer version", with an Install button when this build can verify one |
-| `components/updater-settings.tsx` | Settings → App → Updates: channel, check now, and the endpoint/key overrides |
+| `components/updater-settings.tsx` | Settings → App → Updates: channel, check now, and the endpoint/key overrides shown read-only |
 | `components/folder-picker.tsx` | The in-app folder chooser, over `commands/fs.rs` |
 | `components/game-icon.tsx` | A game's artwork, with a deterministic initials fallback |
 | `components/item-thumb.tsx` | An item's cover in a list, from the LOCAL library row |
@@ -1344,7 +1344,7 @@ keypair. What belongs here is the shape and the rules.
 | Does | reports | replaces the running program |
 
 **Both inputs are resolved per call by `tmc_core::updater::resolve`**: the
-Settings override, else what was compiled in, else the fallback. The endpoint's
+`settings.json` override (hand-edited; no command sets it), else what was compiled in, else the fallback. The endpoint's
 compiled default is `TMC_UPDATER_ENDPOINT` — the static `latest.json` the
 release workflow uploads to the S3 downloads bucket, which needs nothing on the
 site — and its fallback is the site's `/update/:target/:arch/:current` route.
@@ -1378,12 +1378,13 @@ So:
     perfectly and is refused by every user after the download.
   * **`updaterEndpoint`/`updaterPubkey` are not settings a patch can touch.**
     Like the jail roots, `SettingsStore::patch` refuses them
-    (`UPDATER_SOURCE_FIELDS`); `updater_set_source` validates them (HTTPS, no
-    credentials, a real minisign key), `sanitise` re-validates a hand-edited
-    file, and every change is audited at Security level. This IS a widening:
-    script in the webview could call that command and choose what installs
-    next. It was asked for — a fork, a staging bucket or a rotated key without
-    a rebuild — and SECURITY.md lists it with the other deliberate gaps.
+    (`UPDATER_SOURCE_FIELDS`), and **no command sets them** — script in the
+    webview must not be able to choose what installs next. They come only from
+    a hand-edited `settings.json` (code that can write it already runs as the
+    user): `sanitise` validates them on read (HTTPS, no credentials, a real
+    minisign key) and drops what fails, `AppState::build` audits an override in
+    force at Security level at every start, `reset` keeps them, and Settings
+    shows them read-only. Do not add a setter back; SECURITY.md lists this.
   * **`AppRelease.signature` is a required column** on the website, the
     publishing script refuses without one, and there is no "unsigned for now"
     branch — because that branch is the one somebody ships by accident.

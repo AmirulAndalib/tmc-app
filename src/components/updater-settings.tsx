@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { FiAlertTriangle, FiCheck, FiDownload, FiRefreshCw } from 'react-icons/fi'
 
@@ -12,17 +12,17 @@ import { Row, Select } from '~/components/form'
  * Settings → App → Updates: the channel, a "check now" button, and — behind a
  * disclosure — where updates come from and which key they must be signed with.
  *
- * The last two are the ADMINISTRATOR half. The key decides what the app will
- * install over itself, so it is its own command (`updater_set_source`, which
- * validates and audits at Security level), never part of a settings patch, and
- * this screen says so beside the Save button rather than in a doc nobody opens.
+ * The last two are the ADMINISTRATOR half and are shown, never edited: the key
+ * decides what the app will install over itself, so no command sets it. They
+ * come from a hand-edited `settings.json` (validated on read, audited at
+ * Security level at startup) or the build environment.
  *
  * With no key anywhere the app still checks and still links to the download
  * page; it just says it cannot install, and why.
  */
 
 const ORIGIN_LABEL: Record<UpdaterOriginT, string> = {
-    override: 'set here',
+    override: 'settings.json',
     compiled: 'built in',
     site: 'the site',
 }
@@ -167,28 +167,17 @@ export default function UpdaterSettings() {
     )
 }
 
-/** The endpoint and key overrides. Collapsed: most people never open it. */
+/**
+ * The endpoint and key, READ-ONLY. Nothing in the app can change them: the key
+ * decides what installs over this program, and the webview is assumed hostile.
+ * An administrator sets them in `settings.json` with the app closed.
+ */
 function SourceForm() {
-    const client = useQueryClient()
     const status = useQuery({
         queryKey: ['updater-status'],
         queryFn: ipc.updaterStatus,
     })
     const s = status.data
-
-    const [endpoint, setEndpoint] = useState('')
-    const [pubkey, setPubkey] = useState('')
-
-    useEffect(() => {
-        setEndpoint(s?.endpointOverride ?? '')
-        setPubkey(s?.pubkeyOverride ?? '')
-    }, [s?.endpointOverride, s?.pubkeyOverride])
-
-    const save = useMutation({
-        mutationFn: (next: { endpoint: string | null; pubkey: string | null }) =>
-            ipc.updaterSetSource(next.endpoint, next.pubkey),
-        onSuccess: (next) => client.setQueryData(['updater-status'], next),
-    })
 
     if (!s) return null
 
@@ -206,87 +195,36 @@ function SourceForm() {
             <div className="mt-3 flex flex-col gap-3">
                 <p className="text-xs text-muted">
                     Updates are fetched from{' '}
-                    <span className="break-all font-mono">{s.endpoint}</span>
+                    <span className="break-all font-mono">{s.endpoint}</span> (
+                    {ORIGIN_LABEL[s.endpointOrigin]})
                     {s.keyOrigin === null
                         ? ' and cannot be installed: no signing key is configured.'
                         : ` and must be signed with the ${ORIGIN_LABEL[s.keyOrigin]} key.`}
                 </p>
 
-                <label className="flex flex-col gap-1 text-xs">
-                    <span className="font-medium">Endpoint</span>
-                    <input
-                        value={endpoint}
-                        onChange={(e) => setEndpoint(e.target.value)}
-                        placeholder={s.compiledEndpoint}
-                        spellCheck={false}
-                        className="rounded-lg border border-border bg-transparent px-2 py-1.5 font-mono text-xs"
-                    />
-                    <span className="text-muted">
-                        HTTPS. A <code>latest.json</code> manifest, or a route that
-                        takes <code>{'{{target}}'}</code>, <code>{'{{arch}}'}</code>{' '}
-                        and <code>{'{{current_version}}'}</code>. Empty uses the
-                        built-in one.
-                    </span>
-                </label>
+                {s.pubkeyOverride !== null && (
+                    <div className="flex flex-col gap-1 text-xs">
+                        <span className="font-medium">Public key</span>
+                        <code className="break-all rounded-lg border border-border px-2 py-1.5 text-[11px]">
+                            {s.pubkeyOverride}
+                        </code>
+                    </div>
+                )}
 
-                <label className="flex flex-col gap-1 text-xs">
-                    <span className="font-medium">Public key</span>
-                    <textarea
-                        value={pubkey}
-                        onChange={(e) => setPubkey(e.target.value)}
-                        placeholder={
-                            s.compiledKey
-                                ? 'Empty uses the key built into this app.'
-                                : 'No key is built into this app. Paste the one `tauri signer generate` printed.'
-                        }
-                        rows={3}
-                        spellCheck={false}
-                        className="rounded-lg border border-border bg-transparent px-2 py-1.5 font-mono text-[11px]"
-                    />
-                </label>
-
-                <p className="flex items-start gap-1.5 text-xs text-warning">
+                <p className="flex items-start gap-1.5 text-xs text-muted">
                     <FiAlertTriangle className="mt-0.5 size-3 shrink-0" />
-                    The key decides what this app will install over itself. Only
-                    change it to a key you were given by whoever builds your
-                    releases. Every change is written to the security log.
+                    <span>
+                        These cannot be changed from inside the app. An
+                        administrator sets <code>updaterEndpoint</code> (an HTTPS
+                        manifest URL) and <code>updaterPubkey</code> (the key{' '}
+                        <code>tauri signer generate</code> printed) in the
+                        app&apos;s <code>settings.json</code> while the app is
+                        closed; a value that fails validation is ignored, and an
+                        override in force is written to the security log at every
+                        start. Removing them returns to the{' '}
+                        {s.compiledKey ? 'built-in' : 'default'} source.
+                    </span>
                 </p>
-
-                <div className="flex flex-wrap items-center gap-2">
-                    <button
-                        type="button"
-                        disabled={save.isPending}
-                        onClick={() =>
-                            save.mutate({
-                                endpoint: endpoint.trim() || null,
-                                pubkey: pubkey.trim() || null,
-                            })
-                        }
-                        className="rounded-lg bg-accent px-3 py-1.5 text-xs text-accent-foreground disabled:opacity-60"
-                    >
-                        Save
-                    </button>
-                    {overridden && (
-                        <button
-                            type="button"
-                            disabled={save.isPending}
-                            onClick={() =>
-                                save.mutate({ endpoint: null, pubkey: null })
-                            }
-                            className="rounded-lg border border-border px-3 py-1.5 text-xs"
-                        >
-                            Use the built-in source
-                        </button>
-                    )}
-                    {save.error && (
-                        <span className="text-xs text-danger">
-                            {messageOf(save.error)}
-                        </span>
-                    )}
-                    {save.isSuccess && !save.isPending && (
-                        <span className="text-xs text-success">Saved.</span>
-                    )}
-                </div>
             </div>
         </details>
     )

@@ -280,7 +280,6 @@ pub fn run() {
             #[cfg(desktop)]
             commands::api::update_install,
             commands::api::updater_status,
-            commands::api::updater_set_source,
             commands::settings::settings_get,
             commands::settings::settings_patch,
             commands::settings::settings_set_game_dir,

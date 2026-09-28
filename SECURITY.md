@@ -61,15 +61,18 @@ Reported often enough to be worth listing:
   an action, that _is_ a vulnerability — the closed list is in
   `core/src/deeplink.rs` and its test names the shapes that must never start
   working.
-- **The updater's endpoint and public key can be overridden in Settings.**
-  Settings → App → Updates → *Update source* exists so a staging bucket, a
-  fork or a rotated key can be tested without a rebuild, and it means code that
-  can call `updater_set_source` can choose which signatures the updater
-  trusts. It is bounded like the jail anchors: refused in `settings_patch`,
-  validated (HTTPS, no credentials, a real minisign key), re-validated when
-  `settings.json` is read, audited at Security level on every change, and
-  shown as *overridden* on screen. Installing anything still requires a valid
-  signature from whichever key is in force; there is no unsigned path.
+- **The updater's endpoint and public key can be overridden in
+  `settings.json`.** A staging bucket, a fork or a rotated key can be tested
+  without a rebuild by hand-editing `updaterEndpoint`/`updaterPubkey` in the
+  app's `settings.json`. **No IPC command sets them**: `settings_patch` refuses
+  both and there is no dedicated setter, so script in the webview cannot choose
+  which signatures the updater trusts. Code that can write `settings.json`
+  already runs as the user. The values are validated when the file is read
+  (HTTPS, no credentials, a real minisign key; anything else is dropped),
+  audited at Security level at every start while in force, survive
+  `settings_reset`, and are shown read-only as *overridden* in Settings → App →
+  Updates. Installing anything still requires a valid signature from whichever
+  key is in force; there is no unsigned path.
 - **Unsigned cross-built binaries.** Windows and Linux artifacts are built on a
   Linux host and are not code-signed, so SmartScreen will warn. That is a fact
   about the build, not a compromise; verify against `checksums.txt` on the
