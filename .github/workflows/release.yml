@@ -405,9 +405,15 @@ jobs:
                   # static manifest points too — else the GitHub release.
                   base="${S3_BASE_URL:-https://github.com/${{ github.repository }}/releases/download/${TAG}}"
 
+                  # A pre-release tag (`v1.2.0-beta.1`) is published but not
+                  # promoted: the site's `app.version.latest` is the stable
+                  # switch, exactly as `latest.json` is in the bucket.
+                  promote=(--promote)
+                  case "$TAG" in *-*) promote=() ;; esac
+
                   node scripts/publish-release.mjs \
                       --dir artifacts \
                       --version "${TAG#v}" \
                       --base-url "$base" \
                       "${site[@]}" \
-                      --promote
+                      "${promote[@]}"
