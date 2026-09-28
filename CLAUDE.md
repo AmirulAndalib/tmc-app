@@ -247,6 +247,10 @@ genuinely need a window belongs on that side of the line.
 | `components/browse-filters.tsx` | The filter panel: collapsible groups, kind-aware, URL-backed |
 | `components/server-panel.tsx` | The live panel on a server's page |
 | `routes/apps.tsx` | **The front door.** Every game and app, and which of them can be started here |
+| `routes/game.tsx` | **One game** (`/apps/:id`): play, its busiest servers, leaderboards and the member's own figures |
+| `routes/friends.tsx` | Friends, requests, presence, party invites and the current party — the routes a Dot game's `dot-friends`/`dot-party` speak |
+| `lib/api/social.ts` | Schemas for the friends/party/presence/stats routes, which are NOT in the mirrored contract — see its header |
+| `components/add-friend-button.tsx` | "Add friend" on a member's page |
 | `routes/library.tsx` | Three views: the games on this machine, the games TMC published here, and what the account subscribed to |
 | `components/library-tmc.tsx` | TMC's own games: install, update, auto-update, remove |
 | `routes/join.tsx` | Where a `tmc://play/<host>:<port>` link lands. Shows what is there; joins nothing on its own |
@@ -331,6 +335,15 @@ Why a separate REST API rather than the website's tRPC:
 Endpoints: `/auth/device`, `/auth/token`, `/auth/refresh`, `/auth/revoke`, `/me`
 (GET + PATCH), `/browse`, `/content/:kind/:id`, `/facets`, `/apps`,
 `/play/launch`, `/version`.
+
+**The game backbone's player routes are read too, and are not in the contract.**
+`/friends` (+ `/requests`, `/request`, `/respond`, `/cancel`, `/remove`),
+`/party/mine`, `/party/invites`, `/party/invite/respond`, `/party/leave`,
+`/stats/top` and `/stats/me` are website-city's `docs/api/app-social.md` routes,
+typed beside their handlers rather than in `contract.ts`. `lib/api/social.ts`
+mirrors them by hand, with a test parsing the site's own documented examples;
+when the site moves them into the contract, that file becomes re-exports. The
+app never POSTs `/presence`: only a game token places its player.
 
 **`/apps` exists because the website has no page that could answer it.** Its
 chrome is built around one chosen game, so "what games are there?" is a question

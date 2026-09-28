@@ -137,7 +137,12 @@ function AppCard({
 
                     <div className="min-w-0 flex-1">
                         <h3 className="truncate text-sm font-semibold">
-                            {app.name}
+                            <Link
+                                to={`/apps/${app.id}`}
+                                className="hover:underline"
+                            >
+                                {app.name}
+                            </Link>
                         </h3>
                         <p className="truncate text-[11px] text-muted">
                             {TYPE_LABELS[app.type]}
