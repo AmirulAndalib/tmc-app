@@ -213,7 +213,10 @@ pub fn build_args(template: &[String], ctx: &LaunchContext) -> Vec<String> {
                  * an argument a game is entitled to reject outright, which
                  * would turn "no server chosen" into "the game will not start".
                  */
-                if out.last().is_some_and(|prev| prev.starts_with('-')) {
+                if out
+                    .last()
+                    .is_some_and(|prev| prev.starts_with('-') && !is_separator(prev))
+                {
                     out.pop();
                 }
             }
@@ -221,6 +224,21 @@ pub fn build_args(template: &[String], ctx: &LaunchContext) -> Vec<String> {
     }
 
     out
+}
+
+/// The bare `--` (or Godot's `++`) that ends the engine's own arguments.
+///
+/// **It is never the flag a missing value belonged to.** A Godot export reads
+/// its game's arguments from `OS.get_cmdline_user_args()`, which is ONLY what
+/// follows this separator — and the engine silently ignores an argument it does
+/// not recognise, so `tmc.x86_64 --connect host:port` starts, draws its menu and
+/// connects to nothing. The published template is therefore
+/// `["--", "--connect", "{host}:{port}"]`, and a template such as
+/// `["--", "{host}:{port}"]` with no server must keep its separator rather than
+/// have it mistaken for a flag and popped: dropping it would turn every later
+/// game argument into an engine argument.
+pub fn is_separator(arg: &str) -> bool {
+    arg == "--" || arg == "++"
 }
 
 /// One element, or `None` when a token in it had no value.
@@ -328,6 +346,65 @@ mod tests {
 
         // The game still knows which game it is; it simply starts at its menu.
         assert_eq!(args, vec!["--game", "hungario"]);
+    }
+
+    /// The exact template `dot-server-deploy`'s `./server export-native`
+    /// prints for its native client, which reads `--connect` from
+    /// `OS.get_cmdline_user_args()` — only what follows the bare `--`.
+    fn godot_template() -> Vec<String> {
+        vec!["--".into(), "--connect".into(), "{host}:{port}".into()]
+    }
+
+    #[test]
+    fn the_published_godot_template_puts_the_address_after_the_separator() {
+        assert_eq!(
+            build_args(&godot_template(), &ctx()),
+            vec!["--", "--connect", "play.example.com:6064"]
+        );
+    }
+
+    #[test]
+    fn the_published_godot_template_with_no_server_starts_at_the_menu() {
+        let mut c = ctx();
+        c.host = None;
+        c.port = None;
+        c.server_id = None;
+
+        // `--connect` goes with its value; the separator stays, and a lone
+        // `--` is something every Godot build accepts and ignores.
+        assert_eq!(build_args(&godot_template(), &c), vec!["--"]);
+    }
+
+    #[test]
+    fn a_separator_is_never_popped_as_if_it_were_a_flag() {
+        let mut c = ctx();
+        c.host = None;
+
+        assert_eq!(
+            build_args(
+                &[
+                    "--headless".into(),
+                    "--".into(),
+                    "{host}:{port}".into(),
+                    "--name".into(),
+                    "{opt:name}".into(),
+                    "++".into(),
+                    "{host}".into(),
+                ],
+                &c,
+            ),
+            vec!["--headless", "--", "++"]
+        );
+        assert!(is_separator("--") && is_separator("++"));
+        assert!(!is_separator("--connect") && !is_separator("-"));
+    }
+
+    #[test]
+    fn a_port_with_no_host_is_not_an_address() {
+        let mut c = ctx();
+        c.host = Some(String::new());
+
+        assert_eq!(build_args(&godot_template(), &c), vec!["--"]);
     }
 
     #[test]
