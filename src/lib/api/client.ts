@@ -8,15 +8,25 @@ import {
     BrowseResponseSchema,
     ContentDetailSchema,
     FacetsResponseSchema,
+    FriendListResponse,
+    FriendRequestSentResponse,
+    FriendRequestsResponse,
     InstallListResponse,
     InstallSchema,
     MeResponseSchema,
+    PartyInviteRespondResponse,
+    PartyInvitesResponse,
+    PartyLeaveResponse,
+    PartyMineResponse,
     PlayLaunchResponseSchema,
     ReportCreateResponse,
     ReviewListResponse,
     ReviewVoteResponse,
     ReviewWriteResponse,
     ServerLookupResponseSchema,
+    StatDefsResponse,
+    StatsMeResponse,
+    StatsTopResponse,
     SubscriptionSyncResponse,
     UserSettingsSchema,
     type AppListQueryT,
@@ -28,18 +38,6 @@ import {
     type SubKindT,
     type UserSettingsT,
 } from './contract'
-import {
-    FriendListSchema,
-    FriendRequestSentSchema,
-    FriendRequestsSchema,
-    NothingSchema,
-    PartyInvitesSchema,
-    PartyLeaveSchema,
-    PartyMineSchema,
-    StatsMeSchema,
-    StatDefsSchema,
-    StatsTopSchema,
-} from './social'
 
 /**
  * The website API, as the app sees it.
@@ -373,49 +371,50 @@ export const api = {
      * in the web player and this app share the site's rate-limit buckets rather
      * than each getting their own.
      *
-     * Schemas are in `./social`, not the contract: see that file's header.
+     * Schemas are the contract's "Social" section; `./social` keeps the UI's
+     * helpers.
      */
 
-    friends: () => get('/friends', FriendListSchema, undefined, true),
+    friends: () => get('/friends', FriendListResponse, undefined, true),
 
     friendRequests: () =>
-        get('/friends/requests', FriendRequestsSchema, undefined, true),
+        get('/friends/requests', FriendRequestsResponse, undefined, true),
 
     /** Asking somebody who already asked you accepts them — the site's rule. */
     friendRequest: (userId: string) =>
-        send('POST', '/friends/request', FriendRequestSentSchema, { userId }),
+        send('POST', '/friends/request', FriendRequestSentResponse, { userId }),
 
     friendRespond: (requestId: number, accept: boolean) =>
-        send('POST', '/friends/respond', NothingSchema, { requestId, accept }),
+        send('POST', '/friends/respond', z.null(), { requestId, accept }),
 
     friendCancel: (requestId: number) =>
-        send('POST', '/friends/cancel', NothingSchema, { requestId }),
+        send('POST', '/friends/cancel', z.null(), { requestId }),
 
     friendRemove: (userId: string) =>
-        send('POST', '/friends/remove', NothingSchema, { userId }),
+        send('POST', '/friends/remove', z.null(), { userId }),
 
     /** The caller's party, or null. */
-    partyMine: () => get('/party/mine', PartyMineSchema, undefined, true),
+    partyMine: () => get('/party/mine', PartyMineResponse, undefined, true),
 
-    partyInvites: () => get('/party/invites', PartyInvitesSchema, undefined, true),
+    partyInvites: () => get('/party/invites', PartyInvitesResponse, undefined, true),
 
     /** Accepting also JOINS, so capacity and bans still decide. */
     partyInviteRespond: (inviteId: string, accept: boolean) =>
-        send('POST', '/party/invite/respond', NothingSchema, { inviteId, accept }),
+        send('POST', '/party/invite/respond', PartyInviteRespondResponse, { inviteId, accept }),
 
     partyLeave: (id: string) =>
-        send('POST', '/party/leave', PartyLeaveSchema, { id }),
+        send('POST', '/party/leave', PartyLeaveResponse, { id }),
 
     /**
      * One stat of one game as a ranking, with the signed-in member's own row.
      * Signed-in only: `self` is derived from the member's app-scoped key.
      */
     statsTop: (app: number, stat: string, limit = 25, offset = 0) =>
-        get('/stats/top', StatsTopSchema, { app, stat, limit, offset }, true),
+        get('/stats/top', StatsTopResponse, { app, stat, limit, offset }, true),
 
     /** Every value the signed-in member holds in one game. */
-    statsMe: (app: number) => get('/stats/me', StatsMeSchema, { app }, true),
+    statsMe: (app: number) => get('/stats/me', StatsMeResponse, { app }, true),
 
     /** Every visible stat one game declared — what the leaderboard picker lists. */
-    statsDefs: (app: number) => get('/stats/defs', StatDefsSchema, { app }, true),
+    statsDefs: (app: number) => get('/stats/defs', StatDefsResponse, { app }, true),
 }

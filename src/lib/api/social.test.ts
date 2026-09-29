@@ -1,21 +1,21 @@
 import { describe, expect, it } from 'vitest'
 
 import {
-    FriendListSchema,
-    FriendRequestsSchema,
-    PartyInvitesSchema,
-    PartyMineSchema,
-    StatsMeSchema,
-    StatsTopSchema,
-    formatStat,
-    isStatKey,
-    presenceLabel,
-} from './social'
+    FriendListResponse as FriendListSchema,
+    FriendRequestsResponse as FriendRequestsSchema,
+    PartyInviteRespondResponse,
+    PartyInvitesResponse as PartyInvitesSchema,
+    PartyMineResponse as PartyMineSchema,
+    StatDefsResponse,
+    StatsMeResponse as StatsMeSchema,
+    StatsTopResponse as StatsTopSchema,
+} from './contract'
+import { formatStat, isStatKey, presenceLabel } from './social'
 
 /*
  * The payloads below are website-city's own examples (docs/api/app-social.md)
- * and the shapes its handlers build. They are what makes "a drift is a loud
- * parse error" true for routes that are not in the mirrored contract.
+ * and the shapes its handlers build, parsed through the mirrored contract's
+ * "Social" schemas — the same ones `client.ts` parses every response with.
  */
 
 const offline = {
@@ -153,9 +153,42 @@ describe('parties', () => {
 
         expect(invite!.id).toBe('9007199254740993')
     })
+
+    it('reads an invite answer as null (declined) or the join (accepted)', () => {
+        expect(PartyInviteRespondResponse.parse(null)).toBeNull()
+        expect(
+            PartyInviteRespondResponse.parse({
+                partyId: '4471',
+                role: 'MEMBER',
+                leftPartyId: null,
+            })?.partyId
+        ).toBe('4471')
+    })
+
+    it('refuses a party roster missing what the site always sends', () => {
+        expect(() =>
+            PartyMineSchema.parse({ id: '1', members: [] })
+        ).toThrow()
+    })
 })
 
 describe('stats', () => {
+    it('parses the picker list, with a kind the app has no label for', () => {
+        const [def] = StatDefsResponse.parse([
+            {
+                key: 'kills',
+                name: 'Kills',
+                description: null,
+                kind: 'SOMETHING_NEW',
+                unit: '',
+                decimals: 0,
+                players: 3,
+            },
+        ])
+
+        expect(def!.players).toBe(3)
+    })
+
     it('parses a ranking with the caller beside it', () => {
         const top = StatsTopSchema.parse({
             stat: {

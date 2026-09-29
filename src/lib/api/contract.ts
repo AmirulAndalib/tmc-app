@@ -1953,3 +1953,288 @@ export const PlayLaunchResponseSchema = z
     .nullable()
 
 export type PlayLaunchResponseT = z.infer<typeof PlayLaunchResponseSchema>
+
+/* ========================================================================== */
+
+// ------------------------------------------------------------------ Social
+//
+// The game backbone's player routes: friends, presence, parties and player
+// statistics (`docs/api/app-social.md`). A game in the web player calls them
+// with its GAME token; the desktop app calls the same routes with its device
+// token, which is bound to no game and so is never narrowed to one.
+//
+// Written from what the handlers SEND — the site's own types for these shapes
+// (`~/types/party/app`, `~/types/user/presence`, `lib/user/social/presence.ts`)
+// are aliases of the ones below, and the stats routes check their bodies with
+// `satisfies`, so a handler that drifts from this section stops compiling.
+//
+// Several routes answer `data: null` on success (`friends/respond`,
+// `friends/cancel`, `friends/remove`, and a declined `party/invite/respond`):
+// parse those with `ApiOk(z.null())`.
+
+/** A decimal id that can pass 2^53 — parties, invites. Never a JS number. */
+const IdString = z.string().min(1).max(20).regex(/^\d+$/)
+
+// ---------------------------------------------------------------- Presence
+
+/** Mirrors `PresenceStatusVals` in `~/types/user/presence`, which re-exports it. */
+export const PresenceStatusVals = ['offline', 'online', 'in_game', 'away'] as const
+export const PresenceStatusSchema = z.enum(PresenceStatusVals)
+export type PresenceStatusT = z.infer<typeof PresenceStatusSchema>
+
+/**
+ * Where a friend is. Offline is blank: every nullable field null and
+ * `joinable` false — which is also what a member hiding their activity reads
+ * as, to everybody. `appName` is set only with `appId`, `serverName` only with
+ * `serverId`, and `joinable` only when a server or party is named.
+ */
+export const PresenceSchema = z.object({
+    status: PresenceStatusSchema,
+    appId: z.number().int().nullable(),
+    appName: z.string().nullable(),
+    serverId: z.number().int().nullable(),
+    serverName: z.string().nullable(),
+    partyId: z.string().nullable(),
+    joinable: z.boolean(),
+    detail: z.string().nullable(),
+    /** ISO. Null when offline. */
+    updatedAt: z.string().nullable(),
+})
+export type AppPresenceT = z.infer<typeof PresenceSchema>
+
+/**
+ * `GET presence?userIds=a,b` — friends only, keyed by user id. Anybody who is
+ * not the caller's friend is LEFT OUT rather than answered offline.
+ */
+export const PresenceReadResponse = z.record(z.string(), PresenceSchema)
+export type PresenceReadResponseT = z.infer<typeof PresenceReadResponse>
+
+// ----------------------------------------------------------------- Friends
+
+/** `GET friends` — one row. Who the website's friend dock lists. */
+export const FriendSchema = z.object({
+    userId: z.string(),
+    displayName: z.string(),
+    avatarUrl: z.string().nullable(),
+    presence: PresenceSchema,
+})
+export type AppFriendT = z.infer<typeof FriendSchema>
+
+export const FriendListResponse = z.array(FriendSchema)
+
+/**
+ * A pending request. `id` is the `UserFriendship` row's INTEGER id and goes
+ * back as `requestId`; `userId` is always the OTHER person.
+ */
+export const FriendRequestSchema = z.object({
+    id: z.number().int(),
+    userId: z.string(),
+    displayName: z.string(),
+    /** ISO. */
+    createdAt: z.string(),
+})
+export type AppFriendRequestT = z.infer<typeof FriendRequestSchema>
+
+/** `GET friends/requests` — both directions, newest first. */
+export const FriendRequestsResponse = z.object({
+    incoming: z.array(FriendRequestSchema),
+    outgoing: z.array(FriendRequestSchema),
+})
+export type FriendRequestsResponseT = z.infer<typeof FriendRequestsResponse>
+
+/** `POST friends/request` and `POST friends/remove`. */
+export const FriendUserRequest = z.object({ userId: z.string().min(1).max(64) })
+
+/**
+ * `POST friends/respond` (with `accept`) and `POST friends/cancel` (without).
+ * `requestId` is a `FriendRequestSchema.id`.
+ */
+export const FriendRespondRequest = z.object({
+    requestId: z.coerce.number().int().positive().max(2_147_483_647),
+    accept: z.boolean(),
+})
+export const FriendCancelRequest = FriendRespondRequest.omit({ accept: true })
+
+/**
+ * `POST friends/request`'s answer. When the other person had already asked,
+ * the request accepted theirs and this is the friendship's id.
+ */
+export const FriendRequestSentResponse = z.object({ id: z.number().int() })
+export type FriendRequestSentResponseT = z.infer<typeof FriendRequestSentResponse>
+
+// ----------------------------------------------------------------- Parties
+
+/**
+ * One member of a party. `displayName` is `''` rather than null for a member
+ * with neither name nor username. `role`, `state`, `presence` are Prisma enum
+ * names kept as strings so a new one is not a parse failure.
+ */
+export const PartyMemberSchema = z.object({
+    userId: z.string(),
+    displayName: z.string(),
+    gameName: z.string().nullable(),
+    role: z.string(),
+    state: z.string(),
+    presence: z.string(),
+    joinedAt: z.string(),
+    leftAt: z.string().nullable(),
+    readyAt: z.string().nullable(),
+    connectedAt: z.string().nullable(),
+    score: z.number(),
+    kills: z.number(),
+    deaths: z.number(),
+    assist: z.number(),
+})
+export type AppPartyMemberT = z.infer<typeof PartyMemberSchema>
+
+/**
+ * One party, flat — `GET /api/integration/v1/party/{id}`'s party object with
+ * `stage` and `members` inside it. Ids are decimal STRINGS, dates ISO. `hostId`
+ * is null when the host is somebody this viewer may not name, and `members` is
+ * only the caller's own row when the roster is not theirs to see.
+ */
+export const PartySchema = z.object({
+    id: z.string(),
+    name: z.string().nullable(),
+    type: z.string(),
+    techType: z.string(),
+    maxUsers: z.number().int(),
+    users: z.number().int(),
+    stage: z.string(),
+    startTime: z.string(),
+    endTime: z.string().nullable(),
+    mapName: z.string().nullable(),
+    gameMode: z.string().nullable(),
+    hostId: z.string().nullable(),
+    appId: z.number().int(),
+    serverId: z.number().int().nullable(),
+    members: z.array(PartyMemberSchema),
+})
+export type AppPartyT = z.infer<typeof PartySchema>
+
+/** `GET party/mine` — the live party the caller is in, or null. */
+export const PartyMineResponse = PartySchema.nullable()
+
+/** `GET party/invites` — one pending invite to the caller. */
+export const PartyInviteSchema = z.object({
+    id: z.string(),
+    partyId: z.string(),
+    partyName: z.string().nullable(),
+    /** Null when the inviter is somebody this member may not name. */
+    inviterId: z.string().nullable(),
+    message: z.string().nullable(),
+})
+export type AppPartyInviteT = z.infer<typeof PartyInviteSchema>
+
+/** Newest first, at most 50. */
+export const PartyInvitesResponse = z.array(PartyInviteSchema)
+
+/** `POST party/join`'s answer — and an accepted `party/invite/respond`'s. */
+export const PartyJoinResponse = z.object({
+    partyId: z.string(),
+    role: z.string(),
+    /** The party the member was silently taken out of to join this one. */
+    leftPartyId: z.string().nullable(),
+})
+export type PartyJoinResponseT = z.infer<typeof PartyJoinResponse>
+
+/** `POST party/invite/respond`. Accepting also JOINS, through the join gates. */
+export const PartyInviteRespondRequest = z.object({
+    inviteId: IdString,
+    accept: z.boolean(),
+})
+
+/** Null for a decline; the join's answer for an accept. */
+export const PartyInviteRespondResponse = PartyJoinResponse.nullable()
+
+/** `POST party/leave`. `silent` skips the "… left" chat line, nothing else. */
+export const PartyLeaveRequest = z.object({
+    id: IdString,
+    silent: z.boolean().optional(),
+})
+
+/** Whether the caller left, and whether that ended the party. */
+export const PartyLeaveResponse = z.object({
+    left: z.boolean(),
+    ended: z.boolean(),
+})
+export type PartyLeaveResponseT = z.infer<typeof PartyLeaveResponse>
+
+// -------------------------------------------------------------- Statistics
+
+/**
+ * Mirrors `PlayerStatKindVals` in `~/types/integration/stats`. For LABELS only:
+ * the schemas below keep `kind` a string, because a kind added on the site is
+ * a stat an older client can still rank — the ordering comes back applied.
+ */
+export const StatKindVals = ['COUNTER', 'GAUGE', 'BEST', 'LOWEST'] as const
+
+/** Mirrors `STATS_MAX_KEY`: a stat key is 1..64 of `[A-Za-z0-9._:-]`, alphanumeric first. */
+export const STAT_KEY_MAX = 64
+
+/** One value a player holds. */
+export const StatValueSchema = z.object({
+    key: z.string(),
+    name: z.string(),
+    kind: z.string(),
+    unit: z.string(),
+    decimals: z.number().int().nonnegative(),
+    value: z.number(),
+})
+export type StatValueT = z.infer<typeof StatValueSchema>
+
+/**
+ * `GET stats/me?app=` — every value the signed-in member holds in one game,
+ * under their app-scoped key. `app` is off the credential for a game token and
+ * required for a device token.
+ */
+export const StatsMeResponse = z.object({
+    player: z.string(),
+    name: z.string().nullable(),
+    stats: z.array(StatValueSchema),
+})
+export type StatsMeResponseT = z.infer<typeof StatsMeResponse>
+
+export const StatsTopRowSchema = z.object({
+    rank: z.number().int().positive(),
+    player: z.string(),
+    name: z.string(),
+    value: z.number(),
+})
+export type StatsTopRowT = z.infer<typeof StatsTopRowSchema>
+
+/**
+ * `GET stats/top?app=&stat=&offset=&limit=` — one stat as a ranking, with the
+ * caller's own row (`self`, derived from their app-scoped key; null when they
+ * hold no value).
+ */
+export const StatsTopResponse = z.object({
+    stat: z.object({
+        key: z.string(),
+        name: z.string(),
+        kind: z.string(),
+        unit: z.string(),
+        decimals: z.number().int().nonnegative(),
+        players: z.number().int().nonnegative(),
+    }),
+    rows: z.array(StatsTopRowSchema),
+    self: StatsTopRowSchema.nullable(),
+})
+export type StatsTopResponseT = z.infer<typeof StatsTopResponse>
+
+/** One stat a game declared, as `GET stats/defs?app=` lists it. */
+export const StatDefSchema = z.object({
+    key: z.string(),
+    name: z.string(),
+    description: z.string().nullable(),
+    kind: z.string(),
+    unit: z.string(),
+    decimals: z.number().int().nonnegative(),
+    /** How many players hold a value. */
+    players: z.number().int().nonnegative(),
+})
+export type StatDefT = z.infer<typeof StatDefSchema>
+
+/** Every VISIBLE stat, ordered by key. What a leaderboard picker lists. */
+export const StatDefsResponse = z.array(StatDefSchema)
+export type StatDefsResponseT = z.infer<typeof StatDefsResponse>

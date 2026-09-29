@@ -251,7 +251,7 @@ genuinely need a window belongs on that side of the line.
 | `routes/apps.tsx` | **The front door.** Every game and app, and which of them can be started here |
 | `routes/game.tsx` | **One game** (`/apps/:id`): play, its busiest servers, leaderboards and the member's own figures |
 | `routes/friends.tsx` | Friends, requests, presence, party invites and the current party — the routes a Dot game's `dot-friends`/`dot-party` speak |
-| `lib/api/social.ts` | Schemas for the friends/party/presence/stats routes, which are NOT in the mirrored contract — see its header |
+| `lib/api/social.ts` | UI names + helpers (`presenceLabel`, `formatStat`, `isStatKey`) for the friends/party/presence/stats routes; their schemas are the contract's "Social" section |
 | `components/add-friend-button.tsx` | "Add friend" on a member's page |
 | `routes/library.tsx` | Three views: the games on this machine, the games TMC published here, and what the account subscribed to |
 | `components/library-tmc.tsx` | TMC's own games: install, update, auto-update, remove |
@@ -338,14 +338,18 @@ Endpoints: `/auth/device`, `/auth/token`, `/auth/refresh`, `/auth/revoke`, `/me`
 (GET + PATCH), `/browse`, `/content/:kind/:id`, `/facets`, `/apps`,
 `/play/launch`, `/version`.
 
-**The game backbone's player routes are read too, and are not in the contract.**
-`/friends` (+ `/requests`, `/request`, `/respond`, `/cancel`, `/remove`),
-`/party/mine`, `/party/invites`, `/party/invite/respond`, `/party/leave`,
-`/stats/top`, `/stats/me` and `/stats/defs` (the picker; a 404 from an older site
-falls back to the held keys) are website-city's `docs/api/app-social.md` routes,
-typed beside their handlers rather than in `contract.ts`. `lib/api/social.ts`
-mirrors them by hand, with a test parsing the site's own documented examples;
-when the site moves them into the contract, that file becomes re-exports. The
+**The game backbone's player routes are in the contract too**, section
+"Social": `/friends` (+ `/requests`, `/request`, `/respond`, `/cancel`,
+`/remove`), `/party/mine`, `/party/invites`, `/party/invite/respond`,
+`/party/leave`, `/stats/top`, `/stats/me` and `/stats/defs` (the picker; a 404
+from an older site falls back to the held keys) — website-city's
+`docs/api/app-social.md` routes. `client.ts` parses them with the contract's
+`*Response` schemas; `respond`/`cancel`/`remove` answer `data: null` and are
+parsed with `z.null()`, and an accepted `party/invite/respond` answers the
+join (`PartyInviteRespondResponse`). `lib/api/social.ts` keeps only the UI's
+short type names and display helpers; its test parses the site's documented
+examples through the contract schemas. Stat `kind` stays a string in the
+contract (`StatKindVals` is labels only), so a new kind still ranks. The
 app never POSTs `/presence`: only a game token places its player.
 
 **`/apps` exists because the website has no page that could answer it.** Its
