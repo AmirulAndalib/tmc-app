@@ -209,8 +209,7 @@ pub fn build_args(template: &[String], ctx: &LaunchContext) -> Vec<String> {
          * that IS one (`{opt:x}` = `--`, a locale of `++`) would move where
          * the engine's arguments end, so it counts as no value at all.
          */
-        let value = substitute(element, ctx)
-            .filter(|v| is_separator(element) || !is_separator(v));
+        let value = substitute(element, ctx).filter(|v| is_separator(element) || !is_separator(v));
 
         match value {
             Some(value) => out.push(value),
