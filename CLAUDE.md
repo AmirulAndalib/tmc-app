@@ -341,7 +341,8 @@ Endpoints: `/auth/device`, `/auth/token`, `/auth/refresh`, `/auth/revoke`, `/me`
 **The game backbone's player routes are read too, and are not in the contract.**
 `/friends` (+ `/requests`, `/request`, `/respond`, `/cancel`, `/remove`),
 `/party/mine`, `/party/invites`, `/party/invite/respond`, `/party/leave`,
-`/stats/top` and `/stats/me` are website-city's `docs/api/app-social.md` routes,
+`/stats/top`, `/stats/me` and `/stats/defs` (the picker; a 404 from an older site
+falls back to the held keys) are website-city's `docs/api/app-social.md` routes,
 typed beside their handlers rather than in `contract.ts`. `lib/api/social.ts`
 mirrors them by hand, with a test parsing the site's own documented examples;
 when the site moves them into the contract, that file becomes re-exports. The
