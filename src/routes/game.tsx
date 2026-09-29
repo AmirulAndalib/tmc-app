@@ -32,10 +32,11 @@ import PlayDialog, { type PlayTargetT } from '~/components/play-dialog'
  *   * **Leaderboards**, from `/stats/top` — any stat a game's servers file
  *     through `dot-stats`, ranked by the site, with the signed-in member's own
  *     row beside it.
- *   * **Your figures**, from `/stats/me` — which is also how the page learns
- *     which stats a game HAS: there is no "list a game's stats" route (see the
- *     README's website-city notes), so the stat picker offers the keys this
- *     member holds values for and accepts a typed key for the rest.
+ *   * **Your figures**, from `/stats/me`, shown beside each stat.
+ *   * **The picker**, from `/stats/defs`: every visible stat the game
+ *     declared, so a member new to a game still has something to pick. A site
+ *     without that route falls back to the keys this member holds, and a typed
+ *     key reaches the rest either way.
  *
  * The stat in view lives in the URL (`?stat=`), like every durable view choice.
  */
@@ -248,7 +249,26 @@ function Leaderboards({ appId }: { appId: number }) {
         enabled: signedIn,
     })
 
-    const keys = mine.data?.stats ?? []
+    const defs = useQuery({
+        queryKey: ['stats', 'defs', appId],
+        queryFn: () => api.statsDefs(appId),
+        enabled: signedIn,
+        retry: false,
+    })
+
+    // Every declared stat, with this member's figure where they hold one; the
+    // held keys alone when the site cannot list a game's stats.
+    const held = new Map((mine.data?.stats ?? []).map((s) => [s.key, s]))
+    const keys: { key: string; name: string; value: number | null; decimals: number; unit: string }[] =
+        defs.data
+            ? defs.data.map((d) => ({
+                  key: d.key,
+                  name: d.name,
+                  value: held.get(d.key)?.value ?? null,
+                  decimals: d.decimals,
+                  unit: d.unit,
+              }))
+            : (mine.data?.stats ?? [])
     const stat = params.get('stat') ?? keys[0]?.key ?? null
 
     const top = useQuery({
@@ -288,9 +308,11 @@ function Leaderboards({ appId }: { appId: number }) {
                                 }`}
                             >
                                 {s.name}
-                                <span className="ml-1.5 opacity-70">
-                                    {formatStat(s.value, s.decimals, s.unit)}
-                                </span>
+                                {s.value !== null && (
+                                    <span className="ml-1.5 opacity-70">
+                                        {formatStat(s.value, s.decimals, s.unit)}
+                                    </span>
+                                )}
                             </button>
                         ))}
                         <form
@@ -325,8 +347,9 @@ function Leaderboards({ appId }: { appId: number }) {
                     )}
                     {mine.data && keys.length === 0 && !params.get('stat') && (
                         <p className="text-xs text-muted">
-                            You have no figures in this game yet. Type a stat key to
-                            see its ranking anyway.
+                            {defs.data
+                                ? 'This game has no stats yet.'
+                                : 'You have no figures in this game yet. Type a stat key to see its ranking anyway.'}
                         </p>
                     )}
 

@@ -187,6 +187,19 @@ export const StatsTopSchema = z.object({
 })
 export type StatsTopT = z.infer<typeof StatsTopSchema>
 
+/** `GET stats/defs?app=` — every visible stat the game declared, by key. */
+export const StatDefSchema = z.object({
+    key: z.string(),
+    name: z.string(),
+    description: z.string().nullable(),
+    kind: z.string(),
+    unit: z.string(),
+    decimals: z.number().int().nonnegative(),
+    players: z.number().int().nonnegative(),
+})
+export type StatDefT = z.infer<typeof StatDefSchema>
+export const StatDefsSchema = z.array(StatDefSchema)
+
 /** website-city's `STATS_MAX_KEY`. */
 export const STAT_KEY_MAX = 64
 

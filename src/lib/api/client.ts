@@ -37,6 +37,7 @@ import {
     PartyLeaveSchema,
     PartyMineSchema,
     StatsMeSchema,
+    StatDefsSchema,
     StatsTopSchema,
 } from './social'
 
@@ -414,4 +415,7 @@ export const api = {
 
     /** Every value the signed-in member holds in one game. */
     statsMe: (app: number) => get('/stats/me', StatsMeSchema, { app }, true),
+
+    /** Every visible stat one game declared — what the leaderboard picker lists. */
+    statsDefs: (app: number) => get('/stats/defs', StatDefsSchema, { app }, true),
 }
