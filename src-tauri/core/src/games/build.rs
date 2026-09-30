@@ -233,6 +233,48 @@ pub fn build_args(template: &[String], ctx: &LaunchContext) -> Vec<String> {
     out
 }
 
+/// The arguments that tell a TMC game shell where to keep downloaded content.
+///
+/// Appended after the game's own template, and only when that template carries
+/// the bare `--`: those are the arguments the shell reads through
+/// `OS.get_cmdline_user_args()`, and a build whose template has no separator is
+/// not a TMC shell and would be handed flags it never asked for.
+///
+/// **The folder is always the app's, never the player's choice.** "Clear game
+/// downloads" deletes it recursively, and a path a user picked is a path that
+/// can be their home directory. So the app names `<app data>/game-cache` on
+/// every launch -- which is also how it knows exactly what to clear -- and the
+/// setting is whether to keep anything there at all.
+///
+/// `keep == false` is `--content-cache off`: the shell downloads into a folder
+/// of its own that it empties at launch and at quit. `limit_mb` of 0 leaves the
+/// shell's own ceiling (4 GiB on a desktop).
+pub fn cache_args(
+    args: &[String],
+    keep: bool,
+    dir: &std::path::Path,
+    limit_mb: u32,
+) -> Vec<String> {
+    if !args.iter().any(|a| is_separator(a)) {
+        return Vec::new();
+    }
+
+    if !keep {
+        return vec!["--content-cache".into(), "off".into()];
+    }
+
+    let mut out = vec![format!("--cloud-cache-dir={}", dir.to_string_lossy())];
+
+    if limit_mb > 0 {
+        out.push(format!(
+            "--cloud-cache-bytes={}",
+            u64::from(limit_mb) * 1024 * 1024
+        ));
+    }
+
+    out
+}
+
 /// The bare `--` (or Godot's `++`) that ends the engine's own arguments.
 ///
 /// **It is never the flag a missing value belonged to.** A Godot export reads
@@ -506,5 +548,29 @@ mod tests {
 
         assert!(b.check("1.5.0").is_err());
         assert!(b.check("2.0.0").is_ok());
+    }
+
+    #[test]
+    fn cache_args_follow_the_separator_and_only_a_shell_gets_them() {
+        let dir = std::path::Path::new("/data/game-cache");
+        let shell: Vec<String> = vec!["--".into(), "--connect".into(), "h:1".into()];
+
+        assert_eq!(
+            cache_args(&shell, true, dir, 0),
+            vec!["--cloud-cache-dir=/data/game-cache".to_string()]
+        );
+        assert_eq!(
+            cache_args(&shell, true, dir, 2048),
+            vec![
+                "--cloud-cache-dir=/data/game-cache".to_string(),
+                format!("--cloud-cache-bytes={}", 2048u64 * 1024 * 1024),
+            ]
+        );
+        assert_eq!(
+            cache_args(&shell, false, dir, 2048),
+            vec!["--content-cache".to_string(), "off".to_string()]
+        );
+        // No separator: not a TMC shell, and nothing is added.
+        assert!(cache_args(&["--connect".into()], true, dir, 0).is_empty());
     }
 }

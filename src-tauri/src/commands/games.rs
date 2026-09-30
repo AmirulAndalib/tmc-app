@@ -31,6 +31,7 @@
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, State};
 
+use tmc_core::audit;
 use tmc_core::error::{AppError, AppResult};
 use tmc_core::games::{BuildPlatform, GameStatus, LaunchContext, NativeBuild};
 use tmc_core::library::db::InstalledGame;
@@ -242,7 +243,17 @@ pub async fn game_launch(
         }
     }
 
-    let plan = state.games.plan(&row, &ctx)?;
+    let mut plan = state.games.plan(&row, &ctx)?;
+
+    // Where the game keeps its downloads, and whether it keeps them at all --
+    // the app's folder, never a path a caller or a setting names.
+    let settings = state.settings.get();
+    plan.args.extend(tmc_core::games::build::cache_args(
+        &plan.args,
+        settings.game_cache_keep,
+        &game_cache_dir(&state),
+        settings.game_cache_limit_mb,
+    ));
 
     let session = crate::spawn::run(
         &app,
@@ -301,4 +312,68 @@ async fn resolve_server(state: &AppState, server_id: i64) -> AppResult<(String, 
         .and_then(|p| u16::try_from(p).ok());
 
     Ok((host, port))
+}
+
+/// The one folder TMC games keep downloaded content in. Fixed, and inside the
+/// app's own data, because "clear" deletes it recursively.
+fn game_cache_dir(state: &AppState) -> std::path::PathBuf {
+    state.paths.data.join("game-cache")
+}
+
+fn dir_bytes(dir: &std::path::Path) -> u64 {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return 0;
+    };
+
+    entries
+        .flatten()
+        .map(|entry| match entry.file_type() {
+            // Not followed: a link inside the cache is not the cache's to count.
+            Ok(t) if t.is_dir() => dir_bytes(&entry.path()),
+            Ok(t) if t.is_file() => entry.metadata().map(|m| m.len()).unwrap_or(0),
+            _ => 0,
+        })
+        .sum()
+}
+
+/// How much the kept game downloads take up.
+#[tauri::command]
+pub fn games_cache_size(state: State<'_, AppState>) -> AppResult<u64> {
+    Ok(dir_bytes(&game_cache_dir(&state)))
+}
+
+/// Delete every kept game download; returns the bytes freed.
+///
+/// Refused while a game is running: it has packs from this folder mounted, and
+/// deleting them under it is a crash on the next load rather than a smaller disk.
+#[tauri::command]
+pub fn games_cache_clear(state: State<'_, AppState>) -> AppResult<u64> {
+    if !state.sessions.running().is_empty() {
+        return Err(AppError::invalid(
+            "Close the running game first; it is using these files.",
+        ));
+    }
+
+    let dir = game_cache_dir(&state);
+    let freed = dir_bytes(&dir);
+
+    match std::fs::remove_dir_all(&dir) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => {
+            return Err(AppError::internal(format!(
+                "could not clear the game cache: {e}"
+            )))
+        }
+    }
+
+    audit!(
+        state.audit,
+        Info,
+        App,
+        "games.cache.clear",
+        "Game downloads cleared"
+    );
+
+    Ok(freed)
 }

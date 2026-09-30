@@ -90,6 +90,11 @@ export const AppSettingsSchema = z.object({
     downloadConcurrency: z.number(),
     downloadKeepHistory: z.boolean(),
 
+    /** Whether a TMC game keeps what it downloads between sessions. */
+    gameCacheKeep: z.boolean().default(true),
+    /** Ceiling for kept game downloads in MiB; `0` is the game's own (4 GiB). */
+    gameCacheLimitMb: z.number().default(0),
+
     requireSignedPlugins: z.boolean(),
     confirmEveryRun: z.boolean(),
     /**

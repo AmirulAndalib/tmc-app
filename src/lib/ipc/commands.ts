@@ -757,6 +757,12 @@ export const ipc = {
         locale?: string
     }) => call('game_launch', SessionSchema, { request }),
 
+    /** Bytes the kept TMC game downloads take up. */
+    gamesCacheSize: () => call('games_cache_size', z.number()),
+
+    /** Delete every kept TMC game download; refused while a game runs. Returns bytes freed. */
+    gamesCacheClear: () => call('games_cache_clear', z.number()),
+
     // -------------------------------------------------------------- Sessions
     //
     // Nothing here STARTS anything. A launch goes through `launchInstall` or

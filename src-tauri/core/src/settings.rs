@@ -110,6 +110,12 @@ pub struct AppSettings {
     /// its own plugin and still resolved through the jail whether this is on or
     /// off; this only decides whether the door exists.
     pub allow_config_editing: bool,
+
+    /// Whether a TMC game keeps what it downloads between sessions. Off, the
+    /// shell downloads into a folder it empties at launch and at quit.
+    pub game_cache_keep: bool,
+    /// Ceiling for kept game downloads, in MiB. `0` leaves the game's own (4 GiB).
+    pub game_cache_limit_mb: u32,
 }
 
 impl Default for AppSettings {
@@ -138,6 +144,8 @@ impl Default for AppSettings {
             require_signed_plugins: false,
             confirm_every_run: true,
             allow_config_editing: true,
+            game_cache_keep: true,
+            game_cache_limit_mb: 0,
         }
     }
 }
@@ -181,6 +189,10 @@ impl AppSettings {
         if !theme_ok {
             self.theme = "system".into();
         }
+
+        // A terabyte is past anything a player means; a typo is not a reason
+        // to hand the game an unbounded cache.
+        self.game_cache_limit_mb = self.game_cache_limit_mb.min(1024 * 1024);
 
         if !crate::updater::CHANNELS.contains(&self.update_channel.as_str()) {
             self.update_channel = "stable".into();

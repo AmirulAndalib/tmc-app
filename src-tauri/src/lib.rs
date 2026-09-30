@@ -333,6 +333,8 @@ pub fn run() {
             commands::games::games_check_updates,
             commands::games::games_auto_update,
             commands::games::game_launch,
+            commands::games::games_cache_size,
+            commands::games::games_cache_clear,
             commands::play::play_open_web,
             commands::play::play_handoff,
             commands::play::play_connect,

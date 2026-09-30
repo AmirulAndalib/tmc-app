@@ -16,6 +16,92 @@ import UpdaterSettings from '~/components/updater-settings'
  * get a kilobyte. `0` is the "no limit" value the settings store uses, so the
  * option and the stored value are the same thing.
  */
+/** Ceilings for kept game downloads, in MiB. `0` is the game's own 4 GiB. */
+const GAME_CACHE_LIMITS = [
+    { value: '0', label: 'Game default (4 GB)' },
+    { value: '1024', label: '1 GB' },
+    { value: '2048', label: '2 GB' },
+    { value: '8192', label: '8 GB' },
+    { value: '16384', label: '16 GB' },
+    { value: '32768', label: '32 GB' },
+]
+
+function formatBytes(bytes: number): string {
+    if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`
+    if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+    return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`
+}
+
+/**
+ * What TMC games keep on this machine.
+ *
+ * The folder is the app's own and is not offered as a setting: "Clear" deletes it
+ * recursively, and a folder somebody picked can be their home directory.
+ */
+function GameCacheSection() {
+    const { app, setApp } = useSettings()
+    const size = useQuery({
+        queryKey: ['games-cache-size'],
+        queryFn: () => ipc.gamesCacheSize(),
+    })
+    const [message, setMessage] = useState<string | null>(null)
+
+    if (!app) return null
+
+    const clear = async () => {
+        try {
+            const freed = await ipc.gamesCacheClear()
+            setMessage(`Cleared ${formatBytes(freed)}.`)
+        } catch (e) {
+            setMessage(e instanceof Error ? e.message : String(e))
+        }
+        void size.refetch()
+    }
+
+    return (
+        <Section
+            title="Games"
+            hint="Games played through TMC download their content as you join. Kept downloads make the next join instant."
+        >
+            <Row
+                label="Keep downloaded games"
+                hint="Off, a game downloads what it needs each session and deletes it when it closes."
+                control={
+                    <Toggle
+                        label="Keep downloaded games"
+                        checked={app.gameCacheKeep}
+                        onChange={(gameCacheKeep) => void setApp({ gameCacheKeep })}
+                    />
+                }
+            />
+            <Row
+                label="Space for kept games"
+                hint="The oldest downloads are removed first when this fills up."
+                control={
+                    <Select
+                        label="Space for kept games"
+                        value={String(app.gameCacheLimitMb)}
+                        onChange={(next) =>
+                            void setApp({ gameCacheLimitMb: Number(next) })
+                        }
+                        options={GAME_CACHE_LIMITS}
+                    />
+                }
+            />
+            <Row
+                label="Kept downloads"
+                hint={
+                    message ??
+                    (size.data != null
+                        ? `${formatBytes(size.data)} on this machine`
+                        : 'Measuring…')
+                }
+                control={<Button onClick={() => void clear()}>Clear</Button>}
+            />
+        </Section>
+    )
+}
+
 const DOWNLOAD_LIMITS = [
     { value: '0', label: 'No limit' },
     { value: String(256 * 1024), label: '256 KB/s' },
@@ -216,6 +302,8 @@ export default function AppSettingsRoute() {
                     }
                 />
             </Section>
+
+            <GameCacheSection />
 
             <Section title="Plugins">
                 <Row
