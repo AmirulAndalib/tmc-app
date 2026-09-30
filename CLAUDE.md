@@ -1135,6 +1135,14 @@ It is also the only one that does not consult `directPlay`: that flag answers
 question about a launch the SITE performs. A binary on this disk opening to its
 own menu is the game's business.
 
+**A server's owner can close a platform**, and the dialog follows:
+`server.platforms` (`{ web, desktop }` on `ServerInfo`, from the dot-server's
+`sv_allow_web` / `sv_allow_desktop` query rules) drops the web card when `web`
+is false and native + connect when `desktop` is false, with a line saying why.
+Only an explicit off closes anything — the contract defaults both to true, so an
+older site or a non-dot server keeps every button. The server refuses at the
+door either way; this is so the app does not offer a launch that will bounce.
+
 **The web player can open full screen**, and the choice is made before the
 window exists — `fullscreen` on `play_open_web`, set on the window BUILDER. The
 window is a remote page with no IPC, so it cannot ask for this itself; and

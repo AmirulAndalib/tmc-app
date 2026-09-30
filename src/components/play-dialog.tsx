@@ -80,6 +80,23 @@ export type PlayTargetT = {
     server?: ContentSummaryT | null
 }
 
+/** Says which platforms a server's owner has closed, so a missing button is explained. */
+function ClosedNote({ web, desktop }: { web: boolean; desktop: boolean }) {
+    const what =
+        web && desktop
+            ? 'web and desktop players'
+            : web
+              ? 'players in a browser window'
+              : 'desktop players'
+
+    return (
+        <p className="flex items-start gap-2 px-1 text-[11px] text-muted">
+            <FiAlertTriangle className="mt-0.5 size-3 shrink-0 text-warning" />
+            <span>This server&rsquo;s owner has closed it to {what}.</span>
+        </p>
+    )
+}
+
 function OptionField({
     option,
     value,
@@ -343,11 +360,23 @@ export default function PlayDialog({
      * exactly what that flag means. `connect` needs an address the owner has
      * not hidden.
      */
+    /*
+     * Which clients this server's owner lets in (`sv_allow_web` /
+     * `sv_allow_desktop`, read by the site from the server's query rules).
+     * The server turns a closed platform away at the door regardless; this
+     * only stops the dialog offering a button that would be refused. Every
+     * way this app starts a game into a server other than the web player is
+     * the desktop client. Absent (no server, an older site) means open.
+     */
+    const webClosed = server?.server?.platforms.web === false
+    const desktopClosed = server?.server?.platforms.desktop === false
+
     const canWeb =
         (app.play?.modes.includes('web') ?? false) &&
-        (app.play?.directPlay === true || !!server)
+        (app.play?.directPlay === true || !!server) &&
+        !webClosed
 
-    const canConnect = !!server?.server?.connectUrl
+    const canConnect = !!server?.server?.connectUrl && !desktopClosed
 
     const canSandbox = (sandboxes?.length ?? 0) > 0
 
@@ -359,7 +388,7 @@ export default function PlayDialog({
      * performs. This launch is a binary on this disk, and whether it opens to a
      * menu is the game's own business.
      */
-    const canNative = native != null
+    const canNative = native != null && !desktopClosed
 
     /*
      * Chosen once the facts are in, not on every render.
@@ -568,6 +597,12 @@ export default function PlayDialog({
                                     device yet.
                                 </span>
                             </p>
+                            {(webClosed || desktopClosed) && (
+                                <ClosedNote
+                                    web={webClosed}
+                                    desktop={desktopClosed}
+                                />
+                            )}
                             <p>
                                 Set up a sandbox for it in{' '}
                                 <Link to="/sandboxes" className="underline">
@@ -695,7 +730,14 @@ export default function PlayDialog({
                                 />
                             )}
 
-                            {!canNative && app.install && (
+                            {(webClosed || desktopClosed) && (
+                                <ClosedNote
+                                    web={webClosed}
+                                    desktop={desktopClosed}
+                                />
+                            )}
+
+                            {!canNative && !desktopClosed && app.install && (
                                 <p className="flex items-start gap-2 px-1 text-[11px] text-muted">
                                     <FiCpu className="mt-0.5 size-3 shrink-0" />
                                     <span>

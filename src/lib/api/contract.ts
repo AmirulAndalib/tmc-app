@@ -305,6 +305,23 @@ export const ServerInfoSchema = z.object({
      * nothing to query and the app must not pretend otherwise.
      */
     query: AppQueryConfigSchema.nullable(),
+
+    /**
+     * Which clients the server's owner lets join: `sv_allow_web` and
+     * `sv_allow_desktop`, as the server publishes them among its query rules.
+     * `desktop` is the desktop client — both the app's own install of a game
+     * and the website's `app` play mode.
+     *
+     * Only an explicit off is `false`: a server that reports nothing (another
+     * engine, an older dot-server, a scan that has not run) allows both,
+     * because cross-play is the default and a missing answer is not a
+     * refusal. The server refuses a closed platform at the door either way;
+     * this only stops a client offering a button that would be turned away.
+     * Defaulted so an app reading an older site keeps every button.
+     */
+    platforms: z
+        .object({ web: z.boolean(), desktop: z.boolean() })
+        .default({ web: true, desktop: true }),
 })
 
 export type ServerInfoT = z.infer<typeof ServerInfoSchema>
