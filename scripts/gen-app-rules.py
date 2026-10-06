@@ -21,7 +21,7 @@ WHERE THE FACTS COME FROM
 -------------------------
 `provenance` on every row. `vortex` means the mod path, Steam id and marker were
 read out of Nexus Mods' own game extension in
-`external-study/modding/mod-managers/Vortex/extensions/games/`; `thunderstore`
+`/extra/external/modding/mod-managers/Vortex/extensions/games/`; `thunderstore`
 means r2modman's `ecosystem.json`. `known` means neither had it and it is
 written from the game's own modding documentation — those are the rows to check
 first when something lands in the wrong folder.
