@@ -46,6 +46,13 @@ export default function Reviews({ kind, id }: { kind: ContentKindT; id: number }
     const [sort, setSort] = useState<Sort>('recent')
     const [writing, setWriting] = useState(false)
 
+    /*
+     * A new review the site's or the item's approval queue is holding. It is
+     * visible to nobody but its author until approved, so the list may not
+     * show it at all -- and a review that vanishes on submit reads as lost.
+     */
+    const [held, setHeld] = useState(false)
+
     const { status } = useAuth()
     const cache = useQueryClient()
 
@@ -117,7 +124,7 @@ export default function Reviews({ kind, id }: { kind: ContentKindT; id: number }
                 </h2>
 
                 <div className="flex items-center gap-2">
-                    {status === 'signedIn' && !writing && !mine && (
+                    {status === 'signedIn' && !writing && !mine && !held && (
                         <button
                             type="button"
                             onClick={() => setWriting(true)}
@@ -144,12 +151,23 @@ export default function Reviews({ kind, id }: { kind: ContentKindT; id: number }
                     kind={kind}
                     id={id}
                     existing={mine ?? null}
-                    onDone={async () => {
+                    onDone={async (wasHeld) => {
                         setWriting(false)
+                        setHeld(wasHeld)
                         await refresh()
                     }}
                     onCancel={() => setWriting(false)}
                 />
+            )}
+
+            {held && (
+                <p
+                    role="status"
+                    className="rounded-xl border border-border bg-surface p-3 text-xs text-muted"
+                >
+                    Your review was submitted for approval. Only you can see it
+                    until it is approved.
+                </p>
             )}
 
             {first.average !== null && (
@@ -304,7 +322,7 @@ function ReviewForm({
     kind: ContentKindT
     id: number
     existing: ReviewT | null
-    onDone: () => Promise<unknown>
+    onDone: (held: boolean) => Promise<unknown>
     onCancel: () => void
 }) {
     const [rating, setRating] = useState<number | null>(existing?.rating ?? null)
@@ -317,14 +335,14 @@ function ReviewForm({
         setError(null)
 
         try {
-            await api.writeReview({
+            const saved = await api.writeReview({
                 kind,
                 id,
                 rating,
                 content: content.trim() || null,
             })
 
-            await onDone()
+            await onDone(saved.held === true)
         } catch (err) {
             setError(
                 err instanceof Error

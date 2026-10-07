@@ -1202,6 +1202,12 @@ export const ReviewWriteResponse = z.object({
     saved: z.literal(true),
     /** False for a first review, true for an edit. */
     edited: z.boolean(),
+    /**
+     * True when the review is waiting for approval (the item's or the site's
+     * approval queue) and is visible to nobody but its author until then.
+     * Additive: older clients ignore it.
+     */
+    held: z.boolean().optional(),
 })
 
 export const ReviewDeleteRequest = z.object({
