@@ -1332,8 +1332,12 @@ means.
 silently ignores an argument it does not recognise — so `tmc.x86_64 --connect
 host:port` starts, draws its menu and joins nothing. The template
 `dot-server-deploy`'s `./server export-native` publishes is
-`["--", "--connect", "{host}:{port}"]`, and `build::is_separator` is why the
-separator is never popped as if it were the flag a missing value belonged to.
+`["--", "--connect", "{host}:{port}", "--udp", "{host}:{udpPort}"]`, and
+`build::is_separator` is why the separator is never popped as if it were the flag a
+missing value belonged to. `{udpPort}` (2026-10-09) is a dual-stack server's ENet
+port, which `game_launch` reads as `udpPort` off the site's server summary (spy takes
+it from the server's A2S `udp:<port>` keyword); a server with none loses the
+`--udp` pair and the shell joins over WebSocket at `--connect`.
 `games::tests::real_godot_export_receives_the_server_through_the_plan` runs a
 real export through `plan` (ignored by default; set `TMC_GODOT_BUILD_DIR` to an
 unpacked `tmc-linux-x64.zip`) and checks the address reached the game.
@@ -2761,7 +2765,7 @@ Honest list, so nothing here reads as finished when it is not:
   Library view — and `dot-server-deploy`'s `./server export-native` now builds
   the Linux, Windows and macOS clients and prints the publishing command. Until
   somebody runs `scripts/publish-native-build.ts` against that output (with
-  `--args "--,--connect,{host}:{port}"` — the separator matters, see "The
+  `--args "--,--connect,{host}:{port},--udp,{host}:{udpPort}"` — the separator matters, see "The
   launch arguments are a vector"), the TMC Games tab correctly says there is
   nothing published for this machine.
 - **A measurable virtual launch.** A USVFS launch is recorded as a

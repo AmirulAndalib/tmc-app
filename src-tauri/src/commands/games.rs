@@ -220,11 +220,12 @@ pub async fn game_launch(
     };
 
     if let Some(server_id) = request.server_id {
-        let (host, port) = resolve_server(&state, server_id).await?;
+        let (host, port, udp_port) = resolve_server(&state, server_id).await?;
 
         ctx.server_id = Some(server_id);
         ctx.host = Some(host);
         ctx.port = port;
+        ctx.udp_port = udp_port;
     }
 
     if let Some(serde_json::Value::Object(map)) = request.options {
@@ -280,7 +281,10 @@ pub async fn game_launch(
 /// rather than a launch into nothing: a client started with no address shows its
 /// own "could not connect" and the person who pressed Join has no way to tell
 /// that from a server being down.
-async fn resolve_server(state: &AppState, server_id: i64) -> AppResult<(String, Option<u16>)> {
+async fn resolve_server(
+    state: &AppState,
+    server_id: i64,
+) -> AppResult<(String, Option<u16>, Option<u16>)> {
     let detail = state
         .api
         .request(
@@ -311,7 +315,15 @@ async fn resolve_server(state: &AppState, server_id: i64) -> AppResult<(String, 
         .and_then(serde_json::Value::as_u64)
         .and_then(|p| u16::try_from(p).ok());
 
-    Ok((host, port))
+    // A dual-stack server's ENet port, from its own query; absent on a site
+    // older than the field and on every server that advertises none.
+    let udp_port = server
+        .get("udpPort")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|p| u16::try_from(p).ok())
+        .filter(|p| *p > 0);
+
+    Ok((host, port, udp_port))
 }
 
 /// The one folder TMC games keep downloaded content in. Fixed, and inside the

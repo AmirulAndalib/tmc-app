@@ -167,6 +167,10 @@ pub struct LaunchContext {
     pub server_id: Option<i64>,
     pub host: Option<String>,
     pub port: Option<u16>,
+    /// A dual-stack server's native UDP (ENet) port, for `{udpPort}`. The
+    /// website reads it from the server's own query; behind a TLS proxy it is
+    /// not the join port, so it cannot be derived from `port`.
+    pub udp_port: Option<u16>,
     pub locale: Option<String>,
     pub options: BTreeMap<String, String>,
 }
@@ -319,6 +323,7 @@ fn substitute(element: &str, ctx: &LaunchContext) -> Option<String> {
             "serverId" => ctx.server_id.map(|id| id.to_string()),
             "host" => ctx.host.clone().filter(|h| !h.is_empty()),
             "port" => ctx.port.map(|p| p.to_string()),
+            "udpPort" => ctx.udp_port.map(|p| p.to_string()),
             "locale" => ctx.locale.clone().filter(|l| !l.is_empty()),
             other => match other.strip_prefix("opt:") {
                 Some(key) => ctx.options.get(key).cloned(),
@@ -348,6 +353,7 @@ mod tests {
             server_id: Some(7),
             host: Some("play.example.com".into()),
             port: Some(6064),
+            udp_port: None,
             locale: Some("en".into()),
             options: BTreeMap::new(),
         }
@@ -408,6 +414,43 @@ mod tests {
     fn the_published_godot_template_puts_the_address_after_the_separator() {
         assert_eq!(
             build_args(&godot_template(), &ctx()),
+            vec!["--", "--connect", "play.example.com:6064"]
+        );
+    }
+
+    /// The template once a build joins over UDP as well: `--udp` names the
+    /// ENet port, and the shell falls back to `--connect` without it.
+    fn godot_udp_template() -> Vec<String> {
+        vec![
+            "--".into(),
+            "--connect".into(),
+            "{host}:{port}".into(),
+            "--udp".into(),
+            "{host}:{udpPort}".into(),
+        ]
+    }
+
+    #[test]
+    fn a_dual_stack_server_is_joined_over_udp() {
+        let mut c = ctx();
+        c.udp_port = Some(6070);
+
+        assert_eq!(
+            build_args(&godot_udp_template(), &c),
+            vec![
+                "--",
+                "--connect",
+                "play.example.com:6064",
+                "--udp",
+                "play.example.com:6070"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_server_with_no_udp_port_drops_the_flag_and_keeps_the_join() {
+        assert_eq!(
+            build_args(&godot_udp_template(), &ctx()),
             vec!["--", "--connect", "play.example.com:6064"]
         );
     }
