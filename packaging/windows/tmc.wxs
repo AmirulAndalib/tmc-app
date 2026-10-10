@@ -17,7 +17,7 @@
       somewhere nobody browses to.
     - The `tmc://` scheme. The app cannot register this for itself on a
       per-machine install — HKLM needs elevation, and the installer is the one
-      elevated moment there is. Without it every deep link in CLAUDE.md's table
+      elevated moment there is. Without it every deep link in docs/deep-links.md
       is dead on a Windows box.
   What it deliberately does NOT do is check for the Edge WebView2 runtime.
   Tauri's NSIS installer bootstraps it; wixl supports no launch conditions at

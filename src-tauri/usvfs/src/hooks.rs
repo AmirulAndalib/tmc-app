@@ -2,7 +2,7 @@
 //!
 //! **Windows only, and honestly labelled.** Everything in this file has been
 //! type-checked against the Windows target and has never been run against a
-//! real game — see the crate header and `CLAUDE.md`'s "Not built yet". Nothing
+//! real game — see the crate header and `docs/gaps.md`. Nothing
 //! else in the app depends on it working; a sandbox set to the virtual strategy
 //! refuses at deploy time unless the app is built with the `usvfs-hooks`
 //! feature, which is off.

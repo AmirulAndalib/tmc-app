@@ -79,8 +79,8 @@ downloads bucket and the updater's signing key.
 
 ## Contributing Plugins
 A plugin is a folder with a `plugin.json` in it. See `examples/plugins/` for a
-working installer, server-query and theme plugin, and `CLAUDE.md` for the format
-and the sandbox rules. We will be improving this system over time.
+working installer, server-query and theme plugin, and [`docs/plugins.md`](docs/plugins.md) and
+[`docs/sandboxes.md`](docs/sandboxes.md) for the format and the sandbox rules. We will be improving this system over time.
 
 **Per-game rules**:
   - Where a game's mods go
@@ -152,7 +152,7 @@ cannot do that for you and says so rather than deploying into a folder the game
 will ignore.
 
 Your game is not here? It is four JSON files under `plugins/app/<slug>/` and no
-code. See **Adding a game** in `CLAUDE.md` for more details.
+code. See [`docs/extending.md`](docs/extending.md) for more details.
 
 ## Security
 Found something? **Please do not open a public issue** —
@@ -164,5 +164,5 @@ deliberate (RCON reaching private addresses is the usual one).
 [GPL-3.0-only](LICENSE). The game names, trademarks and mod-manager names used
 throughout are their respective owners'; they appear here to say which game a
 rule is for and which manager a folder layout belongs to, and nothing in this
-repository is a derivative work of any of them — see **Prior art** in
-`CLAUDE.md`.
+repository is a derivative work of any of them — see
+[`docs/prior-art.md`](docs/prior-art.md).

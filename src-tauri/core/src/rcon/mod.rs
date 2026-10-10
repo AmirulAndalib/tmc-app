@@ -25,7 +25,7 @@
 //!     webview.
 //!   * **Sessions are capped**, so it cannot be used to exhaust sockets.
 //!
-//! It remains a widening, it is listed as one in `CLAUDE.md`, and it is the
+//! It remains a widening, it is listed as one in `docs/rcon.md`, and it is the
 //! honest cost of the feature rather than something the code pretends away.
 //!
 //! WHERE THE PASSWORD LIVES

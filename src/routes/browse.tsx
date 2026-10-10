@@ -238,7 +238,7 @@ export default function BrowseRoute() {
 
             // NSFW is an APP setting, not a browse filter — it is a standing
             // preference about this install, not something to re-pick per
-            // search. See the settings split in CLAUDE.md.
+            // search. See the settings split in docs/settings-and-logging.md.
             nsfw: app?.showNsfw ?? false,
             archived: flag('archived'),
             mine: flag('mine'),

@@ -12,7 +12,7 @@
 #   - `cargo-xwin` fetches the MSVC CRT and Windows SDK headers/libs and points
 #     the build at them, so `clang-cl` and `lld-link` stand in for cl.exe and
 #     link.exe. That is what compiles bundled SQLite for Windows — the thing
-#     CLAUDE.md names as the reason `tmc-core` could not be cross-checked.
+#     docs/architecture.md names as the reason `tmc-core` could not be cross-checked.
 #   - Tauri's NSIS bundler already runs anywhere; it needs `makensis` on PATH.
 #   - The MSI does not — Tauri shells out to WiX, which is Windows-only — so
 #     `make-msi.sh` compiles `packaging/windows/tmc.wxs` with `wixl` instead.
