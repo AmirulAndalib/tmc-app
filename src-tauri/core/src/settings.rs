@@ -116,6 +116,11 @@ pub struct AppSettings {
     pub game_cache_keep: bool,
     /// Ceiling for kept game downloads, in MiB. `0` leaves the game's own (4 GiB).
     pub game_cache_limit_mb: u32,
+    /// Whether a TMC game may join over UDP when the server serves it. Off, the
+    /// shell is told `--transport ws` and joins over the WebSocket a browser uses:
+    /// for a network that drops UDP silently, where the shell would otherwise
+    /// wait out its UDP attempt on every join.
+    pub game_use_udp: bool,
 }
 
 impl Default for AppSettings {
@@ -146,6 +151,7 @@ impl Default for AppSettings {
             allow_config_editing: true,
             game_cache_keep: true,
             game_cache_limit_mb: 0,
+            game_use_udp: true,
         }
     }
 }

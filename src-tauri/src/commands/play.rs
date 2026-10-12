@@ -45,7 +45,9 @@
 //! on a URL ends up in every cache entry and history record that URL touches.
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Manager, State, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Manager, State};
+#[cfg(desktop)]
+use tauri::{WebviewUrl, WebviewWindowBuilder};
 
 use tmc_core::error::{AppError, AppResult};
 use tmc_core::session::{Session, SessionSpec};
@@ -89,6 +91,8 @@ pub struct PlayRequest {
     /// on every platform's own handling of a fullscreen window, and the window
     /// keeps its decorations so there is always a way back.
     #[serde(default)]
+    // A phone's browser decides that for itself.
+    #[cfg_attr(mobile, allow(dead_code))]
     pub fullscreen: bool,
 }
 
@@ -171,6 +175,81 @@ pub async fn play_open_web(
         .filter(|t| !t.trim().is_empty())
         .unwrap_or_else(|| "TMC Player".to_string());
 
+
+    #[cfg(mobile)]
+    {
+        let _ = (loader_url, boot);
+        open_on_site(&app, &state, &request, &title)
+    }
+
+    #[cfg(desktop)]
+    {
+        open_window(app, state, request, loader_url, boot, title)
+    }
+}
+
+/*
+ * A phone has ONE window, and the player is a second one.
+ *
+ * The window builder's sizing and decoration calls do not exist on Android or iOS
+ * (Tauri declares them desktop-only), so the desktop path below does not even
+ * compile there. A phone opens the site's own play page for the server in the
+ * system browser instead, which launches the game on arrival. Nothing the app
+ * holds rides along: the page is a public URL built from two ids, and the browser
+ * has its own session with the site. Recorded as a hand-off, because nothing of
+ * ours can see the browser tab close.
+ */
+#[cfg(mobile)]
+fn open_on_site(
+    app: &AppHandle,
+    state: &AppState,
+    request: &PlayRequest,
+    title: &str,
+) -> AppResult<Session> {
+    let base = tmc_core::api::api_base().trim_end_matches('/').to_string();
+    let slug = request
+        .app_slug
+        .as_deref()
+        .filter(|s| !s.is_empty() && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'))
+        .ok_or_else(|| AppError::invalid("That game has no page to open it on."))?;
+
+    let url = match request.server_id {
+        Some(server) => format!("{base}/{slug}/s/{server}/play"),
+        None => format!("{base}/{slug}"),
+    };
+
+    use tauri_plugin_opener::OpenerExt;
+
+    app.opener()
+        .open_url(url.clone(), None::<&str>)
+        .map_err(|e| AppError::internal(format!("could not open {url}: {e}")))?;
+
+    tmc_core::audit!(
+        state.audit,
+        Info,
+        App,
+        "play.web",
+        format!("opened {title} in the browser")
+    );
+
+    Ok(state.sessions.record_handoff(SessionSpec {
+        app_id: Some(request.app_id),
+        app_slug: request.app_slug.clone(),
+        label: title.to_string(),
+        sandbox_id: None,
+        install_id: None,
+    }))
+}
+
+#[cfg(desktop)]
+fn open_window(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    request: PlayRequest,
+    loader_url: String,
+    boot: serde_json::Value,
+    title: String,
+) -> AppResult<Session> {
     let url = format!(
         "{}/app-player",
         tmc_core::api::api_base().trim_end_matches('/')

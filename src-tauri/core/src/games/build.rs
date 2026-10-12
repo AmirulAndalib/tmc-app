@@ -279,6 +279,21 @@ pub fn cache_args(
     out
 }
 
+/// The argument that keeps a TMC game shell off UDP, when the player said so.
+///
+/// Empty when UDP is allowed: the shell's own `auto` already tries ENet first and
+/// falls back to WebSocket, and saying nothing keeps that one decision in one place.
+/// Like [`cache_args`], only a template with the bare `--` is a TMC shell.
+/// `--transport ws` also outranks any `--udp` the template produced, so the pair
+/// is left alone rather than removed here.
+pub fn transport_args(args: &[String], use_udp: bool) -> Vec<String> {
+    if use_udp || !args.iter().any(|a| is_separator(a)) {
+        return Vec::new();
+    }
+
+    vec!["--transport".into(), "ws".into()]
+}
+
 /// The bare `--` (or Godot's `++`) that ends the engine's own arguments.
 ///
 /// **It is never the flag a missing value belonged to.** A Godot export reads
@@ -615,5 +630,19 @@ mod tests {
         );
         // No separator: not a TMC shell, and nothing is added.
         assert!(cache_args(&["--connect".into()], true, dir, 0).is_empty());
+    }
+
+    #[test]
+    fn udp_turned_off_tells_only_a_shell_to_use_the_websocket() {
+        let shell: Vec<String> = vec!["--".into(), "--connect".into(), "h:1".into()];
+
+        // Allowed is the shell's own choice, so nothing is said.
+        assert!(transport_args(&shell, true).is_empty());
+        assert_eq!(
+            transport_args(&shell, false),
+            vec!["--transport".to_string(), "ws".to_string()]
+        );
+        // No separator: not a TMC shell, and nothing is added.
+        assert!(transport_args(&["--connect".into()], false).is_empty());
     }
 }

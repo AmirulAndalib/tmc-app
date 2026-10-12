@@ -94,6 +94,8 @@ export const AppSettingsSchema = z.object({
     gameCacheKeep: z.boolean().default(true),
     /** Ceiling for kept game downloads in MiB; `0` is the game's own (4 GiB). */
     gameCacheLimitMb: z.number().default(0),
+    /** Whether a TMC game may join over UDP; off joins over WebSocket (TCP). */
+    gameUseUdp: z.boolean().default(true),
 
     requireSignedPlugins: z.boolean(),
     confirmEveryRun: z.boolean(),

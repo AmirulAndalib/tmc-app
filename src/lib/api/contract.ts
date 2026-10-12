@@ -278,6 +278,13 @@ export const ServerInfoSchema = z.object({
     host: z.string().nullable(),
     port: z.number().int().nullable(),
     queryPort: z.number().int().nullable(),
+    /**
+     * The native UDP (ENet) port of a dual-stack Godot server, as its own
+     * query advertised it. A desktop build's launch arguments name it as
+     * `{udpPort}`. Null when the server advertised none or hides its network
+     * details.
+     */
+    udpPort: z.number().int().nullable().default(null),
     curUsers: z.number().int().nonnegative(),
     maxUsers: z.number().int().nonnegative(),
     bots: z.number().int().nonnegative(),

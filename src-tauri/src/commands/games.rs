@@ -255,6 +255,11 @@ pub async fn game_launch(
         &game_cache_dir(&state),
         settings.game_cache_limit_mb,
     ));
+    // UDP or not: the player's choice for a network that drops it.
+    plan.args.extend(tmc_core::games::build::transport_args(
+        &plan.args,
+        settings.game_use_udp,
+    ));
 
     let session = crate::spawn::run(
         &app,

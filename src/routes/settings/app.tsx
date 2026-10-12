@@ -75,6 +75,17 @@ function GameCacheSection() {
                 }
             />
             <Row
+                label="Connect over UDP"
+                hint="Faster for fast games, and the default. Turn it off if your network blocks UDP: games then connect the way a browser does, over TCP, and still play with everyone."
+                control={
+                    <Toggle
+                        label="Connect over UDP"
+                        checked={app.gameUseUdp}
+                        onChange={(gameUseUdp) => void setApp({ gameUseUdp })}
+                    />
+                }
+            />
+            <Row
                 label="Space for kept games"
                 hint="The oldest downloads are removed first when this fills up."
                 control={
