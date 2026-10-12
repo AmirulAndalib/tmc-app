@@ -42,6 +42,11 @@ Traps that do not error usefully, grouped by where they bite. The ones that belo
 - **A `///` block followed by a blank line documents the NEXT item.** Module headers are `//!` at the top of the file; clippy's `empty_line_after_doc_comments` catches the mistake under `check:rust`'s `-D warnings`.
 - **A tRPC mutation cannot set a cookie on a streamed response.** Relevant when touching the website's device-approval router — see website-city's `src/trpc/react.tsx`.
 
+## Workflows
+
+- **No apostrophe inside `${VAR:-...}` in a workflow `run:` block.** Within double quotes bash reads it as an opening quote and the whole step dies with "unexpected EOF while looking for matching": the release's Build step failed on every platform for that reason until 0.2.0. A release tag is the only thing that runs `release.yml`, so check its blocks with `bash -n` before tagging.
+- **A play window builder call may be desktop-only.** Tauri declares `center`, `inner_size`, `decorations`, `fullscreen` and the rest of the sizing calls under `cfg(desktop)`; ungated, the Android build does not compile. `cargo check -p tmc-app --target aarch64-linux-android` needs an NDK's clang as `CC_aarch64_linux_android` (ring builds C).
+
 ## Versions
 
 - **Version comparison is numeric per component, and refuses what it cannot order.** `1.10.0` sorts BEFORE `1.9.0` as a string. `tmc_core::version::is_newer` parses dotted components and returns false for anything non-numeric — staying quiet beats nagging somebody toward a version they already have. It lives in `tmc-core` because the game installer asks the same question; do not grow a second copy.
