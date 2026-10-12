@@ -144,7 +144,9 @@ jobs:
                   if [ -z "${TMC_UPDATER_ENDPOINT:-}" ] && [ -n "${S3_PUBLIC_URL:-}" ]; then
                       export TMC_UPDATER_ENDPOINT="${S3_PUBLIC_URL%/}/downloads/tmc-app/latest.json"
                   fi
-                  echo "Updater endpoint: ${TMC_UPDATER_ENDPOINT:-(the site's /api/app/v1/update route)}"
+                  # No apostrophe inside ${...:-...}: in double quotes bash reads it as an
+                  # opening quote, and the whole step dies with "unexpected EOF".
+                  echo "Updater endpoint: ${TMC_UPDATER_ENDPOINT:-(the /api/app/v1/update route of the site)}"
 
                   if [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
                       extra=(--config '{"bundle":{"createUpdaterArtifacts":true}}')
