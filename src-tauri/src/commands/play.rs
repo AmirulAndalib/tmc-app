@@ -175,7 +175,6 @@ pub async fn play_open_web(
         .filter(|t| !t.trim().is_empty())
         .unwrap_or_else(|| "TMC Player".to_string());
 
-
     #[cfg(mobile)]
     {
         let _ = (loader_url, boot);
@@ -210,7 +209,11 @@ fn open_on_site(
     let slug = request
         .app_slug
         .as_deref()
-        .filter(|s| !s.is_empty() && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'))
+        .filter(|s| {
+            !s.is_empty()
+                && s.bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+        })
         .ok_or_else(|| AppError::invalid("That game has no page to open it on."))?;
 
     let url = match request.server_id {
