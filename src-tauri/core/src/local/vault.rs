@@ -93,10 +93,10 @@ impl PathVault {
     /// to prevent.
     pub fn mint(&self, path: impl Into<PathBuf>) -> String {
         use base64::Engine as _;
-        use rand::RngCore as _;
+        use rand::Rng as _;
 
         let mut bytes = [0u8; 18];
-        rand::rngs::OsRng.fill_bytes(&mut bytes);
+        rand::rng().fill_bytes(&mut bytes);
 
         let token = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes);
 

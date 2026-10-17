@@ -10,7 +10,7 @@ use std::sync::RwLock;
 use std::time::{Duration, Instant};
 
 use base64::Engine;
-use rand::RngCore;
+use rand::Rng;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -207,7 +207,7 @@ impl AuthState {
 /// A base64url string with `bytes` bytes of entropy behind it.
 fn random_urlsafe(bytes: usize) -> String {
     let mut buf = vec![0u8; bytes];
-    rand::thread_rng().fill_bytes(&mut buf);
+    rand::rng().fill_bytes(&mut buf);
 
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(buf)
 }

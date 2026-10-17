@@ -75,7 +75,7 @@ fn usage() {
 fn keygen() -> Result<(), String> {
     let mut seed = [0u8; 32];
 
-    getrandom::getrandom(&mut seed).map_err(|e| format!("no system randomness: {e}"))?;
+    getrandom::fill(&mut seed).map_err(|e| format!("no system randomness: {e}"))?;
 
     let signing = SigningKey::from_bytes(&seed);
 

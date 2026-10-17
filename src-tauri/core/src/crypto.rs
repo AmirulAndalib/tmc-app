@@ -38,7 +38,7 @@
 use base64::Engine;
 use chacha20poly1305::aead::{Aead, KeyInit};
 use chacha20poly1305::{XChaCha20Poly1305, XNonce};
-use rand::RngCore;
+use rand::Rng;
 
 use crate::error::{AppError, AppResult};
 use crate::secure::SecureStore;
@@ -83,7 +83,7 @@ impl LocalCipher {
 
         let mut key = [0u8; 32];
 
-        rand::thread_rng().fill_bytes(&mut key);
+        rand::rng().fill_bytes(&mut key);
 
         secure.save_named(
             KEY_NAME,
@@ -105,7 +105,7 @@ impl LocalCipher {
     pub fn seal(&self, plaintext: &str) -> AppResult<String> {
         let mut nonce = [0u8; NONCE_BYTES];
 
-        rand::thread_rng().fill_bytes(&mut nonce);
+        rand::rng().fill_bytes(&mut nonce);
 
         let ciphertext = self
             .cipher
