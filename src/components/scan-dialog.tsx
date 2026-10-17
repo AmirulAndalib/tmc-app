@@ -110,13 +110,30 @@ export default function ScanDialog({
     // The launcher read costs nothing and needs no input, so it happens on open
     // rather than behind a button somebody has to know to press.
     useEffect(() => {
-        void readLaunchers()
+        let live = true
+
+        // `readLaunchers` as a promise chain: calling it from here would set
+        // state synchronously as far as React is concerned.
+        void ipc
+            .detectGames()
+            .then((found) => {
+                if (live) setLauncher(found)
+            })
+            .catch((err: unknown) => {
+                if (live) setError(messageOf(err))
+            })
 
         void ipc
             .fsRoots()
-            .then(setRoots)
+            .then((rows) => {
+                if (live) setRoots(rows)
+            })
             .catch(() => undefined)
-    }, [readLaunchers])
+
+        return () => {
+            live = false
+        }
+    }, [])
 
     useEffect(() => {
         let live = true

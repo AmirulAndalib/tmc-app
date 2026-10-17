@@ -68,8 +68,19 @@ export default function RconRoute() {
         }
     }, [])
 
+    // Started from a microtask: `load` flips state, and an effect body that
+    // does so directly renders twice before the first paint. The guard also
+    // makes a remount (StrictMode, a route change) start exactly one read.
     useEffect(() => {
-        void load()
+        let live = true
+
+        queueMicrotask(() => {
+            if (live) void load()
+        })
+
+        return () => {
+            live = false
+        }
     }, [load])
 
     const selected = servers.find((s) => s.id === selectedId) ?? null

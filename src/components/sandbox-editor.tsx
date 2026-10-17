@@ -77,7 +77,7 @@ export default function SandboxEditor({
     const [environment, setEnvironment] = useState<'client' | 'server' | 'shared'>(
         existing?.environment ?? 'client'
     )
-    const [strategy, setStrategy] = useState<string>(existing?.strategy ?? '')
+    const [chosenStrategy, setStrategy] = useState<string>(existing?.strategy ?? '')
     const [preset, setPreset] = useState<string>(existing?.preset ?? '')
     const [gameDir, setGameDir] = useState<string | null>(existing?.gameDir ?? null)
     const [cloudSync, setCloudSync] = useState(existing?.cloudSync ?? true)
@@ -110,24 +110,19 @@ export default function SandboxEditor({
     }, [existing])
 
     // The game's own default, once its rules have loaded and only while the
-    // user has not chosen. Seeding state from a prop that arrives later is what
-    // makes this an effect rather than an initialiser.
-    useEffect(() => {
-        if (strategy || !spec) return
-
-        /*
-         * `defaultStrategy` is nullable in the spec — a game may declare which
-         * strategies it supports and decline to prefer one. Falling back to the
-         * first supported entry keeps the picker from opening on an empty
-         * value, which would make Create refuse for a reason nothing on screen
-         * explains.
-         */
-        setStrategy(
-            spec.deploy.defaultStrategy ??
-                spec.deploy.supportedStrategies[0] ??
-                'direct'
-        )
-    }, [spec, strategy])
+    // user has not chosen: derived, so there is no state to seed late.
+    //
+    // `defaultStrategy` is nullable in the spec — a game may declare which
+    // strategies it supports and decline to prefer one. Falling back to the
+    // first supported entry keeps the picker from opening on an empty value,
+    // which would make Create refuse for a reason nothing on screen explains.
+    const strategy =
+        chosenStrategy ||
+        (spec
+            ? (spec.deploy.defaultStrategy ??
+              spec.deploy.supportedStrategies[0] ??
+              'direct')
+            : '')
 
     const strategies = useMemo(() => {
         const supported = spec?.deploy.supportedStrategies ?? [

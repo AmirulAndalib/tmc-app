@@ -1,4 +1,3 @@
-import type { Ref } from 'react'
 import { Link } from 'react-router-dom'
 import { FiDownload, FiExternalLink, FiEye, FiHeart, FiStar } from 'react-icons/fi'
 
@@ -55,7 +54,7 @@ export default function ContentCard({ item }: { item: ContentSummaryT }) {
     const dense = app?.compactCards ?? false
 
     const request = requestFor(item)
-    const live = useLiveServer<HTMLElement>(request)
+    const { attach, ...live } = useLiveServer<HTMLElement>(request)
 
     const image = item.images.card ?? item.images.banner ?? item.images.icon
 
@@ -224,7 +223,7 @@ export default function ContentCard({ item }: { item: ContentSummaryT }) {
         return (
             <button
                 type="button"
-                ref={live.ref as Ref<HTMLButtonElement>}
+                ref={attach}
                 onClick={() => void openExternally(item)}
                 title="Opens in your browser"
                 className={shell}
@@ -235,7 +234,7 @@ export default function ContentCard({ item }: { item: ContentSummaryT }) {
 
     return (
         <Link
-            ref={live.ref as Ref<HTMLAnchorElement>}
+            ref={attach}
             to={`/view/${item.kind}/${item.id}`}
             className={shell}
         >

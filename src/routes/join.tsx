@@ -157,11 +157,11 @@ function ServerRow({
     // Measured from THIS device, which is the one fact the website cannot give
     // somebody: a Sydney player and a Frankfurt player see different numbers
     // for the same box.
-    const live = useLiveServer<HTMLDivElement>(requestFor(server))
+    const { attach, ...live } = useLiveServer<HTMLDivElement>(requestFor(server))
 
     return (
         <article
-            ref={live.ref}
+            ref={attach}
             className="flex items-start gap-3 rounded-xl border border-border bg-surface p-3"
         >
             <GameIcon

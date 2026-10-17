@@ -211,7 +211,16 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
     // Read the local database immediately on mount, signed in or not — an
     // offline launch should still show what is installed.
     useEffect(() => {
-        void refresh()
+        let live = true
+
+        // From a microtask so the effect body itself sets no state.
+        queueMicrotask(() => {
+            if (live) void refresh()
+        })
+
+        return () => {
+            live = false
+        }
     }, [refresh])
 
     // Sign-in and sign-out both change whose library this is.
@@ -221,7 +230,15 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
         // A launch pass is always FULL: the device may have been off while the
         // user unsubscribed from something on their phone, and that is exactly
         // the case a delta cannot express.
-        void sync(true)
+        let live = true
+
+        queueMicrotask(() => {
+            if (live) void sync(true)
+        })
+
+        return () => {
+            live = false
+        }
     }, [signedIn, sync])
 
     useEffect(() => {

@@ -100,7 +100,7 @@ function parseOrThrow<S extends z.ZodType>(
         )
     }
 
-    return parsed.data as z.infer<S>
+    return parsed.data
 }
 
 /** Values a query string can carry. Anything else is a programming error. */

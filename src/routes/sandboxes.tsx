@@ -105,8 +105,19 @@ export default function SandboxesRoute() {
         }
     }, [])
 
+    // Started from a microtask: `load` flips state, and an effect body that
+    // does so directly renders twice before the first paint. The guard also
+    // makes a remount (StrictMode, a route change) start exactly one read.
     useEffect(() => {
-        void load()
+        let live = true
+
+        queueMicrotask(() => {
+            if (live) void load()
+        })
+
+        return () => {
+            live = false
+        }
     }, [load])
 
     const selected = sandboxes.find((s) => s.id === selectedId) ?? null
@@ -1307,8 +1318,18 @@ function CreateSandbox({
     >([])
     const [appId, setAppId] = useState<number | null>(null)
     const [name, setName] = useState('')
-    const [preset, setPreset] = useState('')
-    const [spec, setSpec] = useState<SandboxSpecT | null>(null)
+    // Both are tagged with the game they belong to, so picking another game
+    // drops the old game's preset and rules without an effect resetting them.
+    const [presetFor, setPresetFor] = useState<{ slug: string | null; id: string }>(
+        {
+            slug: null,
+            id: '',
+        }
+    )
+    const [specFor, setSpecFor] = useState<{
+        slug: string
+        spec: SandboxSpecT | null
+    } | null>(null)
     const [cloudSync, setCloudSync] = useState(true)
     const [busy, setBusy] = useState(false)
     const [error, setError] = useState<string | null>(null)
@@ -1341,20 +1362,30 @@ function CreateSandbox({
 
     const chosen = apps.find((a) => a.id === appId) ?? null
 
+    const chosenSlug = chosen?.slug ?? null
+    const preset = presetFor.slug === chosenSlug ? presetFor.id : ''
+    const spec = specFor?.slug === chosenSlug ? specFor.spec : null
+
+    const setPreset = (id: string) => setPresetFor({ slug: chosenSlug, id })
+
     useEffect(() => {
-        setPreset('')
+        if (!chosenSlug) return
 
-        if (!chosen?.slug) {
-            setSpec(null)
-
-            return
-        }
+        let live = true
 
         void ipc
-            .sandboxSpec(chosen.slug)
-            .then(setSpec)
-            .catch(() => setSpec(null))
-    }, [chosen?.slug])
+            .sandboxSpec(chosenSlug)
+            .then((found) => {
+                if (live) setSpecFor({ slug: chosenSlug, spec: found })
+            })
+            .catch(() => {
+                if (live) setSpecFor({ slug: chosenSlug, spec: null })
+            })
+
+        return () => {
+            live = false
+        }
+    }, [chosenSlug])
 
     const create = async () => {
         if (!chosen || name.trim().length === 0) return
@@ -1494,21 +1525,21 @@ function CreateSandbox({
  * the load order pushes the thing they wanted off the screen.
  */
 function ConfigSection({ sandbox }: { sandbox: SandboxRowT }) {
-    const [available, setAvailable] = useState<boolean | null>(null)
+    // Tagged with the sandbox it answers for, so a switch hides the section
+    // until the new answer arrives.
+    const [checked, setChecked] = useState<{ id: number; ok: boolean } | null>(null)
     const [open, setOpen] = useState(false)
 
     useEffect(() => {
         let live = true
 
-        setAvailable(null)
-
         void ipc
             .configAvailable(sandbox.id)
             .then((ok) => {
-                if (live) setAvailable(ok)
+                if (live) setChecked({ id: sandbox.id, ok })
             })
             .catch(() => {
-                if (live) setAvailable(false)
+                if (live) setChecked({ id: sandbox.id, ok: false })
             })
 
         return () => {
@@ -1516,7 +1547,7 @@ function ConfigSection({ sandbox }: { sandbox: SandboxRowT }) {
         }
     }, [sandbox.id])
 
-    if (available !== true) return null
+    if (!checked || checked.id !== sandbox.id || !checked.ok) return null
 
     return (
         <section className="rounded-xl border border-border bg-surface">
@@ -1644,8 +1675,13 @@ function TextField({
     max?: number
 }) {
     const [draft, setDraft] = useState(value)
+    const [valueSeen, setValueSeen] = useState(value)
 
-    useEffect(() => setDraft(value), [value])
+    // A new value from outside replaces whatever was being typed.
+    if (valueSeen !== value) {
+        setValueSeen(value)
+        setDraft(value)
+    }
 
     return (
         <input

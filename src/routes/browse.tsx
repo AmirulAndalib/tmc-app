@@ -116,6 +116,11 @@ function sortsFor(kind: ContentKindT): BrowseSortT[] {
     })
 }
 
+/** The tab's kinds, or just the one when the URL names no tab. */
+function groupFor(param: string | undefined, kind: ContentKindT) {
+    return KIND_GROUPS[param ?? ''] ?? [kind]
+}
+
 export default function BrowseRoute() {
     const params = useParams<{ kind: string }>()
     const [search, setSearch] = useSearchParams()
@@ -123,8 +128,11 @@ export default function BrowseRoute() {
     const { app } = useSettings()
     const { status } = useAuth()
 
-    const kind = ContentKindSchema.catch('mod').parse(params.kind)
-    const group = KIND_GROUPS[params.kind ?? ''] ?? [kind]
+    const kind = useMemo(
+        () => ContentKindSchema.catch('mod').parse(params.kind),
+        [params.kind]
+    )
+    const group = groupFor(params.kind, kind)
 
     const [query, setQuery] = useState(search.get('q') ?? '')
     const [showFilters, setShowFilters] = useState(false)

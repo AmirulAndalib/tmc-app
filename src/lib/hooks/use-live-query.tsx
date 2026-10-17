@@ -491,14 +491,14 @@ export function useLiveServer<T extends HTMLElement = HTMLElement>(
     // `version` is unused here beyond forcing a re-render when results land —
     // the accessors are stable, so nothing else would.
     const { watch, unwatch, get, series, enabled } = useLiveQuery()
-    const ref = useRef<T | null>(null)
+    // A callback ref held in state rather than a `useRef`: the effect re-runs
+    // when the element mounts or is replaced, and the returned object carries
+    // no `.current` for the render path to trip over.
+    const [node, setNode] = useState<T | null>(null)
+    const attach = useCallback((el: T | null) => setNode(el), [])
 
     useEffect(() => {
-        if (!enabled || !request) return
-
-        const node = ref.current
-
-        if (!node) return
+        if (!enabled || !request || !node) return
 
         const observer = new IntersectionObserver(
             (entries) => {
@@ -524,6 +524,7 @@ export function useLiveServer<T extends HTMLElement = HTMLElement>(
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [
         enabled,
+        node,
         request?.id,
         request?.host,
         request?.port,
@@ -536,7 +537,8 @@ export function useLiveServer<T extends HTMLElement = HTMLElement>(
     const key = entry?.outcome.key
 
     return {
-        ref,
+        /** Pass as the element's `ref`. */
+        attach,
         result: entry?.outcome.result,
         error: entry?.outcome.error,
         updatedAt: entry?.at,

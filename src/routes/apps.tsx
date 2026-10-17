@@ -277,16 +277,19 @@ export default function AppsRoute() {
         staleTime: 5 * 60 * 1000,
     })
 
-    useEffect(() => {
-        const app = startLookup.data?.apps[0]
+    // Open the dialog when the lookup resolves. Done during render (React's
+    // "adjust state when something changes"): the dialog is state derived from
+    // the link, and `startSeen` makes it happen once per result.
+    const startApp = startLookup.data?.apps[0]
+    const [startSeen, setStartSeen] = useState<typeof startLookup.data>(undefined)
 
-        if (!app) return
-
+    if (startApp && startSeen !== startLookup.data) {
         const solo = params.get('solo')
 
+        setStartSeen(startLookup.data)
         setTarget({
-            appId: app.id,
-            app,
+            appId: startApp.id,
+            app: startApp,
             solo: solo
                 ? {
                       contentId: solo,
@@ -294,6 +297,10 @@ export default function AppsRoute() {
                   }
                 : undefined,
         })
+    }
+
+    useEffect(() => {
+        if (!startApp) return
 
         // Cleared so a reload, or closing the dialog and pressing back, does
         // not reopen it. The link has been followed; the URL should stop

@@ -71,8 +71,15 @@ const DownloadsContext = createContext<Ctx | null>(null)
 const FLUSH_MS = 250
 
 export function DownloadsProvider({ children }: { children: ReactNode }) {
-    const rows = useRef(new Map<string, DownloadT>())
+    // `store` is where events land the moment they arrive; `rows` is the
+    // snapshot React renders from, copied out of it on each flush. The ref is
+    // only ever touched from callbacks, never during render.
+    const store = useRef(new Map<string, DownloadT>())
     const pending = useRef(false)
+
+    const [rows, setRows] = useState<ReadonlyMap<string, DownloadT>>(
+        () => new Map()
+    )
 
     const [version, setVersion] = useState(0)
     const [limitBps, setLimitBps] = useState<number | null>(null)
@@ -84,27 +91,37 @@ export function DownloadsProvider({ children }: { children: ReactNode }) {
 
         window.setTimeout(() => {
             pending.current = false
+            setRows(new Map(store.current))
             setVersion((n) => n + 1)
         }, FLUSH_MS)
     }, [])
 
+    const apply = useCallback(
+        (snapshot: Awaited<ReturnType<typeof ipc.downloadList>>) => {
+            store.current = new Map(snapshot.downloads.map((d) => [d.id, d]))
+
+            setRows(new Map(store.current))
+            setLimitBps(snapshot.limitBps)
+            setVersion((n) => n + 1)
+        },
+        []
+    )
+
     const refresh = useCallback(async () => {
-        const snapshot = await ipc.downloadList()
-
-        rows.current = new Map(snapshot.downloads.map((d) => [d.id, d]))
-
-        setLimitBps(snapshot.limitBps)
-        setVersion((n) => n + 1)
-    }, [])
+        apply(await ipc.downloadList())
+    }, [apply])
 
     // The whole list once, then deltas. The event stream carries changes only,
     // so without this a queue restored from the last session is invisible until
     // something in it happens to move.
     useEffect(() => {
-        void refresh().catch(() => {
-            /* Not signed in, or the backend is not up yet. */
-        })
-    }, [refresh])
+        void ipc
+            .downloadList()
+            .then(apply)
+            .catch(() => {
+                /* Not signed in, or the backend is not up yet. */
+            })
+    }, [apply])
 
     useEffect(() => {
         let stop: (() => void) | null = null
@@ -116,7 +133,7 @@ export function DownloadsProvider({ children }: { children: ReactNode }) {
             (payload) => {
                 // The `idle` event has no id. Nothing to merge; the flush below
                 // still lets a consumer notice the queue emptied.
-                if (payload.id) rows.current.set(payload.id, payload as DownloadT)
+                if (payload.id) store.current.set(payload.id, payload as DownloadT)
 
                 flush()
             }
@@ -134,7 +151,7 @@ export function DownloadsProvider({ children }: { children: ReactNode }) {
     }, [flush])
 
     const value = useMemo<Ctx>(() => {
-        const all = Array.from(rows.current.values())
+        const all = Array.from(rows.values())
 
         // Rust's own ordering: active first, then priority, then arrival. The
         // list on screen is then literally the queue.
@@ -168,7 +185,7 @@ export function DownloadsProvider({ children }: { children: ReactNode }) {
         return {
             downloads,
             version,
-            byId: (id) => rows.current.get(id),
+            byId: (id) => rows.get(id),
             forSandbox: (sandboxId) =>
                 downloads.filter((d) => d.meta.sandboxId === String(sandboxId)),
             active: downloads.filter(
@@ -191,7 +208,7 @@ export function DownloadsProvider({ children }: { children: ReactNode }) {
             },
             clearFinished: () => act(() => ipc.downloadClearFinished()),
         }
-    }, [version, limitBps, refresh])
+    }, [rows, version, limitBps, refresh])
 
     return (
         <DownloadsContext.Provider value={value}>

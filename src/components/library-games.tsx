@@ -343,6 +343,10 @@ export default function LibraryGames() {
         void reloadApp()
     }, [sandboxes, playtime, reloadApp])
 
+    const sandboxRows = sandboxes.data
+    const playedByApp = playtime.data?.byApp
+    const gameDirs = app?.gameDirs
+
     const rows = useMemo<GameRow[]>(() => {
         const byApp = new Map<number, GameRow>()
 
@@ -369,7 +373,7 @@ export default function LibraryGames() {
                 // to carry a slug, and a sandbox created without one gets no
                 // game rules at all — no preset, no install rule, no launch.
                 slug: slug ?? ref?.slug ?? null,
-                dir: app?.gameDirs[String(appId)] ?? null,
+                dir: gameDirs?.[String(appId)] ?? null,
                 sandboxes: [],
             }
 
@@ -378,7 +382,7 @@ export default function LibraryGames() {
             return created
         }
 
-        for (const sandbox of sandboxes.data ?? []) {
+        for (const sandbox of sandboxRows ?? []) {
             ensure(sandbox.appId, sandbox.appSlug, sandbox.appName).sandboxes.push(
                 sandbox
             )
@@ -387,7 +391,7 @@ export default function LibraryGames() {
         // A configured folder is a game on this machine even with no sandbox —
         // it is what a fresh scan produces, and this row is where the first
         // profile gets added to it.
-        for (const key of Object.keys(app?.gameDirs ?? {})) {
+        for (const key of Object.keys(gameDirs ?? {})) {
             const appId = Number(key)
 
             if (Number.isFinite(appId)) ensure(appId, null)
@@ -401,16 +405,14 @@ export default function LibraryGames() {
                 // Most recently played first, then alphabetical. Somebody
                 // opening this screen is usually going back to what they were
                 // last doing.
-                const aLast =
-                    playtime.data?.byApp[String(a.appId)]?.lastPlayedMs ?? 0
-                const bLast =
-                    playtime.data?.byApp[String(b.appId)]?.lastPlayedMs ?? 0
+                const aLast = playedByApp?.[String(a.appId)]?.lastPlayedMs ?? 0
+                const bLast = playedByApp?.[String(b.appId)]?.lastPlayedMs ?? 0
 
                 if (aLast !== bLast) return bLast - aLast
 
                 return a.name.localeCompare(b.name)
             })
-    }, [sandboxes.data, app?.gameDirs, refFor, search, playtime.data])
+    }, [sandboxRows, gameDirs, refFor, search, playedByApp])
 
     /**
      * End a running session, by whichever means actually ends it.

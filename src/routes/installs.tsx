@@ -512,8 +512,18 @@ export default function InstallsRoute() {
         }
     }, [])
 
+    // Started from a microtask so the effect body itself sets no state (see
+    // the same pattern in `rcon.tsx`).
     useEffect(() => {
-        void load()
+        let live = true
+
+        queueMicrotask(() => {
+            if (live) void load()
+        })
+
+        return () => {
+            live = false
+        }
     }, [load])
 
     const refresh = useCallback(async () => {

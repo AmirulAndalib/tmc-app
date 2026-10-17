@@ -260,7 +260,7 @@ function ServerRow({
      * shows. The expanded panel is the only place it is read.
      */
     const request = requestFor(item, { wantPlayers: expanded })
-    const live = useLiveServer<HTMLTableRowElement>(request)
+    const { attach, ...live } = useLiveServer<HTMLTableRowElement>(request)
 
     const result = live.result
     const online = live.error
@@ -298,7 +298,7 @@ function ServerRow({
     return (
         <>
             <tr
-                ref={live.ref}
+                ref={attach}
                 onClick={onToggle}
                 className={`cursor-pointer border-b border-border transition-colors hover:bg-surface-hover ${
                     expanded ? 'bg-surface-hover' : ''
@@ -445,7 +445,7 @@ function ExpandedServer({
     onOpen,
 }: {
     item: ContentSummaryT
-    live: ReturnType<typeof useLiveServer<HTMLTableRowElement>>
+    live: Omit<ReturnType<typeof useLiveServer<HTMLTableRowElement>>, 'attach'>
     onOpen: () => void
 }) {
     const result = live.result

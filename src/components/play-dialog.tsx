@@ -303,7 +303,9 @@ export default function PlayDialog({
     const [preview, setPreview] = useState<LaunchPreviewT | null>(null)
     const [confirming, setConfirming] = useState(false)
 
-    const live = useLiveServer<HTMLDivElement>(server ? requestFor(server) : null)
+    const { attach, ...live } = useLiveServer<HTMLDivElement>(
+        server ? requestFor(server) : null
+    )
 
     const options = useMemo(
         () =>
@@ -313,7 +315,15 @@ export default function PlayDialog({
         [app.play]
     )
 
-    useEffect(() => setValues(defaultsFor(options)), [options])
+    // Back to the defaults whenever the option list changes. Done during render
+    // (React's "adjust state when a prop changes") rather than in an effect, so
+    // the first paint already has them.
+    const [optionsSeen, setOptionsSeen] = useState<typeof options | null>(null)
+
+    if (optionsSeen !== options) {
+        setOptionsSeen(options)
+        setValues(defaultsFor(options))
+    }
 
     useEffect(() => {
         let live = true
@@ -399,33 +409,29 @@ export default function PlayDialog({
      * first available one: an installed copy with its mods beats a browser
      * build of the same game, and both beat handing the address to a client
      * that may not be installed.
+     *
+     * Done during render: setting a component's own state from what it has
+     * just computed is React's supported way to derive it, and an effect for it
+     * costs a frame on the wrong mode.
      */
-    useEffect(() => {
-        if (mode !== null || sandboxes === null || native === undefined) return
-        if (!target.app && looked.isPending) return
+    if (
+        mode === null &&
+        sandboxes !== null &&
+        native !== undefined &&
+        (target.app || !looked.isPending)
+    ) {
+        const best = canNative
+            ? 'native'
+            : canSandbox
+              ? 'sandbox'
+              : canWeb
+                ? 'web'
+                : canConnect
+                  ? 'connect'
+                  : null
 
-        setMode(
-            canNative
-                ? 'native'
-                : canSandbox
-                  ? 'sandbox'
-                  : canWeb
-                    ? 'web'
-                    : canConnect
-                      ? 'connect'
-                      : null
-        )
-    }, [
-        mode,
-        sandboxes,
-        native,
-        canNative,
-        canSandbox,
-        canWeb,
-        canConnect,
-        target.app,
-        looked.isPending,
-    ])
+        if (best !== null) setMode(best)
+    }
 
     const launchWeb = useCallback(async () => {
         setBusy(true)
@@ -565,7 +571,7 @@ export default function PlayDialog({
 
                         {server ? (
                             <p
-                                ref={live.ref}
+                                ref={attach}
                                 className="mt-0.5 flex items-center gap-2 truncate text-xs text-muted"
                             >
                                 <FiServer className="size-3 shrink-0" />

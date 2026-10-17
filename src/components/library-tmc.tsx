@@ -100,9 +100,30 @@ export default function LibraryTmcGames() {
         }
     }, [])
 
+    // The same two reads as `refresh`, as a promise chain: an effect that calls
+    // a state-setting function sets state synchronously as far as React is
+    // concerned, one that sets it from `.then` does not.
     useEffect(() => {
-        void refresh()
-    }, [refresh])
+        let live = true
+
+        void ipc
+            .gamesList()
+            .then((rows) => {
+                if (live) setInstalled(rows)
+
+                return ipc.sessionRunning()
+            })
+            .then((rows) => {
+                if (live) setRunning(rows)
+            })
+            .catch((err: unknown) => {
+                if (live) setError(messageOf(err))
+            })
+
+        return () => {
+            live = false
+        }
+    }, [])
 
     /*
      * The catalogue, narrowed SERVER-side to apps with a build. `playable` is

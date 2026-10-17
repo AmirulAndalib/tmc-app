@@ -52,7 +52,13 @@ function bytes(n: number): string {
 }
 
 export default function ConfigEditor({ sandboxId }: { sandboxId: number }) {
-    const [files, setFiles] = useState<ConfigFileT[] | null>(null)
+    // Tagged with the sandbox it was read for, so switching sandbox shows
+    // "looking" again without an effect having to reset state.
+    const [listed, setListed] = useState<{
+        sandboxId: typeof sandboxId
+        rows: ConfigFileT[]
+    } | null>(null)
+    const files = listed?.sandboxId === sandboxId ? listed.rows : null
     const [search, setSearch] = useState('')
     const [open, setOpen] = useState<ConfigFileT | null>(null)
 
@@ -66,17 +72,15 @@ export default function ConfigEditor({ sandboxId }: { sandboxId: number }) {
     useEffect(() => {
         let live = true
 
-        setFiles(null)
-
         void ipc
             .configList(sandboxId)
             .then((rows) => {
-                if (live) setFiles(rows)
+                if (live) setListed({ sandboxId, rows })
             })
             .catch((err: unknown) => {
                 if (!live) return
 
-                setFiles([])
+                setListed({ sandboxId, rows: [] })
                 setError(messageOf(err))
             })
 

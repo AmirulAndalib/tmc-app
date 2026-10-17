@@ -84,7 +84,7 @@ export async function call<S extends z.ZodType>(
         })
     }
 
-    return parsed.data as z.infer<S>
+    return parsed.data
 }
 
 export function isIpcError(err: unknown): err is IpcError {
@@ -138,6 +138,6 @@ export async function subscribe<S extends z.ZodType>(
             return
         }
 
-        onEvent(parsed.data as z.infer<S>)
+        onEvent(parsed.data)
     })
 }

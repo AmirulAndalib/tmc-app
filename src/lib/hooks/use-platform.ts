@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { type } from '@tauri-apps/plugin-os'
 
 /**
@@ -19,25 +19,18 @@ export type PlatformT = 'windows' | 'macos' | 'linux' | 'android' | 'ios' | null
 const DESKTOP = new Set<PlatformT>(['windows', 'macos', 'linux'])
 
 export function usePlatform(): PlatformT {
-    const [platform, setPlatform] = useState<PlatformT>(null)
-
-    useEffect(() => {
-        let live = true
-
+    // Read once, synchronously: `type()` needs no round trip, so there is no
+    // first frame without it.
+    const [platform] = useState<PlatformT>(() => {
         try {
-            const value = type()
-
-            if (live) setPlatform(value)
+            return type()
         } catch {
             // A browser-only `npm run dev` has no Tauri bridge. Staying null
             // means the web preview shows no window chrome, which is right —
             // the browser is already drawing some.
+            return null
         }
-
-        return () => {
-            live = false
-        }
-    }, [])
+    })
 
     return platform
 }

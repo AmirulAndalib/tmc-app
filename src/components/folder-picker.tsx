@@ -12,6 +12,10 @@ import {
 import { ipc } from '~/lib/ipc/commands'
 import type { DirListingT, DirRootT } from '~/lib/ipc/schemas'
 
+function folderError(err: unknown): string {
+    return err instanceof Error ? err.message : 'Could not open that folder.'
+}
+
 /**
  * The app's own folder chooser.
  *
@@ -59,9 +63,7 @@ export default function FolderPicker({
              * message stays and the previous listing stays with it, so the
              * user can go back up rather than being left in an empty box.
              */
-            setError(
-                err instanceof Error ? err.message : 'Could not open that folder.'
-            )
+            setError(folderError(err))
         } finally {
             setBusy(false)
         }
@@ -74,8 +76,30 @@ export default function FolderPicker({
             .catch(() => setRoots([]))
     }, [])
 
+    // The first listing, and the re-read when "show hidden" flips. Written as a
+    // promise chain rather than a call to `go` so no state is set synchronously
+    // in the effect (the toggle's handler marks the picker busy instead).
     useEffect(() => {
-        void go(initial ?? null, hidden)
+        let live = true
+
+        void ipc
+            .fsListDirs(initial ?? null, hidden)
+            .then((rows) => {
+                if (!live) return
+
+                setListing(rows)
+                setError(null)
+            })
+            .catch((err: unknown) => {
+                if (live) setError(folderError(err))
+            })
+            .finally(() => {
+                if (live) setBusy(false)
+            })
+
+        return () => {
+            live = false
+        }
         // `initial` is the STARTING point; re-navigating because the prop was
         // rebuilt would yank the user back to it mid-browse.
         // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -152,7 +176,10 @@ export default function FolderPicker({
 
                     <button
                         type="button"
-                        onClick={() => setHidden((on) => !on)}
+                        onClick={() => {
+                            setBusy(true)
+                            setHidden((on) => !on)
+                        }}
                         aria-label={
                             hidden ? 'Hide hidden folders' : 'Show hidden folders'
                         }

@@ -176,6 +176,9 @@ export default function ImportDialog({
 
     const chosen = useMemo(() => rows.filter((r) => r.include), [rows])
 
+    const sandboxId = target.sandbox?.id
+    const origin = target.origin
+
     const run = useCallback(async () => {
         if (chosen.length < 1) return
 
@@ -187,8 +190,8 @@ export default function ImportDialog({
                 chosen.map((r) => r.token),
                 {
                     appId,
-                    sandboxId: target.sandbox?.id,
-                    origin: target.origin,
+                    sandboxId,
+                    origin,
                     overrides: chosen.map((r) => ({
                         token: r.token,
                         name: r.name,
@@ -205,7 +208,7 @@ export default function ImportDialog({
         } finally {
             setBusy(false)
         }
-    }, [chosen, appId, target.sandbox?.id, target.origin, onImported])
+    }, [chosen, appId, sandboxId, origin, onImported])
 
     return (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">

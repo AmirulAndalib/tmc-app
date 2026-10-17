@@ -286,8 +286,6 @@ export default function Select<T extends string>({
         }
     }
 
-    let lastGroup: string | undefined
-
     return (
         <div
             ref={rootRef}
@@ -353,12 +351,11 @@ export default function Select<T extends string>({
                     )}
 
                     {options.map((option, index) => {
+                        const previous = options[index - 1]?.group
                         const heading =
-                            option.group && option.group !== lastGroup
+                            option.group && option.group !== previous
                                 ? option.group
                                 : undefined
-
-                        lastGroup = option.group
 
                         return (
                             <div key={option.value}>

@@ -20,6 +20,8 @@ Traps that do not error usefully, grouped by where they bite. The ones that belo
 
 ## TypeScript, CSS and the build
 
+- **`typescript` is held at ~6.0 only for typescript-eslint; the type-check is TypeScript 7.** TS 7 is the native compiler with no JS API, and typescript-eslint's peer range stops below 6.1, so eslint loads `typescript` (6.0) while `npm run typecheck` runs the `typescript7` alias. Drop the 6.0 pin once typescript-eslint supports TS 7.
+- **React Compiler lint (react-hooks 7) is conservative:** it flags any state-setting function called from an effect body, even after an `await`, and a hook result holding a `ref` property passed to `ref=` taints the whole object. Fixes used: callback ref stored in state, state tagged with its key and derived, render-time "seen" adjust, and `queueMicrotask` to start load-on-mount work.
 - **A `const` in `schemas.ts` referenced before its initializer runs is a runtime TDZ error, not a type error.** `tsc` accepts it and the app throws on module load with a message about the wrong file. New schemas go BELOW everything they reference.
 - **Tailwind 4 generates a utility only for a token that EXISTS.** A misspelt token produces no class and no error, which looks exactly like a design choice. `app.css`'s `@theme inline` block aliases `--color-surface-2` to the shared theme's `--surface-secondary`; before inventing a colour name, check `@modcommunity/shared`'s `src/styles/theme.css`.
 - **Unlayered CSS in `app.css` beats Tailwind's `@layer utilities`**, whatever the specificity — the cascade's layer rule. Resets in that file must be properties no utility sets.
