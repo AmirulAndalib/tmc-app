@@ -186,7 +186,7 @@ fn world() -> World {
         roots: JailRoots { data, cache },
         settings,
         audit: Arc::new(Audit::new(base.join("audit.jsonl"))),
-        http: reqwest::Client::new(),
+        http: tmc_core::http::client(),
         staging,
         backups,
         local,

@@ -209,7 +209,7 @@ struct Envelope {
 
 impl ApiClient {
     pub fn new(auth: Arc<AuthState>, secure: Arc<SecureStore>, version: &str) -> AppResult<Self> {
-        let http = Client::builder()
+        let http = crate::http::builder()
             .user_agent(format!("TMC-App/{version}"))
             .timeout(Duration::from_secs(30))
             .connect_timeout(Duration::from_secs(10))

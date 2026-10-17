@@ -24,6 +24,7 @@ pub mod detect;
 pub mod download;
 pub mod error;
 pub mod games;
+pub mod http;
 pub mod launch;
 pub mod library;
 pub mod local;

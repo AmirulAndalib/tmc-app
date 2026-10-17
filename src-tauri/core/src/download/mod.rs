@@ -254,7 +254,7 @@ pub struct DownloadManager {
 /// anything, and the app crate does not need a `reqwest` dependency of its own
 /// to build one.
 pub fn default_client(version: &str) -> AppResult<reqwest::Client> {
-    reqwest::Client::builder()
+    crate::http::builder()
         .user_agent(format!("TMC/{version}"))
         // Enough for a slow mirror to answer; the transfer itself is bounded by
         // the stream, not by this.
@@ -1309,7 +1309,7 @@ mod tests {
     fn manager() -> DownloadManager {
         let tmp = std::env::temp_dir().join(format!("tmc-dl-{}.jsonl", std::process::id()));
 
-        DownloadManager::new(reqwest::Client::new(), Arc::new(Audit::new(tmp)))
+        DownloadManager::new(crate::http::client(), Arc::new(Audit::new(tmp)))
     }
 
     /// Queue a download, bypassing [`validate`]'s https rule.

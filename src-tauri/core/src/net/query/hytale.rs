@@ -114,7 +114,7 @@ fn client() -> AppResult<&'static reqwest::Client> {
 
     CLIENT
         .get_or_init(|| {
-            reqwest::Client::builder()
+            crate::http::builder()
                 // See the module header. Scoped to this client, which is used
                 // only for this one unauthenticated GET.
                 .danger_accept_invalid_certs(true)

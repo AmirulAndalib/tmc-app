@@ -42,12 +42,16 @@ thiserror = "2"
 
 # rustls rather than the platform TLS stack: one certificate verifier on every
 # target, including Android, where native-tls drags in the NDK's OpenSSL.
-reqwest = { version = "0.12", default-features = false, features = [
+reqwest = { version = "0.13", default-features = false, features = [
     "json",
-    "rustls-tls",
+    "rustls-no-provider",
     "stream",
     "gzip",
 ] }
+# reqwest 0.13 ships no ring provider; naming rustls with `ring` alone makes it the
+# only provider, which rustls then picks by itself. (reqwest's own `rustls` feature brings aws-lc-sys,
+# a C/cmake build on every target.)
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 tokio = { version = "1", features = [
     "rt-multi-thread",
     "macros",

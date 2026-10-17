@@ -929,7 +929,7 @@ mod tests {
         let executor = Executor {
             manifest: &manifest,
             jail: &jail,
-            http: &reqwest::Client::new(),
+            http: &crate::http::client(),
             audit: &audit,
             downloads: None,
         };
@@ -1063,7 +1063,7 @@ mod tests {
         let executor = Executor {
             manifest: &manifest,
             jail: &jail,
-            http: &reqwest::Client::new(),
+            http: &crate::http::client(),
             audit: &audit,
             downloads: None,
         };

@@ -837,7 +837,7 @@ mod tests {
             data: tmp.path().join("data"),
             cache: tmp.path().join("cache"),
         };
-        let http = reqwest::Client::new();
+        let http = crate::http::client();
         let plugins = AppPlugins::default();
         let settings = AppSettings::default();
 
