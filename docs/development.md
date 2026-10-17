@@ -129,6 +129,6 @@ Where **libfuse2** is missing — Debian 13, Ubuntu 24.04 — the AppImage is un
 
 **Deny-on-warning, with a reviewed allow-list** in `src-tauri/.cargo/audit.toml`. An unfiltered run reports the same advisories every time, which trains everyone to stop reading it — and then a real one lands unnoticed. Filtered, the command is silent until something new appears. Ignores are per **advisory id**, not per crate, so a genuine new advisory against `gtk` still fails the run.
 
-None of the ignored ones is a vulnerability. All are `unmaintained` or `unsound`, and all arrive through Tauri's own tree — the gtk-rs GTK3 bindings behind the Linux WebKitGTK webview (Linux-only; absent from the Windows, macOS, Android and iOS builds), and `urlpattern` inside `tauri-build`, which runs at compile time and is not linked into the app. `audit.toml` says which is which and why.
+The `unmaintained`/`unsound` ones arrive through Tauri's own tree — the gtk-rs GTK3 bindings behind the Linux WebKitGTK webview (Linux-only; absent from the Windows, macOS, Android and iOS builds), and `urlpattern` inside `tauri-build`, which runs at compile time and is not linked into the app. `audit.toml` says which is which and why. The three `zip` 4.6.1 advisories (`tauri-plugin-updater`, which extracts only a signature-checked archive) and `unsafe-libyaml` (via `serde_yaml_ng`) are also listed; drop the `zip` ones when the plugin moves to zip 9.
 
 **Re-check the list whenever Tauri is upgraded.** An entry that stopped appearing should be deleted from `audit.toml`, not left behind as a comment.

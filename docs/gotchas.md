@@ -41,6 +41,7 @@ Traps that do not error usefully, grouped by where they bite. The ones that belo
 - **`keyring` pulls `libdbus-sys` on Linux.** It is behind `tmc-core`'s `os-keyring` feature, off by default and enabled by the app crate — which is why `npm run test:core` works on a bare machine.
 - **A `///` block followed by a blank line documents the NEXT item.** Module headers are `//!` at the top of the file; clippy's `empty_line_after_doc_comments` catches the mistake under `check:rust`'s `-D warnings`.
 - **A tRPC mutation cannot set a cookie on a streamed response.** Relevant when touching the website's device-approval router — see website-city's `src/trpc/react.tsx`.
+- **`cargo update` can pick a crate release a Tauri plugin does not compile against yet (`rust-ini` 0.21.3 vs `tauri-plugin-deep-link` 2.6.2)**: hold it with `cargo update -p <crate> --precise <ver>`, and `zip` 9 needs `FileOptions<'_, '_, ()>` in tests.
 
 ## Workflows
 
