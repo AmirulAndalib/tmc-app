@@ -53,7 +53,7 @@ import {
 
 const RawJson = z.unknown()
 
-async function get<S extends z.ZodTypeAny>(
+async function get<S extends z.ZodType>(
     path: string,
     schema: S,
     query?: Record<string, QueryValue>,
@@ -68,7 +68,7 @@ async function get<S extends z.ZodTypeAny>(
     return parseOrThrow(path, schema, raw)
 }
 
-async function send<S extends z.ZodTypeAny>(
+async function send<S extends z.ZodType>(
     method: 'POST' | 'PATCH' | 'PUT' | 'DELETE',
     path: string,
     schema: S,
@@ -79,7 +79,7 @@ async function send<S extends z.ZodTypeAny>(
     return parseOrThrow(path, schema, raw)
 }
 
-function parseOrThrow<S extends z.ZodTypeAny>(
+function parseOrThrow<S extends z.ZodType>(
     path: string,
     schema: S,
     raw: unknown

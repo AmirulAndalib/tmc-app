@@ -56,7 +56,7 @@ function toIpcError(raw: unknown): IpcError {
     })
 }
 
-export async function call<S extends z.ZodTypeAny>(
+export async function call<S extends z.ZodType>(
     command: string,
     schema: S,
     args?: Record<string, unknown>
@@ -124,7 +124,7 @@ export function messageOf(err: unknown): string {
  * thrown: an event handler has no caller to catch for it, and one malformed
  * message must not tear down a subscription that is otherwise working.
  */
-export async function subscribe<S extends z.ZodTypeAny>(
+export async function subscribe<S extends z.ZodType>(
     event: string,
     schema: S,
     onEvent: (payload: z.infer<S>) => void
