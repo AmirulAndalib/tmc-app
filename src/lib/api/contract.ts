@@ -55,7 +55,14 @@ export function ApiOk<S extends z.ZodTypeAny>(schema: S) {
 /** Self-reported client identity. Untrusted — a label for the approval screen. */
 export const ClientInfoSchema = z.object({
     name: z.string().min(1).max(64),
-    platform: z.enum(['windows', 'macos', 'linux', 'android', 'ios', 'unknown']),
+    platform: z.enum([
+        'windows',
+        'macos',
+        'linux',
+        'android',
+        'ios',
+        'unknown',
+    ]),
     version: z.string().min(1).max(32),
 })
 
@@ -678,7 +685,9 @@ export const FacetsResponseSchema = z.object({
      * nothing, and a filter that can only ever return an empty list is worse
      * than no filter.
      */
-    countries: z.array(RefSchema.extend({ count: z.number().int() })).default([]),
+    countries: z
+        .array(RefSchema.extend({ count: z.number().int() }))
+        .default([]),
 })
 
 export type FacetsResponseT = z.infer<typeof FacetsResponseSchema>
@@ -1067,7 +1076,14 @@ export const InstallItemRequest = z.object({
 export const DeviceDownloadItemSchema = z.object({
     id: z.string().max(128),
     label: z.string().max(200),
-    status: z.enum(['queued', 'running', 'paused', 'done', 'failed', 'cancelled']),
+    status: z.enum([
+        'queued',
+        'running',
+        'paused',
+        'done',
+        'failed',
+        'cancelled',
+    ]),
     done: z.number().int().nonnegative(),
     total: z.number().int().nonnegative().nullable(),
     speedBps: z.number().int().nonnegative(),
@@ -1421,9 +1437,16 @@ export const PlayOptionSchema = z.discriminatedUnion('kind', [
 
 export type PlayOptionT = z.infer<typeof PlayOptionSchema>
 
-export const PlayOptionValueSchema = z.union([z.string(), z.number(), z.boolean()])
+export const PlayOptionValueSchema = z.union([
+    z.string(),
+    z.number(),
+    z.boolean(),
+])
 
-export const PlayOptionValuesSchema = z.record(z.string(), PlayOptionValueSchema)
+export const PlayOptionValuesSchema = z.record(
+    z.string(),
+    PlayOptionValueSchema
+)
 
 export type PlayOptionValuesT = z.infer<typeof PlayOptionValuesSchema>
 
@@ -1570,7 +1593,9 @@ export const ReleasePublishResponseSchema = z.object({
     promoted: z.boolean(),
 })
 
-export type ReleasePublishResponseT = z.infer<typeof ReleasePublishResponseSchema>
+export type ReleasePublishResponseT = z.infer<
+    typeof ReleasePublishResponseSchema
+>
 
 /* ------------------------------------------------------ Installing a game */
 
@@ -2004,7 +2029,12 @@ const IdString = z.string().min(1).max(20).regex(/^\d+$/)
 // ---------------------------------------------------------------- Presence
 
 /** Mirrors `PresenceStatusVals` in `~/types/user/presence`, which re-exports it. */
-export const PresenceStatusVals = ['offline', 'online', 'in_game', 'away'] as const
+export const PresenceStatusVals = [
+    'offline',
+    'online',
+    'in_game',
+    'away',
+] as const
 export const PresenceStatusSchema = z.enum(PresenceStatusVals)
 export type PresenceStatusT = z.infer<typeof PresenceStatusSchema>
 
@@ -2086,7 +2116,9 @@ export const FriendCancelRequest = FriendRespondRequest.omit({ accept: true })
  * the request accepted theirs and this is the friendship's id.
  */
 export const FriendRequestSentResponse = z.object({ id: z.number().int() })
-export type FriendRequestSentResponseT = z.infer<typeof FriendRequestSentResponse>
+export type FriendRequestSentResponseT = z.infer<
+    typeof FriendRequestSentResponse
+>
 
 // ----------------------------------------------------------------- Parties
 
