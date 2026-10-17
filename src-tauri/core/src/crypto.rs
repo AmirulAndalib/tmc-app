@@ -109,7 +109,7 @@ impl LocalCipher {
 
         let ciphertext = self
             .cipher
-            .encrypt(XNonce::from_slice(&nonce), plaintext.as_bytes())
+            .encrypt(&XNonce::from(nonce), plaintext.as_bytes())
             .map_err(|_| AppError::internal("encrypt failed"))?;
 
         let mut out = Vec::with_capacity(NONCE_BYTES + ciphertext.len());
@@ -140,12 +140,12 @@ impl LocalCipher {
 
         let (nonce, ciphertext) = raw.split_at(NONCE_BYTES);
 
-        let plaintext = self
-            .cipher
-            .decrypt(XNonce::from_slice(nonce), ciphertext)
-            .map_err(|_| {
-                AppError::internal("sealed value did not authenticate (wrong key, or tampered)")
-            })?;
+        let nonce =
+            XNonce::try_from(nonce).map_err(|_| AppError::internal("sealed value is truncated"))?;
+
+        let plaintext = self.cipher.decrypt(&nonce, ciphertext).map_err(|_| {
+            AppError::internal("sealed value did not authenticate (wrong key, or tampered)")
+        })?;
 
         String::from_utf8(plaintext).map_err(|_| AppError::internal("sealed value is not text"))
     }

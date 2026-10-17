@@ -1127,8 +1127,26 @@ fn verify(path: &std::path::Path, expected: &str) -> Result<(), TransferError> {
 
     let mut hasher = Sha256::new();
 
-    std::io::copy(&mut file, &mut hasher)
-        .map_err(|e| TransferError::fatal(format!("Could not read the file back: {e}")))?;
+    // `Sha256` stopped implementing `io::Write` in sha2 0.11, so read by hand.
+    let mut buf = [0u8; 64 * 1024];
+
+    loop {
+        let n = match std::io::Read::read(&mut file, &mut buf) {
+            Ok(n) => n,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => {
+                return Err(TransferError::fatal(format!(
+                    "Could not read the file back: {e}"
+                )))
+            }
+        };
+
+        if n == 0 {
+            break;
+        }
+
+        hasher.update(&buf[..n]);
+    }
 
     let actual = hex::encode(hasher.finalize());
 
