@@ -90,7 +90,19 @@ pub enum DeepLink {
     /// The serverless half. A slug rather than only an id because that is what
     /// the website's `{app}` token substitutes, and because a link somebody
     /// writes by hand is written with a name in it.
-    PlayApp { app: String },
+    ///
+    /// `?solo=<owner>/<repo>` and `&solo_version=<v>` name the game pack to run
+    /// with no server (the site's `boot.solo`). Both are validated as one
+    /// process argument each and dropped, not refused, when they are not; a link
+    /// without them behaves as it always did. Like the rest of the link they
+    /// only travel to the launch dialog, which still waits for a click.
+    PlayApp {
+        app: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        solo: Option<String>,
+        #[serde(rename = "soloVersion", skip_serializing_if = "Option::is_none")]
+        solo_version: Option<String>,
+    },
 }
 
 /// Content kinds a link may name.
@@ -208,7 +220,21 @@ pub fn parse(raw: &str) -> Option<DeepLink> {
             if first.eq_ignore_ascii_case("app") {
                 let app = segments.get(2)?;
 
-                return parse_app_ref(app).map(|app| DeepLink::PlayApp { app });
+                let query = |key: &str| {
+                    url.query_pairs()
+                        .find(|(k, _)| k == key)
+                        .map(|(_, v)| v.into_owned())
+                };
+
+                let pack = query("solo").and_then(|id| {
+                    crate::games::build::SoloPack::new(&id, query("solo_version").as_deref())
+                });
+
+                return parse_app_ref(app).map(|app| DeepLink::PlayApp {
+                    app,
+                    solo: pack.as_ref().map(|p| p.content_id.clone()),
+                    solo_version: pack.and_then(|p| p.version),
+                });
             }
 
             let (host, port) = split_address(first)?;
@@ -415,14 +441,38 @@ mod tests {
         assert_eq!(
             parse("tmc://play/app/hungario"),
             Some(DeepLink::PlayApp {
-                app: "hungario".into()
+                app: "hungario".into(),
+                solo: None,
+                solo_version: None
             })
         );
 
         // The id form, which is what `{app}` falls back to.
         assert_eq!(
             parse("tmc://play/app/42"),
-            Some(DeepLink::PlayApp { app: "42".into() })
+            Some(DeepLink::PlayApp {
+                app: "42".into(),
+                solo: None,
+                solo_version: None
+            })
+        );
+
+        // A pack named in the query rides along; a bad one is dropped.
+        assert_eq!(
+            parse("tmc://play/app/arena?solo=tmc/arena&solo_version=1.2.0"),
+            Some(DeepLink::PlayApp {
+                app: "arena".into(),
+                solo: Some("tmc/arena".into()),
+                solo_version: Some("1.2.0".into())
+            })
+        );
+        assert_eq!(
+            parse("tmc://play/app/arena?solo=--evil&solo_version=1"),
+            Some(DeepLink::PlayApp {
+                app: "arena".into(),
+                solo: None,
+                solo_version: None
+            })
         );
     }
 

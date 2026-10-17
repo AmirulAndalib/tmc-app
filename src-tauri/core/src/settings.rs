@@ -471,6 +471,15 @@ impl SettingsStore {
 mod tests {
     use super::*;
 
+    #[test]
+    fn games_join_over_udp_unless_the_player_turns_it_off() {
+        assert!(AppSettings::default().game_use_udp);
+
+        let parsed: AppSettings = serde_json::from_str("{}").expect("empty settings parse");
+
+        assert!(parsed.game_use_udp);
+    }
+
     struct TempStore(PathBuf, SettingsStore);
 
     impl TempStore {

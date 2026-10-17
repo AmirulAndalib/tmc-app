@@ -755,6 +755,9 @@ export const ipc = {
         serverId?: number
         options?: Record<string, string | number | boolean>
         locale?: string
+        /** `<owner>/<repo>` from a `tmc://play/app/..?solo=` link. */
+        solo?: string
+        soloVersion?: string
     }) => call('game_launch', SessionSchema, { request }),
 
     /** Bytes the kept TMC game downloads take up. */

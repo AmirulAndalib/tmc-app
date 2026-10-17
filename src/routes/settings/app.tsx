@@ -76,7 +76,7 @@ function GameCacheSection() {
             />
             <Row
                 label="Connect over UDP"
-                hint="Faster for fast games, and the default. Turn it off if your network blocks UDP: games then connect the way a browser does, over TCP, and still play with everyone."
+                hint="UDP is the default and the fastest. Turn it off to use TCP (WebSocket) instead, if your network drops UDP. You still play on the same servers as everyone else."
                 control={
                     <Toggle
                         label="Connect over UDP"

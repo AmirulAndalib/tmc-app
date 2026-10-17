@@ -51,7 +51,12 @@ const OpenSchema = z.discriminatedUnion('type', [
         host: z.string(),
         port: z.number().nullish(),
     }),
-    z.object({ type: z.literal('playApp'), app: z.string() }),
+    z.object({
+        type: z.literal('playApp'),
+        app: z.string(),
+        solo: z.string().nullish(),
+        soloVersion: z.string().nullish(),
+    }),
     z.object({ type: z.literal('auth') }),
 ])
 
@@ -99,9 +104,19 @@ export function useDeepLink() {
                      * same way `?install` rings the install button, rather than
                      * leaving somebody on a page wondering what the link did.
                      */
-                    void navigate(
-                        `/apps?app=${encodeURIComponent(link.app)}&start=1`
-                    )
+                    {
+                        const query = new URLSearchParams({
+                            app: link.app,
+                            start: '1',
+                        })
+
+                        if (link.solo) query.set('solo', link.solo)
+
+                        if (link.solo && link.soloVersion)
+                            query.set('soloVersion', link.soloVersion)
+
+                        void navigate(`/apps?${query.toString()}`)
+                    }
 
                     return
                 case 'auth':

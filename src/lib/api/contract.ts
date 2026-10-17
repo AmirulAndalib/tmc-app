@@ -55,14 +55,7 @@ export function ApiOk<S extends z.ZodTypeAny>(schema: S) {
 /** Self-reported client identity. Untrusted — a label for the approval screen. */
 export const ClientInfoSchema = z.object({
     name: z.string().min(1).max(64),
-    platform: z.enum([
-        'windows',
-        'macos',
-        'linux',
-        'android',
-        'ios',
-        'unknown',
-    ]),
+    platform: z.enum(['windows', 'macos', 'linux', 'android', 'ios', 'unknown']),
     version: z.string().min(1).max(32),
 })
 
@@ -685,9 +678,7 @@ export const FacetsResponseSchema = z.object({
      * nothing, and a filter that can only ever return an empty list is worse
      * than no filter.
      */
-    countries: z
-        .array(RefSchema.extend({ count: z.number().int() }))
-        .default([]),
+    countries: z.array(RefSchema.extend({ count: z.number().int() })).default([]),
 })
 
 export type FacetsResponseT = z.infer<typeof FacetsResponseSchema>
@@ -1101,7 +1092,10 @@ export const DeviceDownloadReportRequest = z.object({
      * a device list renders, and the items are for the one device somebody
      * opened.
      */
-    items: z.array(DeviceDownloadItemSchema).max(MAX_REPORTED_DOWNLOADS).default([]),
+    items: z
+        .array(DeviceDownloadItemSchema)
+        .max(MAX_REPORTED_DOWNLOADS)
+        .default([]),
 })
 
 export const DeviceDownloadSchema = z.object({
@@ -1427,16 +1421,9 @@ export const PlayOptionSchema = z.discriminatedUnion('kind', [
 
 export type PlayOptionT = z.infer<typeof PlayOptionSchema>
 
-export const PlayOptionValueSchema = z.union([
-    z.string(),
-    z.number(),
-    z.boolean(),
-])
+export const PlayOptionValueSchema = z.union([z.string(), z.number(), z.boolean()])
 
-export const PlayOptionValuesSchema = z.record(
-    z.string(),
-    PlayOptionValueSchema
-)
+export const PlayOptionValuesSchema = z.record(z.string(), PlayOptionValueSchema)
 
 export type PlayOptionValuesT = z.infer<typeof PlayOptionValuesSchema>
 
@@ -1583,9 +1570,7 @@ export const ReleasePublishResponseSchema = z.object({
     promoted: z.boolean(),
 })
 
-export type ReleasePublishResponseT = z.infer<
-    typeof ReleasePublishResponseSchema
->
+export type ReleasePublishResponseT = z.infer<typeof ReleasePublishResponseSchema>
 
 /* ------------------------------------------------------ Installing a game */
 
@@ -1927,6 +1912,17 @@ export const GameBootSchema = z.object({
     }),
     game: GameBootGameSchema.nullable().default(null),
     server: GameBootServerSchema.nullable(),
+    /*
+     * The game to run in the tab when there is no server: a solo launch.
+     * ADDED to version 1, with a default, on the rule above.
+     */
+    solo: z
+        .object({
+            contentId: z.string(),
+            version: z.string().nullable(),
+        })
+        .nullable()
+        .default(null),
     auth: GameAuthSchema.default({
         mode: 'NONE',
         guest: true,

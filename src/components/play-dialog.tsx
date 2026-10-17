@@ -78,6 +78,8 @@ export type PlayTargetT = {
     fallback?: { name: string; icon: string | null; slug: string | null }
     /** Set when launching into a specific server. */
     server?: ContentSummaryT | null
+    /** A game pack named by the launch link; the site's own answer wins. */
+    solo?: { contentId: string; version?: string }
 }
 
 /** Says which platforms a server's owner has closed, so a missing button is explained. */
@@ -463,6 +465,8 @@ export default function PlayDialog({
                 serverId: server ? Number(server.id) : undefined,
                 options: values,
                 locale,
+                solo: server ? undefined : target.solo?.contentId,
+                soloVersion: server ? undefined : target.solo?.version,
             })
 
             onClose()
@@ -471,7 +475,7 @@ export default function PlayDialog({
         } finally {
             setBusy(false)
         }
-    }, [app.id, server, values, locale, onClose])
+    }, [app.id, server, values, locale, target.solo, onClose])
 
     const launchSandbox = useCallback(async () => {
         const id = Number(sandboxId)

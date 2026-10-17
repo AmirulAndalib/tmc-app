@@ -294,6 +294,86 @@ pub fn transport_args(args: &[String], use_udp: bool) -> Vec<String> {
     vec!["--transport".into(), "ws".into()]
 }
 
+/// The Solo pack a serverless launch should run: the game pack's
+/// `<owner>/<repo>` id and the version to mount, `None` for the newest.
+/// From the site's boot descriptor (`boot.solo`) or a `tmc://` launch link.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SoloPack {
+    pub content_id: String,
+    pub version: Option<String>,
+}
+
+impl SoloPack {
+    /// A pack id and optional version, or `None` when either could not be one
+    /// argument. The id is `<owner>/<repo>` in a closed character set and the
+    /// version a closed one too: neither may start with `-` (it would be read as
+    /// a flag), and nothing outside the set (whitespace, control characters)
+    /// gets through. Both come from the site or from a `tmc://` link a web page
+    /// could have written, and they are about to be process arguments.
+    pub fn new(content_id: &str, version: Option<&str>) -> Option<Self> {
+        let word = |s: &str, max: usize, extra: &[char]| {
+            !s.is_empty()
+                && s.len() <= max
+                && !s.starts_with('-')
+                && s.chars().all(|c| {
+                    c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') || extra.contains(&c)
+                })
+        };
+
+        let (owner, repo) = content_id.split_once('/')?;
+
+        if !word(owner, 64, &[]) || !word(repo, 100, &[]) {
+            return None;
+        }
+
+        // An empty version is "newest", like an absent one.
+        let version = match version.filter(|v| !v.is_empty()) {
+            Some(v) if word(v, 64, &['+']) => Some(v.to_string()),
+            Some(_) => return None,
+            None => None,
+        };
+
+        Some(Self {
+            content_id: content_id.to_string(),
+            version,
+        })
+    }
+
+    /// Read `boot.solo` out of a `/play/launch` answer's `boot` object.
+    ///
+    /// `None` for a null or absent `solo`, and for one [`SoloPack::new`] refuses.
+    pub fn from_boot(boot: &serde_json::Value) -> Option<Self> {
+        let solo = boot.get("solo")?.as_object()?;
+
+        Self::new(
+            solo.get("contentId")?.as_str()?,
+            solo.get("version").and_then(serde_json::Value::as_str),
+        )
+    }
+}
+
+/// `--solo <owner>/<repo>` (and `--solo-version <v>`) for a TMC game shell
+/// started with no server. Empty for a template without the bare `--`, like
+/// [`cache_args`]: only a TMC shell reads its game arguments after it.
+pub fn solo_args(args: &[String], solo: Option<&SoloPack>) -> Vec<String> {
+    let Some(solo) = solo else {
+        return Vec::new();
+    };
+
+    if !args.iter().any(|a| is_separator(a)) {
+        return Vec::new();
+    }
+
+    let mut out = vec!["--solo".to_string(), solo.content_id.clone()];
+
+    if let Some(v) = &solo.version {
+        out.push("--solo-version".into());
+        out.push(v.clone());
+    }
+
+    out
+}
+
 /// The bare `--` (or Godot's `++`) that ends the engine's own arguments.
 ///
 /// **It is never the flag a missing value belonged to.** A Godot export reads
@@ -471,6 +551,22 @@ mod tests {
     }
 
     #[test]
+    fn tcp_only_puts_transport_ws_after_the_separator_and_keeps_the_join() {
+        let mut c = ctx();
+        c.udp_port = Some(6070);
+
+        let mut args = build_args(&godot_udp_template(), &c);
+        args.extend(transport_args(&args, false));
+
+        let sep = args.iter().position(|a| a == "--").unwrap();
+        let flag = args.iter().position(|a| a == "--transport").unwrap();
+
+        assert!(flag > sep);
+        assert_eq!(args[flag + 1], "ws");
+        assert!(args.contains(&"--connect".to_string()));
+    }
+
+    #[test]
     fn the_published_godot_template_with_no_server_starts_at_the_menu() {
         let mut c = ctx();
         c.host = None;
@@ -630,6 +726,43 @@ mod tests {
         );
         // No separator: not a TMC shell, and nothing is added.
         assert!(cache_args(&["--connect".into()], true, dir, 0).is_empty());
+    }
+
+    #[test]
+    fn a_solo_pack_adds_solo_args_after_the_separator() {
+        let args: Vec<String> = vec!["--".into()];
+        let solo = SoloPack::from_boot(&serde_json::json!({
+            "solo": { "contentId": "tmc/arena", "version": "1.2.0" }
+        }));
+
+        assert_eq!(
+            solo_args(&args, solo.as_ref()),
+            ["--solo", "tmc/arena", "--solo-version", "1.2.0"]
+        );
+
+        let latest = SoloPack::from_boot(&serde_json::json!({
+            "solo": { "contentId": "tmc/arena", "version": null }
+        }));
+
+        assert_eq!(solo_args(&args, latest.as_ref()), ["--solo", "tmc/arena"]);
+    }
+
+    #[test]
+    fn no_solo_or_no_separator_or_a_bad_id_adds_nothing() {
+        let args: Vec<String> = vec!["--".into()];
+        let ok = SoloPack::from_boot(&serde_json::json!({
+            "solo": { "contentId": "tmc/arena", "version": null }
+        }));
+
+        assert!(solo_args(&args, None).is_empty());
+        assert!(solo_args(&["--connect".to_string()], ok.as_ref()).is_empty());
+        assert!(SoloPack::from_boot(&serde_json::json!({ "solo": null })).is_none());
+        assert!(SoloPack::from_boot(&serde_json::json!({})).is_none());
+
+        for bad in ["", "--evil", "tmc", "a/-b", "a b/c", "a/b\nc", "a/b/c"] {
+            let boot = serde_json::json!({ "solo": { "contentId": bad, "version": null } });
+            assert!(SoloPack::from_boot(&boot).is_none(), "{bad:?}");
+        }
     }
 
     #[test]

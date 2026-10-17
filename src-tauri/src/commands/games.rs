@@ -190,6 +190,13 @@ pub struct GameLaunchRequest {
     /// a game in the wrong language.
     #[serde(default)]
     pub locale: Option<String>,
+    /// A game pack to run with no server (`<owner>/<repo>`), from a
+    /// `tmc://play/app/..?solo=` link. Only a fallback: the site's own
+    /// `boot.solo` wins. Ignored when a server is named.
+    #[serde(default)]
+    pub solo: Option<String>,
+    #[serde(default)]
+    pub solo_version: Option<String>,
 }
 
 /// Start an installed game, optionally into a server.
@@ -255,6 +262,22 @@ pub async fn game_launch(
         &game_cache_dir(&state),
         settings.game_cache_limit_mb,
     ));
+    // No server: a game pack app runs its own offline mode ("Solo play"). The
+    // site names the pack in the boot descriptor; asking is best effort, so a
+    // site that is unreachable, older than the field, or refuses just starts
+    // the game at its own menu as before.
+    if request.server_id.is_none() {
+        let linked = request.solo.as_deref().and_then(|id| {
+            tmc_core::games::build::SoloPack::new(id, request.solo_version.as_deref())
+        });
+
+        let resolved = resolve_solo(&state, request.app_id, request.locale.as_deref()).await;
+
+        if let Some(solo) = resolved.or(linked) {
+            plan.args
+                .extend(tmc_core::games::build::solo_args(&plan.args, Some(&solo)));
+        }
+    }
     // UDP or not: the player's choice for a network that drops it.
     plan.args.extend(tmc_core::games::build::transport_args(
         &plan.args,
@@ -329,6 +352,32 @@ async fn resolve_server(
         .filter(|p| *p > 0);
 
     Ok((host, port, udp_port))
+}
+
+/// `boot.solo` for a serverless launch of this app, from `/play/launch`.
+async fn resolve_solo(
+    state: &AppState,
+    app_id: i64,
+    locale: Option<&str>,
+) -> Option<tmc_core::games::build::SoloPack> {
+    let payload = serde_json::json!({
+        "appId": app_id,
+        "mode": "web",
+        "locale": locale.unwrap_or("en"),
+    });
+
+    let answer = state
+        .api
+        .request(
+            tmc_core::api::Method::POST,
+            "/play/launch",
+            Some(payload),
+            false,
+        )
+        .await
+        .ok()?;
+
+    tmc_core::games::build::SoloPack::from_boot(answer.get("boot")?)
 }
 
 /// The one folder TMC games keep downloaded content in. Fixed, and inside the

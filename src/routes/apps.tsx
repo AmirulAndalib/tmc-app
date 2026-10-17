@@ -282,7 +282,18 @@ export default function AppsRoute() {
 
         if (!app) return
 
-        setTarget({ appId: app.id, app })
+        const solo = params.get('solo')
+
+        setTarget({
+            appId: app.id,
+            app,
+            solo: solo
+                ? {
+                      contentId: solo,
+                      version: params.get('soloVersion') ?? undefined,
+                  }
+                : undefined,
+        })
 
         // Cleared so a reload, or closing the dialog and pressing back, does
         // not reopen it. The link has been followed; the URL should stop
@@ -291,6 +302,8 @@ export default function AppsRoute() {
 
         next.delete('start')
         next.delete('app')
+        next.delete('solo')
+        next.delete('soloVersion')
 
         setParams(next, { replace: true })
         // `params`/`setParams` are deliberately absent: this must run when the
