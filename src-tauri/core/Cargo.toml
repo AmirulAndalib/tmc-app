@@ -11,8 +11,8 @@ license = "GPL-3.0-only"
 
 [features]
 # The OS credential store. ON in the app; OFF for `cargo test -p tmc-core`,
-# because `keyring` pulls `libdbus-sys` on Linux and that needs a dev package
-# the security tests have no business requiring. Without it `SecureStore` uses
+# because `keyring` talks to the Secret Service (zbus, no libdbus since 4) and
+# the security tests have no business touching a user's keychain. Without it `SecureStore` uses
 # its private-directory fallback, which is the same code path mobile takes.
 default = []
 os-keyring = ["dep:keyring"]
@@ -119,11 +119,7 @@ windows-sys = { version = "0.59", features = [
 ] }
 
 [target.'cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))'.dependencies]
-keyring = { version = "3", features = [
-    "apple-native",
-    "windows-native",
-    "sync-secret-service",
-], optional = true }
+keyring = { version = "4", optional = true }
 
 [dev-dependencies]
 tempfile = "3"
