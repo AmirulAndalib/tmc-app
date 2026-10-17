@@ -744,7 +744,7 @@ mod tests {
 
         {
             let mut writer = zip::ZipWriter::new(&mut buf);
-            let options: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default();
+            let options: zip::write::FileOptions<'_, '_, ()> = zip::write::FileOptions::default();
 
             for (name, body) in entries {
                 writer.start_file(*name, options).expect("entry");

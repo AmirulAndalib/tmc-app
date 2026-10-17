@@ -967,7 +967,7 @@ mod tests {
         let mut bytes = Vec::new();
         {
             let mut zip = zip::ZipWriter::new(std::io::Cursor::new(&mut bytes));
-            let opts: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default()
+            let opts: zip::write::FileOptions<'_, '_, ()> = zip::write::FileOptions::default()
                 .compression_method(zip::CompressionMethod::Deflated);
 
             zip.start_file("big.bin", opts).expect("entry");
@@ -993,11 +993,10 @@ mod tests {
 
         let result = extract_zip_within(&archive, &dest, 0, &[], 1024);
 
-        let err = result.expect_err("a lying entry was extracted whole");
-        assert!(
-            err.to_string().contains("allowed size"),
-            "refused for the wrong reason: {err}"
-        );
+        // Refused either by our own byte cap ("allowed size") or, since zip 9, by
+        // the reader itself noticing the header and the data disagree. Either
+        // way the lie must not be extracted whole.
+        result.expect_err("a lying entry was extracted whole");
         assert!(
             std::fs::metadata(dest.join("big.bin")).map_or(0, |m| m.len()) <= 1024,
             "more than the cap reached the disk"
@@ -1011,7 +1010,7 @@ mod tests {
         {
             let file = std::fs::File::create(&archive).expect("create");
             let mut zip = zip::ZipWriter::new(file);
-            let opts: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default()
+            let opts: zip::write::FileOptions<'_, '_, ()> = zip::write::FileOptions::default()
                 .compression_method(zip::CompressionMethod::Deflated);
 
             for name in ["a.txt", "b.txt"] {
@@ -1044,7 +1043,7 @@ mod tests {
         {
             let file = std::fs::File::create(&archive).expect("create");
             let mut zip = zip::ZipWriter::new(file);
-            let opts: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default()
+            let opts: zip::write::FileOptions<'_, '_, ()> = zip::write::FileOptions::default()
                 .compression_method(zip::CompressionMethod::Stored);
 
             for name in ["a.lua", "nested/b.lua"] {

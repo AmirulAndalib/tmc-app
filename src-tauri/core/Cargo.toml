@@ -73,7 +73,7 @@ time = { version = "0.3", features = ["formatting", "parsing", "macros"] }
 # writes it on a timer while the UI reads it on every render, and a whole-file
 # rewrite loses one of those to the other. `bundled` so there is no libsqlite3
 # on the target — Android in particular ships one we may not link against.
-rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite = { version = "0.40", features = ["bundled"] }
 
 # YAML for app-scoped plugins, alongside JSON. Both are supported because a
 # plugin is hand-authored and YAML is what people reach for when a manifest has
@@ -83,7 +83,7 @@ serde_yaml_ng = "0.10"
 
 # Archive readers for installer plugins. Both are pure Rust; neither is allowed
 # to write outside a jail (see `plugins::sandbox`).
-zip = { version = "2", default-features = false, features = ["deflate", "bzip2"] }
+zip = { version = "9", default-features = false, features = ["deflate", "bzip2"] }
 
 # A2S's compressed split replies. Both already build as part of `zip`; naming
 # them here is what makes `net::query::a2s` allowed to use them directly rather

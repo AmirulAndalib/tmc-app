@@ -56,4 +56,20 @@ ignore = [
     "RUSTSEC-2025-0080", # unic-common
     "RUSTSEC-2025-0100", # unic-ucd-ident
     "RUSTSEC-2025-0098", # unic-ucd-version
+
+    # --- tauri-plugin-updater -> zip 4.6.1 (fixed in zip 9) --------------------
+    #
+    # The updater unpacks its own update archive with `zip::extract`; the archive
+    # is checked against the compiled-in signing key first, so an attacker's
+    # symlinks or SUID bits never reach the extractor. Remove these when the
+    # plugin moves to zip >= 9. (The app's own `zip` dependency is on 9.)
+    "RUSTSEC-2026-0367",
+    "RUSTSEC-2026-0368",
+    "RUSTSEC-2026-0369",
+
+    # --- serde_yaml_ng -> unsafe-libyaml ----------------------------------------
+    #
+    # `unmaintained`, not a vulnerability, and no serde_yaml_ng release leaves it.
+    # Reads plugin and manager descriptors; the parser is bounded input and no memory-safety advisory is open against it.
+    "RUSTSEC-2024-0449", # unsafe-libyaml
 ]

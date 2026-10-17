@@ -219,7 +219,7 @@ impl World {
 fn archive() -> Vec<u8> {
     let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
 
-    let options: zip::write::FileOptions<'_, ()> =
+    let options: zip::write::FileOptions<'_, '_, ()> =
         zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Stored);
 
     for (name, body) in [("mods/cool.jar", "COOL"), ("mods/extra/data.bin", "DATA")] {
@@ -828,7 +828,7 @@ fn zip_of(entries: &[(&str, &str)]) -> Vec<u8> {
 
     {
         let mut writer = zip::ZipWriter::new(&mut buf);
-        let options: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default();
+        let options: zip::write::FileOptions<'_, '_, ()> = zip::write::FileOptions::default();
 
         for (name, body) in entries {
             writer.start_file(*name, options).expect("entry");
