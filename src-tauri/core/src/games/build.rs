@@ -294,6 +294,30 @@ pub fn transport_args(args: &[String], use_udp: bool) -> Vec<String> {
     vec!["--transport".into(), "ws".into()]
 }
 
+/// The site the game's server browser should list, for a TMC game shell.
+///
+/// Native clients have no page origin, so without this a shipped client lists no
+/// site servers. `site` is the app's own API base (the origin the shell's
+/// `client/auth.json` names too). Only a template with the bare `--` is a TMC shell;
+/// an explicit `--browser-backbone-url` already in the arguments, or a
+/// `DOT_BROWSER_BACKBONE_URL` in the environment (`env_set`), wins, because the
+/// game reads argv before the environment and must not overrule the player.
+pub fn browser_site_args(args: &[String], site: &str, env_set: bool) -> Vec<String> {
+    let site = site.trim();
+
+    if site.is_empty()
+        || env_set
+        || !args.iter().any(|a| is_separator(a))
+        || args
+            .iter()
+            .any(|a| a == "--browser-backbone-url" || a.starts_with("--browser-backbone-url="))
+    {
+        return Vec::new();
+    }
+
+    vec!["--browser-backbone-url".into(), site.into()]
+}
+
 /// The Solo pack a serverless launch should run: the game pack's
 /// `<owner>/<repo>` id and the version to mount, `None` for the newest.
 /// From the site's boot descriptor (`boot.solo`) or a `tmc://` launch link.
@@ -702,6 +726,24 @@ mod tests {
 
         assert!(b.check("1.5.0").is_err());
         assert!(b.check("2.0.0").is_ok());
+    }
+
+    #[test]
+    fn browser_site_follows_the_separator_and_yields_to_an_explicit_choice() {
+        let shell = vec!["--".to_string(), "--connect".into(), "h:1".into()];
+        let site = "https://moddingcommunity.com";
+
+        assert_eq!(
+            browser_site_args(&shell, site, false),
+            vec!["--browser-backbone-url", site]
+        );
+        assert!(browser_site_args(&shell, site, true).is_empty());
+        assert!(browser_site_args(&shell, "  ", false).is_empty());
+        assert!(browser_site_args(&["--connect".into()], site, false).is_empty());
+
+        let mut own = shell.clone();
+        own.push("--browser-backbone-url=https://x.example".into());
+        assert!(browser_site_args(&own, site, false).is_empty());
     }
 
     #[test]

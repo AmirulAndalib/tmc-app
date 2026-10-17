@@ -262,6 +262,13 @@ pub async fn game_launch(
         &game_cache_dir(&state),
         settings.game_cache_limit_mb,
     ));
+    // The site whose servers the in-game browser lists. An explicit flag or
+    // DOT_BROWSER_BACKBONE_URL still wins (see the function).
+    plan.args.extend(tmc_core::games::build::browser_site_args(
+        &plan.args,
+        tmc_core::api::api_base(),
+        std::env::var_os("DOT_BROWSER_BACKBONE_URL").is_some_and(|v| !v.is_empty()),
+    ));
     // No server: a game pack app runs its own offline mode ("Solo play"). The
     // site names the pack in the boot descriptor; asking is best effort, so a
     // site that is unreachable, older than the field, or refuses just starts
