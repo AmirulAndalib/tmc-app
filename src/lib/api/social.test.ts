@@ -166,9 +166,7 @@ describe('parties', () => {
     })
 
     it('refuses a party roster missing what the site always sends', () => {
-        expect(() =>
-            PartyMineSchema.parse({ id: '1', members: [] })
-        ).toThrow()
+        expect(() => PartyMineSchema.parse({ id: '1', members: [] })).toThrow()
     })
 })
 

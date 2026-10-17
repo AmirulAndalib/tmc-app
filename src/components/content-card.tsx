@@ -233,11 +233,7 @@ export default function ContentCard({ item }: { item: ContentSummaryT }) {
         )
 
     return (
-        <Link
-            ref={attach}
-            to={`/view/${item.kind}/${item.id}`}
-            className={shell}
-        >
+        <Link ref={attach} to={`/view/${item.kind}/${item.id}`} className={shell}>
             {body}
         </Link>
     )

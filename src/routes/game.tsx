@@ -259,16 +259,21 @@ function Leaderboards({ appId }: { appId: number }) {
     // Every declared stat, with this member's figure where they hold one; the
     // held keys alone when the site cannot list a game's stats.
     const held = new Map((mine.data?.stats ?? []).map((s) => [s.key, s]))
-    const keys: { key: string; name: string; value: number | null; decimals: number; unit: string }[] =
-        defs.data
-            ? defs.data.map((d) => ({
-                  key: d.key,
-                  name: d.name,
-                  value: held.get(d.key)?.value ?? null,
-                  decimals: d.decimals,
-                  unit: d.unit,
-              }))
-            : (mine.data?.stats ?? [])
+    const keys: {
+        key: string
+        name: string
+        value: number | null
+        decimals: number
+        unit: string
+    }[] = defs.data
+        ? defs.data.map((d) => ({
+              key: d.key,
+              name: d.name,
+              value: held.get(d.key)?.value ?? null,
+              decimals: d.decimals,
+              unit: d.unit,
+          }))
+        : (mine.data?.stats ?? [])
     const stat = params.get('stat') ?? keys[0]?.key ?? null
 
     const top = useQuery({

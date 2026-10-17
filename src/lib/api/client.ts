@@ -396,11 +396,15 @@ export const api = {
     /** The caller's party, or null. */
     partyMine: () => get('/party/mine', PartyMineResponse, undefined, true),
 
-    partyInvites: () => get('/party/invites', PartyInvitesResponse, undefined, true),
+    partyInvites: () =>
+        get('/party/invites', PartyInvitesResponse, undefined, true),
 
     /** Accepting also JOINS, so capacity and bans still decide. */
     partyInviteRespond: (inviteId: string, accept: boolean) =>
-        send('POST', '/party/invite/respond', PartyInviteRespondResponse, { inviteId, accept }),
+        send('POST', '/party/invite/respond', PartyInviteRespondResponse, {
+            inviteId,
+            accept,
+        }),
 
     partyLeave: (id: string) =>
         send('POST', '/party/leave', PartyLeaveResponse, { id }),
