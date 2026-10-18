@@ -97,13 +97,17 @@ function applySgr(style: Style, params: number[]): Style {
 /** Longest escape sequence held back waiting for its end. */
 const MAX_PENDING = 64
 
-type Piece = { kind: 'text'; text: string; style: Style } | { kind: 'cr' } | { kind: 'lf' }
+type Piece =
+    { kind: 'text'; text: string; style: Style } | { kind: 'cr' } | { kind: 'lf' }
 
 /**
  * Split a chunk into text, line breaks and carriage returns, applying colour
  * codes to the state and dropping every other escape sequence.
  */
-export function tokenize(state: AnsiState, input: string): { pieces: Piece[]; state: AnsiState } {
+export function tokenize(
+    state: AnsiState,
+    input: string
+): { pieces: Piece[]; state: AnsiState } {
     const pieces: Piece[] = []
     let style = state.style
     let buf = ''
@@ -121,6 +125,7 @@ export function tokenize(state: AnsiState, input: string): { pieces: Piece[]; st
 
         if (ch === '\u001b') {
             const rest = src.slice(i)
+            // eslint-disable-next-line no-control-regex -- matching terminal escapes is the point
             const csi = /^\u001b\[([0-9;:?]*)([@-~])/.exec(rest)
 
             if (csi) {
@@ -141,6 +146,7 @@ export function tokenize(state: AnsiState, input: string): { pieces: Piece[]; st
             }
 
             // OSC (title, hyperlink) up to BEL or ST: dropped.
+            // eslint-disable-next-line no-control-regex -- matching terminal escapes is the point
             const osc = /^\u001b\][^\u0007\u001b]*(\u0007|\u001b\\)/.exec(rest)
 
             if (osc) {
@@ -150,7 +156,11 @@ export function tokenize(state: AnsiState, input: string): { pieces: Piece[]; st
             }
 
             // Looks like the start of one that has not finished arriving.
-            if (rest.length < MAX_PENDING && /^\u001b(\[[0-9;:?]*|\][^\u0007]*\u001b?)?$/.test(rest)) {
+            if (
+                rest.length < MAX_PENDING &&
+                // eslint-disable-next-line no-control-regex -- matching terminal escapes is the point
+                /^\u001b(\[[0-9;:?]*|\][^\u0007]*\u001b?)?$/.test(rest)
+            ) {
                 pending = rest
 
                 break
@@ -247,7 +257,11 @@ function closeOpen(t: Transcript): void {
  * of the line, so what follows REPLACES it. That is how a progress line
  * redraws itself, and rendering it as appended text would print every step.
  */
-export function appendOutput(t: Transcript, stream: 'stdout' | 'stderr', text: string): Transcript {
+export function appendOutput(
+    t: Transcript,
+    stream: 'stdout' | 'stderr',
+    text: string
+): Transcript {
     const { pieces, state } = tokenize(t.ansi[stream], text)
 
     t.ansi[stream] = state

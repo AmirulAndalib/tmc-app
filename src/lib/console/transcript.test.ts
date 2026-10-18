@@ -17,7 +17,11 @@ describe('colour', () => {
     it('maps the basic colours onto the theme and resets', () => {
         const t = emptyTranscript()
 
-        appendOutput(t, 'stdout', '\u001b[31mbad\u001b[0m ok \u001b[1;32mgood\u001b[0m\n')
+        appendOutput(
+            t,
+            'stdout',
+            '\u001b[31mbad\u001b[0m ok \u001b[1;32mgood\u001b[0m\n'
+        )
 
         const spans = t.lines[0]?.spans ?? []
 
@@ -46,14 +50,22 @@ describe('colour', () => {
 
         expect(a.state.pending).toBe('\u001b[3')
         expect(b.pieces).toEqual([
-            { kind: 'text', text: 'red', style: expect.objectContaining({ tone: 'danger' }) },
+            {
+                kind: 'text',
+                text: 'red',
+                style: expect.objectContaining({ tone: 'danger' }) as unknown,
+            },
         ])
     })
 
     it('skips extended colour operands and drops other sequences', () => {
         const t = emptyTranscript()
 
-        appendOutput(t, 'stdout', '\u001b[38;5;196mA\u001b[2K\u001b[1A\u001b]0;title\u0007B\u001b[0m\n')
+        appendOutput(
+            t,
+            'stdout',
+            '\u001b[38;5;196mA\u001b[2K\u001b[1A\u001b]0;title\u0007B\u001b[0m\n'
+        )
 
         expect(texts(t)).toEqual(['AB'])
         expect(t.lines[0]?.spans[0]?.style.tone).toBeNull()
@@ -112,7 +124,12 @@ describe('lines', () => {
     it('caps the transcript', () => {
         const t = emptyTranscript()
 
-        appendOutput(t, 'stdout', Array.from({ length: MAX_LINES + 50 }, (_, i) => `l${i}`).join('\n') + '\n')
+        appendOutput(
+            t,
+            'stdout',
+            Array.from({ length: MAX_LINES + 50 }, (_, i) => `l${i}`).join('\n') +
+                '\n'
+        )
 
         expect(t.lines).toHaveLength(MAX_LINES)
         expect(texts(t)[0]).toBe('l50')
