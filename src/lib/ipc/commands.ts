@@ -21,6 +21,8 @@ import {
     DeployReportSchema,
     PurgeReportSchema,
     QueueSnapshotSchema,
+    ConsoleProbeSchema,
+    ConsoleStartedSchema,
     RconHistorySchema,
     RconProtocolSchema,
     RconReplySchema,
@@ -795,6 +797,21 @@ export const ipc = {
      * reported whenever the device next has an API to talk to.
      */
     sessionsFlush: () => call('sessions_flush', FlushReportSchema),
+
+    // --------------------------------------------------------------- Console
+    //
+    // Desktop only: these commands do not exist on a phone, so callers check
+    // the platform first. The webview sends one command LINE; Rust finds `tmc`,
+    // splits the line and runs it with no shell. Output arrives as
+    // `tmc://console` events (`ConsoleEventSchema`).
+
+    consoleProbe: () => call('console_probe', ConsoleProbeSchema),
+    consoleRun: (line: string) => call('console_run', ConsoleStartedSchema, { line }),
+    consoleStdin: (text: string, newline: boolean) =>
+        call('console_stdin', z.void(), { text, newline }),
+    consoleStdinClose: () => call('console_stdin_close', z.boolean()),
+    consoleStop: () => call('console_stop', z.boolean()),
+    consoleRunning: () => call('console_running', z.number().nullable()),
 
     // ------------------------------------------------------------------ RCON
     //

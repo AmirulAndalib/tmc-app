@@ -1459,3 +1459,43 @@ export const GameUpdateReportSchema = z.object({
 })
 
 export type GameUpdateReportT = z.infer<typeof GameUpdateReportSchema>
+
+// ---------------------------------------------------------------------------
+// Console (the `tmc` command-line tool)
+// ---------------------------------------------------------------------------
+
+export const ConsoleProbeSchema = z.object({
+    found: z.boolean(),
+    path: z.string().nullish(),
+    version: z.string().nullish(),
+})
+
+export type ConsoleProbeT = z.infer<typeof ConsoleProbeSchema>
+
+export const ConsoleStartedSchema = z.object({
+    runId: z.number(),
+    /** The command as shown and remembered, with credentials already redacted. */
+    display: z.string(),
+})
+
+export type ConsoleStartedT = z.infer<typeof ConsoleStartedSchema>
+
+/** One `tmc://console` event. */
+export const ConsoleEventSchema = z.discriminatedUnion('type', [
+    z.object({
+        type: z.literal('output'),
+        runId: z.number(),
+        stream: z.enum(['stdout', 'stderr']),
+        text: z.string(),
+    }),
+    z.object({
+        type: z.literal('exit'),
+        runId: z.number(),
+        /** `null` when it was killed by a signal. */
+        code: z.number().nullable(),
+        stopped: z.boolean(),
+        millis: z.number(),
+    }),
+])
+
+export type ConsoleEventT = z.infer<typeof ConsoleEventSchema>
