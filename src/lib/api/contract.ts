@@ -1999,6 +1999,18 @@ export const PlayLaunchResponseSchema = z
             mode: z.literal('app'),
             /** The resolved deep link, tokens already substituted. */
             uri: z.string(),
+            /**
+             * The game pack a launch with no server plays on its own, also
+             * carried in `uri` as `solo` / `solo-version`. Absent or null for
+             * a server launch and for a game that ships its own build; a
+             * client that predates the field ignores it.
+             */
+            solo: z
+                .object({
+                    contentId: z.string(),
+                    version: z.string().nullable(),
+                })
+                .nullish(),
         }),
     ])
     .nullable()

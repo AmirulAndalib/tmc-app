@@ -227,7 +227,7 @@ pub fn parse(raw: &str) -> Option<DeepLink> {
                 };
 
                 let pack = query("solo").and_then(|id| {
-                    crate::games::build::SoloPack::new(&id, query("solo_version").as_deref())
+                    crate::games::build::SoloPack::new(&id, query("solo-version").or_else(|| query("solo_version")).as_deref())
                 });
 
                 return parse_app_ref(app).map(|app| DeepLink::PlayApp {
@@ -464,6 +464,14 @@ mod tests {
                 app: "arena".into(),
                 solo: Some("tmc/arena".into()),
                 solo_version: Some("1.2.0".into())
+            })
+        );
+        assert_eq!(
+            parse("tmc://play/app/arena?solo=tmc/arena&solo-version=2.0.1"),
+            Some(DeepLink::PlayApp {
+                app: "arena".into(),
+                solo: Some("tmc/arena".into()),
+                solo_version: Some("2.0.1".into())
             })
         );
         assert_eq!(

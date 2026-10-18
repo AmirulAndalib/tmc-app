@@ -11,6 +11,7 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+    PlayLaunchResponseSchema,
     PlayPageEnvelopeSchema,
     PlayPageQuerySchema,
     PlayPlayableResponseSchema,
@@ -192,5 +193,27 @@ describe('row facts', () => {
         expect(players(5, 0)).toBe('5')
         expect(fill(40, 32)).toBe(1)
         expect(players(3, 16)).toBe('3/16')
+    })
+})
+
+describe('app-mode launch response', () => {
+    it('carries the solo pack, and an older answer without it still parses', () => {
+        const uri = 'tmc://play/app/arena?solo=tmc/arena&solo-version=1.2.0'
+        const withSolo = PlayLaunchResponseSchema.parse({
+            mode: 'app',
+            uri,
+            solo: { contentId: 'tmc/arena', version: '1.2.0' },
+        })
+        expect(withSolo).toMatchObject({ solo: { contentId: 'tmc/arena', version: '1.2.0' } })
+
+        const latest = PlayLaunchResponseSchema.parse({
+            mode: 'app',
+            uri,
+            solo: { contentId: 'tmc/arena', version: null },
+        })
+        expect(latest).toMatchObject({ solo: { version: null } })
+
+        expect(PlayLaunchResponseSchema.parse({ mode: 'app', uri })).toMatchObject({ uri })
+        expect(PlayLaunchResponseSchema.parse({ mode: 'app', uri, solo: null })).toMatchObject({ uri })
     })
 })
