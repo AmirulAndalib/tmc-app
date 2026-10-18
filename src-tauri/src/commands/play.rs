@@ -115,12 +115,24 @@ struct Resolved {
 /// named. It is turned into one sentence here because none of those change what
 /// the app does, and enumerating them would tell a caller which column to probe.
 async fn resolve(state: &AppState, mode: &str, request: &PlayRequest) -> AppResult<Resolved> {
-    let payload = serde_json::json!({
+    /*
+     * Absent keys are left out rather than sent as `null`. The site declares
+     * `serverId` and `options` as `.optional()`, which accepts a missing key and
+     * rejects a null one, so `"serverId": null` turned every serverless launch
+     * (direct Play) into "Expected number, received null".
+     */
+    let mut payload = serde_json::json!({
         "appId": request.app_id,
         "mode": mode,
-        "serverId": request.server_id,
-        "options": request.options,
     });
+
+    if let Some(server_id) = request.server_id {
+        payload["serverId"] = server_id.into();
+    }
+
+    if let Some(options) = request.options.as_ref().filter(|o| !o.is_null()) {
+        payload["options"] = options.clone();
+    }
 
     let answer = state
         .api
