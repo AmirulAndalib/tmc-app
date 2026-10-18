@@ -2005,6 +2005,245 @@ export const PlayLaunchResponseSchema = z
 
 export type PlayLaunchResponseT = z.infer<typeof PlayLaunchResponseSchema>
 
+// ------------------------------------------------------------ Play center
+//
+// The site's `/play` page for the app: `GET /play/page` (one page of a tab),
+// `GET /play/playable` (which games have a Play button) and
+// `POST /play/quick-match` (the best server for one game, right now). Each
+// answers what the tRPC `play.page` / `play.playable` / `play.quickMatch`
+// procedures answer, through the same `@lib/play` functions, with `Date`s as
+// ISO strings. `play/page` and `play/quick-match` answer `data: null` when
+// `play.enabled` is off (the site's page 404s); `play/playable` answers
+// `enabled: false` instead, as `play.playable` does.
+
+export const PlayTabVals = ['games', 'servers', 'lobbies', 'invites'] as const
+export const PlayTabSchema = z.enum(PlayTabVals)
+
+/** Mirrors `PlaySortVals`. Which tab can express which is `PlayTabSorts`. */
+export const PlaySortVals = [
+    'players',
+    'recent',
+    'name',
+    'servers',
+    'popular',
+    'trending',
+    'newest',
+] as const
+export const PlaySortSchema = z.enum(PlaySortVals)
+
+/** Mirrors `PlayFilterSchema`, with the query-string coercions a GET needs. */
+export const PlayPageQuerySchema = z.object({
+    tab: PlayTabSchema.default('games'),
+    q: z.coerce.string().max(120).default(''),
+    appId: QueryInt.positive().optional(),
+    mode: PlayModeSchema.optional(),
+    sort: PlaySortSchema.optional(),
+    populated: QueryBool.default(false),
+    joinable: QueryBool.default(false),
+    cursor: QueryInt.min(0).max(10_000).default(0),
+})
+
+export type PlayPageQueryT = z.input<typeof PlayPageQuerySchema>
+
+export const PlayAppRowSchema = z.object({
+    id: z.number().int(),
+    name: z.string(),
+    url: z.string().nullable(),
+    iconUrl: z.string().nullable(),
+    bannerUrl: z.string().nullable(),
+    description: z.string().nullable(),
+    modes: z.array(PlayModeSchema),
+    help: z.string().nullable(),
+    options: z.array(PlayOptionSchema).default([]),
+    serverCnt: z.number().int(),
+    playerCnt: z.number().int(),
+    lobbyCnt: z.number().int(),
+    rotationCnt: z.number().int(),
+    isOfficial: z.boolean(),
+    graphics: AppGraphicsSchema.nullable(),
+    directPlay: z.boolean(),
+    solo: z.boolean(),
+    owner: z
+        .object({
+            id: z.string(),
+            username: z.string().nullable(),
+            name: z.string().nullable(),
+            role: z.string(),
+            avatarKey: z.string().nullable(),
+            linkable: z.boolean(),
+        })
+        .nullable(),
+    isEngine: z.boolean(),
+})
+
+export const PlayServerRowSchema = z.object({
+    id: z.number().int(),
+    name: z.string().nullable(),
+    url: z.string(),
+    appId: z.number().int(),
+    appName: z.string(),
+    modes: z.array(PlayModeSchema),
+    graphics: AppGraphicsSchema.nullable(),
+    online: z.boolean(),
+    curUsers: z.number().int(),
+    maxUsers: z.number().int(),
+    map: z.string().nullable(),
+    /** Already gated on the server's own `showNetInfo`; null when withheld. */
+    host: z.string().nullable(),
+    port: z.number().int().nullable(),
+    lastOnline: z.string().nullable(),
+})
+
+export const PlayLobbyRowSchema = z.object({
+    /** Decimal string; the party id is a BigInt. */
+    id: z.string(),
+    name: z.string().nullable(),
+    url: z.string(),
+    appId: z.number().int(),
+    appName: z.string(),
+    modes: z.array(PlayModeSchema),
+    graphics: AppGraphicsSchema.nullable(),
+    hostName: z.string().nullable(),
+    hostAvatarUrl: z.string().nullable(),
+    needsPassword: z.boolean(),
+    stage: z.string(),
+    users: z.number().int(),
+    maxUsers: z.number().int(),
+    serverId: z.number().int().nullable(),
+    startTime: z.string(),
+})
+
+export const PlayPartySchema = z.object({
+    id: z.string(),
+    name: z.string().nullable(),
+    role: z.string(),
+    stage: z.string(),
+    users: z.number().int(),
+    maxUsers: z.number().int(),
+    app: z.object({
+        id: z.number().int(),
+        name: z.string(),
+        url: z.string().nullable(),
+        iconUrl: z.string().nullable(),
+        modes: z.array(PlayModeSchema),
+    }),
+    server: z
+        .object({
+            id: z.number().int(),
+            name: z.string().nullable(),
+            online: z.boolean(),
+            curUsers: z.number().int(),
+            maxUsers: z.number().int(),
+        })
+        .nullable(),
+    inGame: z.number().int(),
+    present: z.array(
+        z.object({
+            userId: z.string(),
+            name: z.string().nullable(),
+            avatarUrl: z.string().nullable(),
+            confident: z.boolean(),
+            gameName: z.string().nullable(),
+        })
+    ),
+    /** `ReserveOfferT`, with its dates as ISO strings. */
+    reserve: z
+        .object({
+            available: z.boolean(),
+            deny: z.string().nullable(),
+            allowPublic: z.boolean(),
+            allowPrivate: z.boolean(),
+            maxMinutes: z.number().int(),
+            opensAt: z.string().nullable(),
+            freeAt: z.string().nullable(),
+        })
+        .nullable(),
+    reservation: z
+        .object({
+            id: z.string(),
+            status: z.string(),
+            private: z.boolean(),
+            endsAt: z.string(),
+        })
+        .nullable(),
+})
+
+export const PlayTotalsSchema = z.object({
+    games: z.number().int(),
+    servers: z.number().int(),
+    players: z.number().int(),
+    lobbies: z.number().int(),
+})
+
+/** One page of whichever tab was asked for; the other tabs' arrays are empty. */
+export const PlayPageResponseSchema = z.object({
+    tab: PlayTabSchema,
+    apps: z.array(PlayAppRowSchema),
+    servers: z.array(PlayServerRowSchema),
+    lobbies: z.array(PlayLobbyRowSchema),
+    /** Pass back as `cursor`. Null when there is no further page. */
+    nextCursor: z.number().int().nullable(),
+    anyPlayable: z.boolean(),
+    party: PlayPartySchema.nullable(),
+    totals: PlayTotalsSchema,
+})
+
+export type PlayPageResponseT = z.infer<typeof PlayPageResponseSchema>
+
+/** `data` is null when the play center is switched off. */
+export const PlayPageEnvelopeSchema = PlayPageResponseSchema.nullable()
+
+export const PlayPlayableResponseSchema = z.object({
+    enabled: z.boolean(),
+    /** Games listed at all: a server's Connect button needs only this. */
+    appIds: z.array(z.number().int()),
+    /** Subset of `appIds` whose Play button works with no server chosen. */
+    directIds: z.array(z.number().int()),
+    /** Subset of `directIds` whose serverless launch is solo. */
+    soloIds: z.array(z.number().int()),
+})
+
+export type PlayPlayableResponseT = z.infer<typeof PlayPlayableResponseSchema>
+
+export const PlayQuickMatchRequestSchema = z.object({
+    appId: z.number().int().positive(),
+    rotation: z.boolean().default(false),
+})
+
+export const PlayQuickCandidateSchema = z.object({
+    id: z.number().int(),
+    name: z.string().nullable(),
+    curUsers: z.number().int(),
+    maxUsers: z.number().int(),
+    map: z.string().nullable(),
+    countryCode: z.string().nullable(),
+    score: z.number(),
+    why: z.array(z.string()),
+    viaRotation: z.boolean(),
+})
+
+export const PlayQuickResultSchema = z.object({
+    appName: z.string(),
+    country: z
+        .object({ code: z.string(), region: z.string().nullable() })
+        .nullable(),
+    rotation: z.boolean(),
+    scanned: z.number().int(),
+    full: z.number().int(),
+    stale: z.number().int(),
+    rotationHits: z.number().int(),
+    top: z.array(PlayQuickCandidateSchema),
+    best: PlayServerRowSchema.nullable(),
+    tookMs: z.number(),
+})
+
+/** `data` is null when the play center is off or the game is not listed. */
+export const PlayQuickMatchResponseSchema = PlayQuickResultSchema.nullable()
+
+export type PlayQuickMatchResponseT = z.infer<
+    typeof PlayQuickMatchResponseSchema
+>
+
 /* ========================================================================== */
 
 // ------------------------------------------------------------------ Social
