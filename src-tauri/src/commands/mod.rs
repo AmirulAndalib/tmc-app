@@ -22,6 +22,8 @@
 pub mod api;
 pub mod auth;
 pub mod config;
+#[cfg(desktop)]
+pub mod console;
 pub mod detect;
 pub mod downloads;
 pub mod fs;

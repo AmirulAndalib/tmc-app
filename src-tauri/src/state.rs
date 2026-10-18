@@ -111,6 +111,9 @@ pub struct AppState {
     /// be the wrong half.
     pub sessions: Arc<Sessions>,
 
+    /// The Console screen's one running `tmc` process, if any.
+    pub console: tmc_core::console::Console,
+
     /// Installing, updating and launching the games TMC publishes itself.
     ///
     /// Distinct from everything around it: `library` tracks what an ACCOUNT
@@ -324,6 +327,7 @@ impl AppState {
             games,
             rcon,
             sessions,
+            console: tmc_core::console::Console::new(),
             app_ids: RwLock::new(std::collections::BTreeMap::new()),
             flushing: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             scan_running: Arc::new(std::sync::atomic::AtomicBool::new(false)),

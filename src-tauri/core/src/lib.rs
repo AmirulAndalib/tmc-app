@@ -17,6 +17,7 @@ pub mod anchor;
 pub mod api;
 pub mod auth;
 pub mod canon;
+pub mod console;
 pub mod crypto;
 pub mod deeplink;
 pub mod deploy;

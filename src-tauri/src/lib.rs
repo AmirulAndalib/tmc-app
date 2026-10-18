@@ -306,6 +306,18 @@ pub fn run() {
             commands::servers::query_servers,
             commands::servers::latency_series,
             commands::servers::latency_clear,
+            #[cfg(desktop)]
+            commands::console::console_probe,
+            #[cfg(desktop)]
+            commands::console::console_run,
+            #[cfg(desktop)]
+            commands::console::console_stdin,
+            #[cfg(desktop)]
+            commands::console::console_stdin_close,
+            #[cfg(desktop)]
+            commands::console::console_stop,
+            #[cfg(desktop)]
+            commands::console::console_running,
             commands::sessions::session_running,
             commands::sessions::session_history,
             commands::sessions::session_stop,
