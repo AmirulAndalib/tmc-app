@@ -26,9 +26,7 @@ use std::sync::Arc;
 use tauri::{AppHandle, Emitter, State};
 
 use tmc_core::audit;
-use tmc_core::console::{
-    self, ConsoleEvent, Stream, StartError, MAX_STDIN,
-};
+use tmc_core::console::{self, ConsoleEvent, StartError, Stream, MAX_STDIN};
 use tmc_core::error::{AppError, AppResult};
 
 use crate::state::AppState;
@@ -97,8 +95,8 @@ pub fn console_run(
     state: State<'_, AppState>,
     line: String,
 ) -> AppResult<ConsoleStarted> {
-    let args = console::split_argv(&line, !cfg!(windows))
-        .map_err(|e| AppError::invalid(e.to_string()))?;
+    let args =
+        console::split_argv(&line, !cfg!(windows)).map_err(|e| AppError::invalid(e.to_string()))?;
 
     let redacted = console::redact_argv(&args);
     let display = redacted

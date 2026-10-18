@@ -224,7 +224,10 @@ const SECRET_WORDS: [&str; 7] = [
 ];
 
 fn is_secret_name(name: &str) -> bool {
-    let lower = name.trim_start_matches('-').to_ascii_lowercase().replace('_', "-");
+    let lower = name
+        .trim_start_matches('-')
+        .to_ascii_lowercase()
+        .replace('_', "-");
 
     SECRET_WORDS.iter().any(|w| lower.contains(w))
 }
@@ -233,7 +236,10 @@ fn is_secret_name(name: &str) -> bool {
 /// key (`tmc_…`), or a JWT (three base64url runs, the first starting `eyJ`).
 fn looks_like_secret(value: &str) -> bool {
     if let Some(rest) = value.strip_prefix("tmc_") {
-        return rest.len() >= 8 && rest.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
+        return rest.len() >= 8
+            && rest
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
     }
 
     value.starts_with("eyJ") && value.matches('.').count() == 2
@@ -439,12 +445,19 @@ pub fn version_of(program: &Path) -> Option<String> {
     }
 
     let out = child.wait_with_output().ok()?;
-    let text = String::from_utf8_lossy(if out.stdout.is_empty() { &out.stderr } else { &out.stdout })
-        .trim()
-        .to_string();
+    let text = String::from_utf8_lossy(if out.stdout.is_empty() {
+        &out.stderr
+    } else {
+        &out.stdout
+    })
+    .trim()
+    .to_string();
 
     // First line only, and not empty: this goes in a header.
-    text.lines().next().map(|l| l.chars().take(120).collect()).filter(|l: &String| !l.is_empty())
+    text.lines()
+        .next()
+        .map(|l| l.chars().take(120).collect())
+        .filter(|l: &String| !l.is_empty())
 }
 
 // ---- Running -----------------------------------------------------------------
@@ -457,8 +470,17 @@ pub enum Stream {
 
 #[derive(Debug, Clone)]
 pub enum ConsoleEvent {
-    Output { run_id: u64, stream: Stream, text: String },
-    Exit { run_id: u64, code: Option<i32>, stopped: bool, millis: u64 },
+    Output {
+        run_id: u64,
+        stream: Stream,
+        text: String,
+    },
+    Exit {
+        run_id: u64,
+        code: Option<i32>,
+        stopped: bool,
+        millis: u64,
+    },
 }
 
 pub type Emit = Arc<dyn Fn(ConsoleEvent) + Send + Sync>;
@@ -531,15 +553,33 @@ impl Console {
         let (done_tx, done_rx) = mpsc::channel::<()>();
 
         for (stream, pipe) in [
-            (Stream::Stdout, child.stdout.take().map(|p| Box::new(p) as Box<dyn Read + Send>)),
-            (Stream::Stderr, child.stderr.take().map(|p| Box::new(p) as Box<dyn Read + Send>)),
+            (
+                Stream::Stdout,
+                child
+                    .stdout
+                    .take()
+                    .map(|p| Box::new(p) as Box<dyn Read + Send>),
+            ),
+            (
+                Stream::Stderr,
+                child
+                    .stderr
+                    .take()
+                    .map(|p| Box::new(p) as Box<dyn Read + Send>),
+            ),
         ] {
             let emit = Arc::clone(&emit);
             let done = done_tx.clone();
 
             std::thread::spawn(move || {
                 if let Some(pipe) = pipe {
-                    pump(pipe, |text| emit(ConsoleEvent::Output { run_id, stream, text }));
+                    pump(pipe, |text| {
+                        emit(ConsoleEvent::Output {
+                            run_id,
+                            stream,
+                            text,
+                        })
+                    });
                 }
 
                 let _ = done.send(());
@@ -603,7 +643,10 @@ impl Console {
             return false;
         };
 
-        stdin.write_all(text.as_bytes()).and_then(|()| stdin.flush()).is_ok()
+        stdin
+            .write_all(text.as_bytes())
+            .and_then(|()| stdin.flush())
+            .is_ok()
     }
 
     /// Close stdin (end of input). `false` when nothing runs.
@@ -785,7 +828,10 @@ mod tests {
     #[test]
     fn splits_on_whitespace() {
         assert_eq!(sp("mod list --mine"), Ok(v(&["mod", "list", "--mine"])));
-        assert_eq!(sp("  mod\t list \n --all "), Ok(v(&["mod", "list", "--all"])));
+        assert_eq!(
+            sp("  mod\t list \n --all "),
+            Ok(v(&["mod", "list", "--all"]))
+        );
     }
 
     #[test]
@@ -809,7 +855,13 @@ mod tests {
     fn quotes() {
         assert_eq!(
             sp(r#"mod update 42 --set description="Now with fewer bugs""#),
-            Ok(v(&["mod", "update", "42", "--set", "description=Now with fewer bugs"]))
+            Ok(v(&[
+                "mod",
+                "update",
+                "42",
+                "--set",
+                "description=Now with fewer bugs"
+            ]))
         );
         assert_eq!(sp("a 'b  c' d"), Ok(v(&["a", "b  c", "d"])));
         assert_eq!(sp(r#"a "b 'c' d""#), Ok(v(&["a", "b 'c' d"])));
@@ -844,7 +896,9 @@ mod tests {
     fn shell_syntax_is_inert() {
         assert_eq!(
             sp("mod get 1; rm -rf ~ | cat && $(id) `id`"),
-            Ok(v(&["mod", "get", "1;", "rm", "-rf", "~", "|", "cat", "&&", "$(id)", "`id`"]))
+            Ok(v(&[
+                "mod", "get", "1;", "rm", "-rf", "~", "|", "cat", "&&", "$(id)", "`id`"
+            ]))
         );
     }
 
@@ -878,11 +932,33 @@ mod tests {
     #[test]
     fn redacts_set_pairs_and_lookalikes() {
         assert_eq!(
-            redact_argv(&v(&["mod", "update", "1", "--set", "apiToken=abc", "--set", "name=Fine"])),
-            v(&["mod", "update", "1", "--set", &format!("apiToken={REDACTED}"), "--set", "name=Fine"])
+            redact_argv(&v(&[
+                "mod",
+                "update",
+                "1",
+                "--set",
+                "apiToken=abc",
+                "--set",
+                "name=Fine"
+            ])),
+            v(&[
+                "mod",
+                "update",
+                "1",
+                "--set",
+                &format!("apiToken={REDACTED}"),
+                "--set",
+                "name=Fine"
+            ])
         );
-        assert_eq!(redact_argv(&v(&["get", "tmc_abcdefgh12"])), v(&["get", REDACTED]));
-        assert_eq!(redact_argv(&v(&["get", "eyJhbGciOi.payload.sig"])), v(&["get", REDACTED]));
+        assert_eq!(
+            redact_argv(&v(&["get", "tmc_abcdefgh12"])),
+            v(&["get", REDACTED])
+        );
+        assert_eq!(
+            redact_argv(&v(&["get", "eyJhbGciOi.payload.sig"])),
+            v(&["get", REDACTED])
+        );
         assert_eq!(
             redact_argv(&v(&["--key=tmc_abcdefgh12"])),
             v(&[&format!("--key={REDACTED}")])
@@ -891,7 +967,16 @@ mod tests {
 
     #[test]
     fn keeps_what_is_not_secret() {
-        let plain = v(&["mod", "list", "--mine", "--private-key", "/home/me/k.pem", "--key-id", "tmcak_x", "tmc_x"]);
+        let plain = v(&[
+            "mod",
+            "list",
+            "--mine",
+            "--private-key",
+            "/home/me/k.pem",
+            "--key-id",
+            "tmcak_x",
+            "tmc_x",
+        ]);
 
         assert_eq!(redact_argv(&plain), plain);
     }
@@ -909,7 +994,10 @@ mod tests {
         joined.push(bytes[bytes.len() - 1]);
 
         assert_eq!(decode_prefix(&joined), ("✓".to_string(), Vec::new()));
-        assert_eq!(decode_prefix(b"a\xffb"), ("a\u{fffd}b".to_string(), Vec::new()));
+        assert_eq!(
+            decode_prefix(b"a\xffb"),
+            ("a\u{fffd}b".to_string(), Vec::new())
+        );
     }
 
     #[test]
@@ -937,13 +1025,22 @@ mod tests {
             std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o755)).unwrap();
         }
 
-        let joined = std::env::join_paths([PathBuf::from("relative"), PathBuf::new(), bin.clone()]).unwrap();
+        let joined =
+            std::env::join_paths([PathBuf::from("relative"), PathBuf::new(), bin.clone()]).unwrap();
 
         assert_eq!(
-            find_program("tmc", Some(&joined), Some(OsStr::new(".EXE;.CMD")), cfg!(windows)),
+            find_program(
+                "tmc",
+                Some(&joined),
+                Some(OsStr::new(".EXE;.CMD")),
+                cfg!(windows)
+            ),
             Some(file.clone())
         );
-        assert_eq!(find_program("nope", Some(&joined), None, cfg!(windows)), None);
+        assert_eq!(
+            find_program("nope", Some(&joined), None, cfg!(windows)),
+            None
+        );
         assert_eq!(find_program("tmc", None, None, cfg!(windows)), None);
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -960,10 +1057,17 @@ mod tests {
         let sh = Path::new("/bin/sh");
 
         let id = console
-            .start(sh, &v(&["-c", "echo out; echo err 1>&2; read x; echo got:$x; exit 3"]), Arc::clone(&emit))
+            .start(
+                sh,
+                &v(&["-c", "echo out; echo err 1>&2; read x; echo got:$x; exit 3"]),
+                Arc::clone(&emit),
+            )
             .unwrap();
 
-        assert!(matches!(console.start(sh, &v(&["-c", "true"]), Arc::clone(&emit)), Err(StartError::Busy)));
+        assert!(matches!(
+            console.start(sh, &v(&["-c", "true"]), Arc::clone(&emit)),
+            Err(StartError::Busy)
+        ));
         assert!(console.write_stdin("hi\n"));
 
         wait_exit(&events);
@@ -994,7 +1098,11 @@ mod tests {
 
         assert!(matches!(
             events.lock().unwrap().last(),
-            Some(ConsoleEvent::Exit { stopped: true, code: None, .. })
+            Some(ConsoleEvent::Exit {
+                stopped: true,
+                code: None,
+                ..
+            })
         ));
         assert!(!console.stop());
     }
@@ -1002,7 +1110,12 @@ mod tests {
     #[cfg(unix)]
     fn wait_exit(events: &Arc<Mutex<Vec<ConsoleEvent>>>) {
         for _ in 0..200 {
-            if events.lock().unwrap().iter().any(|e| matches!(e, ConsoleEvent::Exit { .. })) {
+            if events
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|e| matches!(e, ConsoleEvent::Exit { .. }))
+            {
                 return;
             }
 

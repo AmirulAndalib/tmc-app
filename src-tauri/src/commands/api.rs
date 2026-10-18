@@ -70,7 +70,10 @@ pub async fn api_send(
         other => return Err(AppError::invalid(format!("Method {other} is not allowed."))),
     };
 
-    state.api.request(method, &path, body, auth.unwrap_or(true)).await
+    state
+        .api
+        .request(method, &path, body, auth.unwrap_or(true))
+        .await
 }
 
 /// Which site this build talks to, and whether that is the real one.

@@ -188,7 +188,7 @@ async fn open_web(
     state: &State<'_, AppState>,
     request: PlayRequest,
 ) -> AppResult<Session> {
-    let resolved = resolve(&state, "web", &request).await?;
+    let resolved = resolve(state, "web", &request).await?;
 
     if resolved.mode != "web" {
         return Err(AppError::internal("play/launch answered the wrong mode"));
@@ -445,7 +445,7 @@ async fn handoff(
     state: &State<'_, AppState>,
     request: PlayRequest,
 ) -> AppResult<Session> {
-    let resolved = resolve(&state, "app", &request).await?;
+    let resolved = resolve(state, "app", &request).await?;
 
     let Some(uri) = resolved.uri else {
         return Err(AppError::internal("play/launch answered without a URI"));

@@ -227,7 +227,12 @@ pub fn parse(raw: &str) -> Option<DeepLink> {
                 };
 
                 let pack = query("solo").and_then(|id| {
-                    crate::games::build::SoloPack::new(&id, query("solo-version").or_else(|| query("solo_version")).as_deref())
+                    crate::games::build::SoloPack::new(
+                        &id,
+                        query("solo-version")
+                            .or_else(|| query("solo_version"))
+                            .as_deref(),
+                    )
                 });
 
                 return parse_app_ref(app).map(|app| DeepLink::PlayApp {
