@@ -97,7 +97,12 @@ pub struct PlayRequest {
 }
 
 /// What `/play/launch` answered, as far as this module cares.
+///
+/// camelCase because that is what the site sends. Without the rename every key
+/// but `mode` and `boot` silently missed: `loaderUrl` defaulted to `None` and
+/// every web launch failed as "answered without a loader".
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct Resolved {
     mode: String,
     #[serde(default)]
@@ -154,10 +159,33 @@ async fn resolve(state: &AppState, mode: &str, request: &PlayRequest) -> AppResu
         .map_err(|e| AppError::internal(format!("play/launch: {e}")))
 }
 
+/// Write an internal failure's detail to the activity log.
+///
+/// The webview is shown a fixed sentence that says "check the activity log",
+/// so the detail has to actually be there; without this a failed Play left no
+/// trace anywhere the user could see.
+fn logged<T>(state: &AppState, event: &str, result: AppResult<T>) -> AppResult<T> {
+    if let Err(AppError::Internal(detail)) = &result {
+        tmc_core::audit!(state.audit, Error, App, event.to_string(), detail.clone());
+    }
+
+    result
+}
+
 #[tauri::command]
 pub async fn play_open_web(
     app: AppHandle,
     state: State<'_, AppState>,
+    request: PlayRequest,
+) -> AppResult<Session> {
+    let result = open_web(app, &state, request).await;
+
+    logged(&state, "play.web", result)
+}
+
+async fn open_web(
+    app: AppHandle,
+    state: &State<'_, AppState>,
     request: PlayRequest,
 ) -> AppResult<Session> {
     let resolved = resolve(&state, "web", &request).await?;
@@ -190,7 +218,7 @@ pub async fn play_open_web(
     #[cfg(mobile)]
     {
         let _ = (loader_url, boot);
-        open_on_site(&app, &state, &request, &title)
+        open_on_site(&app, state, &request, &title)
     }
 
     #[cfg(desktop)]
@@ -259,7 +287,7 @@ fn open_on_site(
 #[cfg(desktop)]
 fn open_window(
     app: AppHandle,
-    state: State<'_, AppState>,
+    state: &State<'_, AppState>,
     request: PlayRequest,
     loader_url: String,
     boot: serde_json::Value,
@@ -405,6 +433,16 @@ fn open_window(
 pub async fn play_handoff(
     app: AppHandle,
     state: State<'_, AppState>,
+    request: PlayRequest,
+) -> AppResult<Session> {
+    let result = handoff(app, &state, request).await;
+
+    logged(&state, "play.handoff", result)
+}
+
+async fn handoff(
+    app: AppHandle,
+    state: &State<'_, AppState>,
     request: PlayRequest,
 ) -> AppResult<Session> {
     let resolved = resolve(&state, "app", &request).await?;
@@ -553,5 +591,31 @@ pub struct PlayerState {
 pub fn play_state(app: AppHandle) -> PlayerState {
     PlayerState {
         open: app.get_webview_window(PLAYER_LABEL).is_some(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Resolved;
+
+    /// The site answers in camelCase. A missing rename here made every web
+    /// launch fail as "answered without a loader" while the reply was fine.
+    #[test]
+    fn resolved_reads_the_sites_camel_case() {
+        let answer = serde_json::json!({
+            "mode": "web",
+            "loaderUrl": "https://cdn.example.org/loader.js",
+            "boot": { "app": 1 },
+        });
+
+        let resolved: Resolved = serde_json::from_value(answer).unwrap();
+
+        assert_eq!(resolved.mode, "web");
+        assert_eq!(
+            resolved.loader_url.as_deref(),
+            Some("https://cdn.example.org/loader.js")
+        );
+        assert!(resolved.boot.is_some());
+        assert!(resolved.uri.is_none());
     }
 }
