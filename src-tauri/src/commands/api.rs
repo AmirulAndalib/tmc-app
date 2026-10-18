@@ -54,6 +54,11 @@ pub async fn api_send(
     method: String,
     path: String,
     body: Option<Value>,
+    // Defaults to true. False means the route answers a signed-out caller
+    // (auth optional on the site): the bearer is still attached when there is
+    // one, exactly as api_get does, so this only stops a missing sign-in from
+    // being refused before the request leaves.
+    auth: Option<bool>,
 ) -> AppResult<Value> {
     let method = match method.to_ascii_uppercase().as_str() {
         "POST" => Method::POST,
@@ -65,7 +70,7 @@ pub async fn api_send(
         other => return Err(AppError::invalid(format!("Method {other} is not allowed."))),
     };
 
-    state.api.request(method, &path, body, true).await
+    state.api.request(method, &path, body, auth.unwrap_or(true)).await
 }
 
 /// Which site this build talks to, and whether that is the real one.

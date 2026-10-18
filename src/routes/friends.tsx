@@ -220,7 +220,11 @@ function useAction<T>(run: () => Promise<T>) {
 
     return useMutation({
         mutationFn: run,
-        onSettled: () => void client.invalidateQueries({ queryKey: ['social'] }),
+        onSettled: () => {
+            void client.invalidateQueries({ queryKey: ['social'] })
+            // Accepting an invite or leaving a party changes the play center's party bar.
+            void client.invalidateQueries({ queryKey: ['play'] })
+        },
     })
 }
 
@@ -399,7 +403,7 @@ function RequestRow({
     )
 }
 
-function InviteRow({
+export function InviteRow({
     id,
     label,
     message,

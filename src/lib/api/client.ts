@@ -19,6 +19,10 @@ import {
     PartyLeaveResponse,
     PartyMineResponse,
     PlayLaunchResponseSchema,
+    PlayPageEnvelopeSchema,
+    PlayPageQuerySchema,
+    PlayPlayableResponseSchema,
+    PlayQuickMatchResponseSchema,
     ReportCreateResponse,
     ReviewListResponse,
     ReviewVoteResponse,
@@ -35,6 +39,7 @@ import {
     type InstallOptionsT,
     type PlayModeT,
     type PlayOptionValuesT,
+    type PlayPageQueryT,
     type SubKindT,
     type UserSettingsT,
 } from './contract'
@@ -72,9 +77,10 @@ async function send<S extends z.ZodType>(
     method: 'POST' | 'PATCH' | 'PUT' | 'DELETE',
     path: string,
     schema: S,
-    body?: unknown
+    body?: unknown,
+    auth = true
 ): Promise<z.infer<S>> {
-    const raw = await call('api_send', RawJson, { method, path, body })
+    const raw = await call('api_send', RawJson, { method, path, body, auth })
 
     return parseOrThrow(path, schema, raw)
 }
@@ -198,6 +204,34 @@ export const api = {
             locale: 'en',
             ...input,
         }),
+
+    // ------------------------------------------------------------ Play center
+    /**
+     * One page of one tab of the play center. Null when the feature is off.
+     *
+     * Public with a bearer attached when there is one: the party and the
+     * invites tab are the viewer's own, and a signed-out caller simply gets
+     * `party: null`, so this never refuses on a missing sign-in.
+     */
+    playPage: (query: PlayPageQueryT) =>
+        get('/play/page', PlayPageEnvelopeSchema, PlayPageQuerySchema.parse(query)),
+
+    /** Which games have a Play button. `enabled: false` when the feature is off. */
+    playPlayable: () => get('/play/playable', PlayPlayableResponseSchema),
+
+    /**
+     * The best server for one game, right now. Null when the feature is off or
+     * the game is not listed. A POST because every press is a fresh search;
+     * `auth` is optional on the site, so a signed-out app can ask too.
+     */
+    playQuickMatch: (appId: number, rotation = false) =>
+        send(
+            'POST',
+            '/play/quick-match',
+            PlayQuickMatchResponseSchema,
+            { appId, rotation },
+            false
+        ),
 
     /**
      * What people said about one item.
