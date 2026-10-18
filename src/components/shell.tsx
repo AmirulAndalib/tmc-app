@@ -232,7 +232,7 @@ function Rail({ pathname }: { pathname: string }) {
         })
 
     return (
-        <div className="flex flex-1 flex-col gap-1 overflow-y-auto px-2">
+        <div className="flex flex-1 flex-col gap-1 overflow-y-auto px-2 text-sm">
             {RAIL.map((node) => (
                 <RailItem
                     key={node.id}
