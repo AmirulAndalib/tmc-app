@@ -114,7 +114,9 @@ What each file owns, per crate. The shape and the rule behind it are in [archite
 | `lib/downloads/provider.tsx` | The queue, pushed from Rust and coalesced |
 | `lib/library/provider.tsx` | The subscription sync loop |
 | `lib/external.ts` | Which content kinds are handed to the system browser |
-| `components/shell.tsx` | Sidebar ≥768px, bottom tabs below |
+| `components/shell.tsx` | Sidebar ≥768px, bottom tabs below; draws the tree in `lib/nav.ts` |
+| `lib/nav.ts` | The primary navigation as data: Play, Discover (Apps, Mods, Assets, Servers > RCON, More), Library (Sandboxes, Downloads, Stores), Friends, Console, Settings. Feeds the rail, the bottom bar and the landing cards |
+| `components/section-cards.tsx` | The card grid on the Discover and Library landing pages |
 | `components/titlebar.tsx` | The app's own window frame — [frontend.md](frontend.md#the-window-frame-is-the-apps-not-the-oss) |
 | `components/update-banner.tsx` | "There is a newer version", with an Install button when this build can verify one |
 | `components/updater-settings.tsx` | Settings → App → Updates: channel, check now, and the endpoint/key overrides shown read-only |

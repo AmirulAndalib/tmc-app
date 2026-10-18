@@ -1,20 +1,7 @@
+import { useEffect, useState } from 'react'
 import { NavLink, Outlet, useLocation } from 'react-router-dom'
 import { Logo } from '@modcommunity/shared'
-import {
-    FiBox,
-    FiPackage,
-    FiServer,
-    FiCompass,
-    FiGrid,
-    FiSettings,
-    FiUser,
-    FiDownload,
-    FiDownloadCloud,
-    FiLayers,
-    FiTerminal,
-    FiUsers,
-} from 'react-icons/fi'
-import type { IconType } from 'react-icons'
+import { FiChevronRight, FiUser } from 'react-icons/fi'
 
 import { useAuth } from '~/lib/auth/provider'
 import { useDownloads } from '~/lib/downloads/provider'
@@ -23,6 +10,7 @@ import { useIsCompact } from '~/lib/hooks/use-breakpoint'
 import { useIsDesktop } from '~/lib/hooks/use-platform'
 import Titlebar, { WindowResizeEdges } from './titlebar'
 import UpdateBanner from './update-banner'
+import { COMPACT, RAIL, isActive, isWithin, isOwn, type NavNode } from '~/lib/nav'
 
 /**
  * The app's chrome.
@@ -33,7 +21,9 @@ import UpdateBanner from './update-banner'
  * arriving from a search engine and does not need to be told what TMC is on
  * every screen.
  *
- * One component covers all five platforms rather than two:
+ * One component covers all five platforms rather than two. The tree it draws
+ * is in lib/nav; the bottom bar cannot nest, so it shows the top level only and
+ * the Discover and Library landing pages link to every child:
  *
  *   * **≥ 768px** — a rail on the left. Wide windows and tablets in landscape.
  *   * **< 768px** — a bottom tab bar. Thumb-reachable, which a top bar is not
@@ -45,106 +35,215 @@ import UpdateBanner from './update-banner'
  * way to test the mobile shell without a device.
  */
 
-type Tab = {
-    to: string
-    label: string
-    icon: IconType
-    /** Also highlight for these path prefixes. */
-    match?: string[]
-    /**
-     * Show the count of active downloads on this tab.
-     *
-     * Only one tab carries it, and it is the reason downloads have a tab at
-     * all: a queue nobody can see the state of from another screen is one
-     * people check by opening it, which is the thing a badge exists to save.
-     */
-    badge?: 'downloads'
-    /**
-     * Show this in the bottom tab bar as well as the rail.
-     *
-     * Default true. Turned off for the two screens that are deep work rather
-     * than navigation — a phone-width bar with nine items in it is a row of
-     * unreadable four-pixel labels, and the fix is fewer items rather than
-     * smaller text. Both are still reachable, from the Library screen.
-     */
-    compact?: boolean
+/** localStorage key for which collapsible groups the user left open. */
+const OPEN_KEY = 'tmc.nav.open'
+
+function readOpen(): Record<string, boolean> {
+    try {
+        const raw = localStorage.getItem(OPEN_KEY)
+        const parsed: unknown = raw ? JSON.parse(raw) : {}
+
+        return parsed && typeof parsed === 'object'
+            ? (parsed as Record<string, boolean>)
+            : {}
+    } catch {
+        // Private mode, a blocked store or a corrupt value: the rail still
+        // works, it just forgets.
+        return {}
+    }
 }
 
-const TABS: Tab[] = [
-    {
-        // The front door, and the app's own answer to a question the website
-        // cannot ask: what is there, and which of it can I start right now.
-        // First because a flat catalogue across every game is what this app
-        // opens on — the site has to make you choose a game before it can show
-        // you anything.
-        to: '/apps',
-        label: 'Apps',
-        icon: FiGrid,
-    },
-    {
-        // Friends, their presence and the party you are in — the same routes a
-        // Dot game's own friends panel speaks, so the two agree. Rail only: the
-        // bottom bar is already at the count where labels stop being legible.
-        to: '/friends',
-        label: 'Friends',
-        icon: FiUsers,
-        compact: false,
-    },
-    { to: '/browse/mod', label: 'Mods', icon: FiPackage, match: ['/view/mod'] },
-    { to: '/browse/asset', label: 'Assets', icon: FiBox, match: ['/view/asset'] },
-    {
-        to: '/browse/server',
-        label: 'Servers',
-        icon: FiServer,
-        match: ['/view/server', '/view/serverMap', '/browse/serverMap'],
-    },
-    {
-        to: '/browse/community',
-        label: 'Discover',
-        icon: FiCompass,
-        match: [
-            '/browse/article',
-            '/browse/collection',
-            '/browse/user',
-            '/view/article',
-            '/view/community',
-            '/view/collection',
-            '/view/user',
-        ],
-    },
-    {
-        // The device's own half of the app: what is subscribed, what is
-        // installed, and the sandboxes it is installed into. Sits before
-        // Settings because it is a place a user goes to DO something.
-        to: '/library',
-        label: 'Library',
-        icon: FiDownloadCloud,
-        match: ['/installs'],
-    },
-    {
-        // The mod manager proper. Its own tab rather than a tab inside Library
-        // because it is where somebody SPENDS time — reordering, deploying,
-        // checking what conflicted — while the library is a list they glance
-        // at.
-        to: '/sandboxes',
-        label: 'Sandboxes',
-        icon: FiLayers,
-        compact: false,
-    },
-    {
-        to: '/downloads',
-        label: 'Downloads',
-        icon: FiDownload,
-        badge: 'downloads',
-    },
-    { to: '/rcon', label: 'Console', icon: FiTerminal, compact: false },
-    { to: '/settings', label: 'Settings', icon: FiSettings },
-]
+function writeOpen(open: Record<string, boolean>) {
+    try {
+        localStorage.setItem(OPEN_KEY, JSON.stringify(open))
+    } catch {
+        // See readOpen.
+    }
+}
 
-function isActive(tab: Tab, pathname: string): boolean {
-    if (pathname === tab.to || pathname.startsWith(`${tab.to}/`)) return true
+function collapsibleIds(nodes: NavNode[]): string[] {
+    return nodes.flatMap((node) => [
+        ...(node.collapsible ? [node.id] : []),
+        ...collapsibleIds(node.items ?? []),
+    ])
+}
 
-    return (tab.match ?? []).some((prefix) => pathname.startsWith(prefix))
+const rowBase =
+    'no-drag flex min-w-0 items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors'
+const rowOn = 'bg-accent text-accent-foreground'
+// A parent of the active child: visible without competing with the child.
+const rowSoft = 'bg-accent/15 text-foreground'
+const rowOff = 'text-muted hover:bg-surface-hover hover:text-foreground'
+
+function DownloadsBadge() {
+    const downloads = useDownloads()
+
+    if (downloads.active === 0) return null
+
+    return (
+        <span className="ml-auto rounded-full bg-accent px-1.5 py-0.5 text-[0.6rem] font-medium text-accent-foreground">
+            {downloads.active}
+        </span>
+    )
+}
+
+function RailItem({
+    node,
+    pathname,
+    open,
+    toggle,
+}: {
+    node: NavNode
+    pathname: string
+    open: Record<string, boolean>
+    toggle: (id: string) => void
+}) {
+    const items = node.items ?? []
+    const own = isOwn(node, pathname)
+    const within = isWithin(node, pathname)
+    const tone = own ? rowOn : within ? rowSoft : rowOff
+    const expanded = !node.collapsible || open[node.id] === true
+    const panelId = `nav-${node.id}`
+
+    const label = (
+        <>
+            <node.icon className="size-4 shrink-0" />
+            <span className="truncate">{node.label}</span>
+            {node.badge === 'downloads' && <DownloadsBadge />}
+        </>
+    )
+
+    return (
+        <div>
+            <div className="flex items-center gap-0.5">
+                {node.virtual ? (
+                    // No screen of its own: the whole header is the toggle.
+                    <button
+                        type="button"
+                        onClick={() => toggle(node.id)}
+                        aria-expanded={expanded}
+                        aria-controls={panelId}
+                        className={`${rowBase} ${tone} flex-1 text-left`}
+                    >
+                        {label}
+                        <FiChevronRight
+                            className={`ml-auto size-3.5 shrink-0 transition-transform duration-200 ${expanded ? 'rotate-90' : ''}`}
+                        />
+                    </button>
+                ) : (
+                    <>
+                        <NavLink
+                            to={node.to}
+                            className={`${rowBase} ${tone} flex-1`}
+                        >
+                            {label}
+                        </NavLink>
+                        {node.collapsible && (
+                            <button
+                                type="button"
+                                onClick={() => toggle(node.id)}
+                                aria-expanded={expanded}
+                                aria-controls={panelId}
+                                aria-label={`${expanded ? 'Collapse' : 'Expand'} ${node.label}`}
+                                className="no-drag flex size-8 shrink-0 items-center justify-center rounded-lg text-muted transition-colors hover:bg-surface-hover hover:text-foreground"
+                            >
+                                <FiChevronRight
+                                    className={`size-3.5 transition-transform duration-200 ${expanded ? 'rotate-90' : ''}`}
+                                />
+                            </button>
+                        )}
+                    </>
+                )}
+            </div>
+
+            {items.length > 0 && (
+                /*
+                 * grid-template-rows 0fr to 1fr is the one way to animate to an
+                 * unknown height in CSS; a max-height guess clips or lags.
+                 * `inert` takes the collapsed links out of the tab order, which
+                 * overflow-hidden alone does not.
+                 */
+                <div
+                    id={panelId}
+                    inert={!expanded}
+                    className={`grid transition-[grid-template-rows,opacity] duration-200 ease-out ${expanded ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0'}`}
+                >
+                    <div className="overflow-hidden">
+                        <div className="ml-5 mt-0.5 flex flex-col gap-0.5 border-l border-border pl-2">
+                            {items.map((child) => (
+                                <RailItem
+                                    key={child.id}
+                                    node={child}
+                                    pathname={pathname}
+                                    open={open}
+                                    toggle={toggle}
+                                />
+                            ))}
+                        </div>
+                    </div>
+                </div>
+            )}
+        </div>
+    )
+}
+
+function Rail({ pathname }: { pathname: string }) {
+    const [open, setOpen] = useState<Record<string, boolean>>(readOpen)
+
+    /*
+     * Opening a group when the route lands on or inside it is stored like a click, so
+     * collapsing it afterwards sticks. Deriving "open" from the route instead
+     * would make the chevron do nothing while you are inside the group.
+     */
+    useEffect(() => {
+        const wanted = collapsibleIds(RAIL).filter((id) => {
+            const find = (nodes: NavNode[]): NavNode | undefined => {
+                for (const n of nodes) {
+                    if (n.id === id) return n
+                    const hit = find(n.items ?? [])
+                    if (hit) return hit
+                }
+            }
+            const node = find(RAIL)
+
+            return node && isActive(node, pathname)
+        })
+
+        if (wanted.every((id) => open[id])) return
+
+        // eslint-disable-next-line react-hooks/set-state-in-effect -- reacting to the route, which is external state
+        setOpen((prev) => {
+            const next = { ...prev }
+            for (const id of wanted) next[id] = true
+            writeOpen(next)
+
+            return next
+        })
+        // `open` is read only to skip a no-op write.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [pathname])
+
+    const toggle = (id: string) =>
+        setOpen((prev) => {
+            const next = { ...prev, [id]: !prev[id] }
+            writeOpen(next)
+
+            return next
+        })
+
+    return (
+        <div className="flex flex-1 flex-col gap-1 overflow-y-auto px-2">
+            {RAIL.map((node) => (
+                <RailItem
+                    key={node.id}
+                    node={node}
+                    pathname={pathname}
+                    open={open}
+                    toggle={toggle}
+                />
+            ))}
+        </div>
+    )
 }
 
 export default function Shell() {
@@ -195,28 +294,7 @@ export default function Shell() {
                             <Logo />
                         </div>
 
-                        <div className="flex flex-1 flex-col gap-1 overflow-y-auto px-2">
-                            {TABS.map((tab) => (
-                                <NavLink
-                                    key={tab.to}
-                                    to={tab.to}
-                                    className={`no-drag flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors ${
-                                        isActive(tab, pathname)
-                                            ? 'bg-accent text-accent-foreground'
-                                            : 'text-muted hover:bg-surface-hover hover:text-foreground'
-                                    }`}
-                                >
-                                    <tab.icon className="size-4 shrink-0" />
-                                    <span className="truncate">{tab.label}</span>
-                                    {tab.badge === 'downloads' &&
-                                        downloads.active > 0 && (
-                                            <span className="ml-auto rounded-full bg-accent px-1.5 py-0.5 text-[0.6rem] font-medium text-accent-foreground">
-                                                {downloads.active}
-                                            </span>
-                                        )}
-                                </NavLink>
-                            ))}
-                        </div>
+                        <Rail pathname={pathname} />
 
                         <NavLink
                             to="/account"
@@ -267,30 +345,28 @@ export default function Shell() {
                             className="flex shrink-0 items-stretch border-t border-border bg-surface"
                             style={{ paddingBottom: 'var(--safe-bottom)' }}
                         >
-                            {TABS.filter((tab) => tab.compact !== false).map(
-                                (tab) => (
-                                    <NavLink
-                                        key={tab.to}
-                                        to={tab.to}
-                                        className={`flex flex-1 flex-col items-center gap-1 py-2 text-[0.65rem] transition-colors ${
-                                            isActive(tab, pathname)
-                                                ? 'text-accent'
-                                                : 'text-muted'
-                                        }`}
-                                    >
-                                        <span className="relative">
-                                            <tab.icon className="size-5" />
-                                            {tab.badge === 'downloads' &&
-                                                downloads.active > 0 && (
-                                                    <span className="absolute -right-2 -top-1 min-w-3.5 rounded-full bg-accent px-1 text-[0.55rem] font-medium leading-tight text-accent-foreground">
-                                                        {downloads.active}
-                                                    </span>
-                                                )}
-                                        </span>
-                                        {tab.label}
-                                    </NavLink>
-                                )
-                            )}
+                            {COMPACT.map((tab) => (
+                                <NavLink
+                                    key={tab.to}
+                                    to={tab.to}
+                                    className={`flex flex-1 flex-col items-center gap-1 py-2 text-[0.65rem] transition-colors ${
+                                        isActive(tab, pathname)
+                                            ? 'text-accent'
+                                            : 'text-muted'
+                                    }`}
+                                >
+                                    <span className="relative">
+                                        <tab.icon className="size-5" />
+                                        {tab.id === 'library' &&
+                                            downloads.active > 0 && (
+                                                <span className="absolute -right-2 -top-1 min-w-3.5 rounded-full bg-accent px-1 text-[0.55rem] font-medium leading-tight text-accent-foreground">
+                                                    {downloads.active}
+                                                </span>
+                                            )}
+                                    </span>
+                                    {tab.label}
+                                </NavLink>
+                            ))}
                         </nav>
                     )}
                 </main>

@@ -11,6 +11,10 @@ import { LibraryProvider } from '~/lib/library/provider'
 import { DownloadsProvider } from '~/lib/downloads/provider'
 import Shell from '~/components/shell'
 import DropImport from '~/components/drop-import'
+import PlayRoute from '~/routes/play'
+import DiscoverRoute from '~/routes/discover'
+import StoresRoute from '~/routes/stores'
+import ConsoleRoute from '~/routes/console'
 import AppsRoute from '~/routes/apps'
 import GameRoute from '~/routes/game'
 import FriendsRoute from '~/routes/friends'
@@ -44,6 +48,8 @@ const router = createHashRouter([
         element: <Shell />,
         children: [
             { index: true, element: <Navigate to="/apps" replace /> },
+            { path: 'play', element: <PlayRoute /> },
+            { path: 'discover', element: <DiscoverRoute /> },
             { path: 'apps', element: <AppsRoute /> },
             { path: 'apps/:id', element: <GameRoute /> },
             { path: 'friends', element: <FriendsRoute /> },
@@ -55,6 +61,8 @@ const router = createHashRouter([
             { path: 'sandboxes', element: <SandboxesRoute /> },
             { path: 'sandboxes/:id', element: <SandboxesRoute /> },
             { path: 'downloads', element: <DownloadsRoute /> },
+            { path: 'stores', element: <StoresRoute /> },
+            { path: 'console', element: <ConsoleRoute /> },
             { path: 'rcon', element: <RconRoute /> },
             { path: 'rcon/:id', element: <RconRoute /> },
             { path: 'account', element: <AccountRoute /> },

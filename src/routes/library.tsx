@@ -1,14 +1,21 @@
 import { Link, useSearchParams } from 'react-router-dom'
-import { FiDownload, FiLayers, FiPackage, FiZap } from 'react-icons/fi'
+import { FiLayers, FiPackage, FiZap } from 'react-icons/fi'
 
 import { useAuth } from '~/lib/auth/provider'
 import { useLibrary } from '~/lib/library/provider'
 import LibraryGames from '~/components/library-games'
 import LibraryContent from '~/components/library-content'
 import LibraryTmcGames from '~/components/library-tmc'
+import SectionCards from '~/components/section-cards'
+import { LIBRARY, type NavNode } from '~/lib/nav'
 
 /**
- * **Library** — this device's half of the app.
+ * **Library** — this device's half of the app, and the landing page for the
+ * Library group in the rail.
+ *
+ * The cards on top link to every child of the group (the bottom bar cannot
+ * nest, so on a phone this is the only way in); the views below are what the
+ * screen showed before it became a landing page.
  *
  * Three views, because the screen was answering the wrong question. It used to
  * be a list of subscriptions, which tells somebody what they subscribed to; the
@@ -26,6 +33,18 @@ import LibraryTmcGames from '~/components/library-tmc'
  *     app owns these folders outright and keeps them current.
  *   * **Subscribed** — what the ACCOUNT subscribed to, mirrored down.
  */
+
+/*
+ * Installs is not in the rail: it is a list, not a place to work, so it is
+ * reached from here rather than given a row beside Sandboxes.
+ */
+const INSTALLS: NavNode = {
+    id: 'installs',
+    to: '/installs',
+    label: 'Installs',
+    icon: FiPackage,
+    description: 'Mods and assets installed on this device.',
+}
 
 type View = 'games' | 'content' | 'tmc'
 
@@ -61,6 +80,7 @@ export default function LibraryRoute() {
     if (status !== 'signedIn' && view === 'content')
         return (
             <div className="flex flex-col gap-3 p-3">
+                <Landing />
                 <Header view={view} onChange={setView} count={0} />
 
                 <div className="rounded-xl border border-border p-6 text-center">
@@ -79,12 +99,29 @@ export default function LibraryRoute() {
 
     return (
         <div className="flex flex-col gap-3 p-3">
+            <Landing />
             <Header view={view} onChange={setView} count={rows.length} />
 
             {view === 'games' && <LibraryGames />}
             {view === 'tmc' && <LibraryTmcGames />}
             {view === 'content' && <LibraryContent />}
         </div>
+    )
+}
+
+function Landing() {
+    return (
+        <>
+            <header>
+                <h1 className="text-lg font-bold">Library</h1>
+                <p className="text-xs text-muted">
+                    Everything on this device: sandboxes, downloads, stores and
+                    what is installed.
+                </p>
+            </header>
+
+            <SectionCards node={LIBRARY} extra={[INSTALLS]} />
+        </>
     )
 }
 
@@ -120,14 +157,6 @@ function Header({
                     badge={count || undefined}
                 />
             </div>
-
-            <Link
-                to="/downloads"
-                className="flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1.5 text-xs hover:border-accent"
-            >
-                <FiDownload className="size-3" />
-                Downloads
-            </Link>
         </div>
     )
 }

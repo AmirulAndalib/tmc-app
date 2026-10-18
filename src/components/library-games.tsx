@@ -486,7 +486,7 @@ export default function LibraryGames() {
                     className="flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs"
                 >
                     <FiTerminal className="size-3.5" />
-                    Console
+                    RCON
                 </Link>
             </div>
 

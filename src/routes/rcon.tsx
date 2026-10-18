@@ -89,7 +89,7 @@ export default function RconRoute() {
         <div className="flex flex-col gap-4 p-4">
             <header className="flex flex-wrap items-center justify-between gap-3">
                 <div>
-                    <h1 className="text-lg font-bold">Server console</h1>
+                    <h1 className="text-lg font-bold">RCON</h1>
                     <p className="text-xs text-muted">
                         Run commands on servers you administer. Passwords are
                         encrypted on this device and never sent to The Modding

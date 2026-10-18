@@ -7,6 +7,8 @@ One layout, keyed on the **window**, not the OS:
 - **≥ 768px** — sidebar rail
 - **< 768px** — bottom tab bar
 
+The navigation is one tree in `src/lib/nav.ts`: **Play**, **Discover** (Apps, Mods, Assets, Servers with RCON under it, and a nested **More** holding communities, articles, collections and users), **Library** (Sandboxes, Downloads, Stores), then **Friends**, **Console** and **Settings**. Discover and Library are groups: the header links to a landing page (`/discover`, `/library`) and a chevron folds the children, remembered in localStorage (`tmc.nav.open`) and opened automatically when the route is inside. The bottom bar cannot nest, so it shows Play, Discover, Library, Friends and Settings, and the landing pages build a card for every child from the same tree, which is how a phone reaches them. RCON is the server tool; **Console** is the TMC command-line tool.
+
 A desktop window dragged narrow gets the phone layout, which is both correct and the only way to test the mobile shell without a device.
 
 - Safe-area insets come from `env(safe-area-inset-*)`, wired through `--safe-top` /`--safe-bottom` in `app.css`. Use them on anything fixed to an edge.
