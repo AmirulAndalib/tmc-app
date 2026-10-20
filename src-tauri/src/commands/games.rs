@@ -206,22 +206,30 @@ pub async fn game_launch(
     state: State<'_, AppState>,
     request: GameLaunchRequest,
 ) -> AppResult<Session> {
-    let Some(row) = state.games.get(request.app_id)? else {
-        return Err(AppError::invalid("That game is not installed."));
+    let (row, game) = match state.games.get(request.app_id)? {
+        Some(row) => (row, None),
+        None => match engine_install(&state, request.app_id).await? {
+            Some((row, game)) => (row, Some(game)),
+            None => return Err(AppError::invalid("That game is not installed.")),
+        },
     };
 
     /*
      * A second copy would open files the first has mapped, and the play clock
      * for one game would be able to exceed wall-clock time. The same refusal a
-     * sandbox launch carries, for the same two reasons.
+     * sandbox launch carries, for the same two reasons. Keyed on the INSTALL's
+     * app, so a game started through its engine's build counts as that build
+     * running: the update and uninstall refusals ask by the same id.
      */
-    if state.sessions.running_for_app(request.app_id) {
+    if state.sessions.running_for_app(row.app_id) {
         return Err(AppError::invalid("That game is already running."));
     }
 
     let mut ctx = LaunchContext {
         app_id: request.app_id,
-        app_slug: row.slug.clone(),
+        app_slug: game
+            .as_ref()
+            .map_or_else(|| row.slug.clone(), |g| g.slug.clone().or(row.slug.clone())),
         locale: request.locale.clone(),
         ..Default::default()
     };
@@ -296,9 +304,11 @@ pub async fn game_launch(
         &state,
         &plan,
         SessionSpec {
-            app_id: Some(request.app_id),
+            app_id: Some(row.app_id),
             app_slug: row.slug.clone(),
-            label: row.name.clone(),
+            label: game
+                .and_then(|g| g.name)
+                .unwrap_or_else(|| row.name.clone()),
             sandbox_id: None,
             // A TMC game is not a subscription, so there is no install row on
             // the account to report its play time against. It is still measured
@@ -308,6 +318,79 @@ pub async fn game_launch(
     )?;
 
     Ok(session)
+}
+
+/// The game a launch named, when it runs on its engine's build.
+#[derive(Debug, PartialEq)]
+struct EngineGame {
+    engine_id: i64,
+    slug: Option<String>,
+    name: Option<String>,
+}
+
+/// Which engine app `app_id` runs on, read from a `/apps?ids=` answer.
+///
+/// `None` when the answer is not about that app (an id the catalogue does not
+/// list returns some other row or none), when it names no engine, or when it
+/// names itself, which is an engine's own row rather than a game on one.
+fn engine_of(answer: &serde_json::Value, app_id: i64) -> Option<EngineGame> {
+    let app = answer
+        .get("apps")
+        .and_then(serde_json::Value::as_array)?
+        .iter()
+        .find(|a| a.get("id").and_then(serde_json::Value::as_i64) == Some(app_id))?;
+
+    let engine_id = app
+        .get("engine")
+        .and_then(|e| e.get("id"))
+        .and_then(serde_json::Value::as_i64)
+        .filter(|id| *id != app_id)?;
+
+    Some(EngineGame {
+        engine_id,
+        slug: app
+            .get("slug")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_ascii_lowercase),
+        name: app
+            .get("name")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned),
+    })
+}
+
+/// The installed build of `app_id`'s ENGINE, for a game that has none of its own.
+///
+/// A TMC game is a pack the shell downloads, and the shell is published once,
+/// under the engine app (dot-server-deploy's `export-native`), because a server
+/// can change which game it runs while its players stay connected. So Arena has
+/// no build and Godot does, and pressing Play on Arena means starting Godot's
+/// build with Arena's pack (`boot.solo`) or Arena's server. The engine is read
+/// from the catalogue here rather than named by the caller, so the webview still
+/// names one app id and Rust decides what runs. `None` when the catalogue is
+/// unreachable, names no engine, or the engine's build is not installed either.
+async fn engine_install(
+    state: &AppState,
+    app_id: i64,
+) -> AppResult<Option<(InstalledGame, EngineGame)>> {
+    let Ok(answer) = state
+        .api
+        .request(
+            tmc_core::api::Method::GET,
+            &format!("/apps?ids={app_id}&limit=1"),
+            None,
+            false,
+        )
+        .await
+    else {
+        return Ok(None);
+    };
+
+    let Some(game) = engine_of(&answer, app_id) else {
+        return Ok(None);
+    };
+
+    Ok(state.games.get(game.engine_id)?.map(|row| (row, game)))
 }
 
 /// The address of one server, read here rather than accepted from the caller.
@@ -449,4 +532,44 @@ pub fn games_cache_clear(state: State<'_, AppState>) -> AppResult<u64> {
     );
 
     Ok(freed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_game_runs_on_the_engine_the_catalogue_names() {
+        let answer = serde_json::json!({ "apps": [{
+            "id": 114, "slug": "Arena", "name": "Arena",
+            "engine": { "id": 84, "name": "Godot", "url": "godot" },
+        }]});
+
+        assert_eq!(
+            engine_of(&answer, 114),
+            Some(EngineGame {
+                engine_id: 84,
+                slug: Some("arena".into()),
+                name: Some("Arena".into()),
+            })
+        );
+    }
+
+    #[test]
+    fn no_engine_another_app_or_the_engine_itself_is_no_fallback() {
+        let engine = serde_json::json!({ "apps": [{
+            "id": 84, "slug": "godot", "name": "Godot", "engine": null,
+        }]});
+        let selfish = serde_json::json!({ "apps": [{
+            "id": 84, "slug": "godot", "engine": { "id": 84 },
+        }]});
+        let other = serde_json::json!({ "apps": [{
+            "id": 7, "slug": "rust", "engine": { "id": 86 },
+        }]});
+
+        assert_eq!(engine_of(&engine, 84), None);
+        assert_eq!(engine_of(&selfish, 84), None);
+        assert_eq!(engine_of(&other, 114), None);
+        assert_eq!(engine_of(&serde_json::json!({}), 114), None);
+    }
 }

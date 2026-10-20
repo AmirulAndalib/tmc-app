@@ -331,7 +331,21 @@ export default function PlayDialog({
         void ipc
             .gamesList()
             .then((rows) => {
-                if (live) setNative(rows.find((r) => r.appId === app.id) ?? null)
+                if (!live) return
+                /*
+                 * A game's own build first, then its ENGINE's: TMC publishes
+                 * the shell once, under the engine app, and the shell runs each
+                 * game's pack (dot-server-deploy's `export-native`). Rust
+                 * resolves the same fallback from the catalogue at launch.
+                 */
+                const engineId = app.engine?.id
+                setNative(
+                    rows.find((r) => r.appId === app.id) ??
+                        (engineId == null
+                            ? undefined
+                            : rows.find((r) => r.appId === engineId)) ??
+                        null
+                )
             })
             .catch(() => {
                 if (live) setNative(null)
@@ -340,7 +354,7 @@ export default function PlayDialog({
         return () => {
             live = false
         }
-    }, [app.id])
+    }, [app.id, app.engine?.id])
 
     useEffect(() => {
         let live = true
@@ -747,21 +761,23 @@ export default function PlayDialog({
                                 />
                             )}
 
-                            {!canNative && !desktopClosed && app.install && (
-                                <p className="flex items-start gap-2 px-1 text-[11px] text-muted">
-                                    <FiCpu className="mt-0.5 size-3 shrink-0" />
-                                    <span>
-                                        TMC publishes a build of this game.{' '}
-                                        <Link
-                                            to="/library?view=tmc"
-                                            className="underline"
-                                        >
-                                            Install it
-                                        </Link>{' '}
-                                        to play it without a browser.
-                                    </span>
-                                </p>
-                            )}
+                            {!canNative &&
+                                !desktopClosed &&
+                                (app.install || (app.engine && app.play)) && (
+                                    <p className="flex items-start gap-2 px-1 text-[11px] text-muted">
+                                        <FiCpu className="mt-0.5 size-3 shrink-0" />
+                                        <span>
+                                            TMC publishes a build of this game.{' '}
+                                            <Link
+                                                to="/library?view=tmc"
+                                                className="underline"
+                                            >
+                                                Install it
+                                            </Link>{' '}
+                                            to play it without a browser.
+                                        </span>
+                                    </p>
+                                )}
 
                             {!canSandbox && (
                                 <p className="flex items-start gap-2 px-1 text-[11px] text-muted">
