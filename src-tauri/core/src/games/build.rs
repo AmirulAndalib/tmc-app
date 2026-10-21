@@ -376,6 +376,53 @@ impl SoloPack {
     }
 }
 
+/// Where a serverless launch fetches its packs: `<boot.game.origin>/content`.
+///
+/// A join is told where packs live by the server it joins, and the web player
+/// uses its page's own `/content`, so a native shell started for solo play has
+/// neither and fails at its first `latest.json` with a relative URL. The game's
+/// origin from the site's own boot descriptor is the page the web player would
+/// run on, and its `/content` is the same place that player fetches from. Only an
+/// `https` origin with nothing after the host is taken: it is about to be a
+/// process argument, and the shell still verifies every manifest against the key
+/// in its export, so the worst a wrong one does is fail to find the game.
+pub fn content_url_from_boot(boot: &serde_json::Value) -> Option<String> {
+    let raw = boot.get("game")?.get("origin")?.as_str()?.trim();
+    let url = url::Url::parse(raw).ok()?;
+
+    if url.scheme() != "https"
+        || url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || !matches!(url.path(), "" | "/")
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return None;
+    }
+
+    Some(format!("{}/content", url.origin().ascii_serialization()))
+}
+
+/// `--content-url <base>` for a TMC game shell started for solo play. Empty for
+/// a template without the bare `--`, for no base, or when the template already
+/// names one (the publisher's choice wins).
+pub fn content_url_args(args: &[String], base: Option<&str>) -> Vec<String> {
+    let Some(base) = base else {
+        return Vec::new();
+    };
+
+    if !args.iter().any(|a| is_separator(a))
+        || args
+            .iter()
+            .any(|a| a == "--content-url" || a.starts_with("--content-url="))
+    {
+        return Vec::new();
+    }
+
+    vec!["--content-url".into(), base.into()]
+}
+
 /// `--solo <owner>/<repo>` (and `--solo-version <v>`) for a TMC game shell
 /// started with no server. Empty for a template without the bare `--`, like
 /// [`cache_args`]: only a TMC shell reads its game arguments after it.
@@ -744,6 +791,48 @@ mod tests {
         let mut own = shell.clone();
         own.push("--browser-backbone-url=https://x.example".into());
         assert!(browser_site_args(&own, site, false).is_empty());
+    }
+
+    #[test]
+    fn a_solo_launch_fetches_from_the_games_own_origin() {
+        let boot = |origin: &str| serde_json::json!({ "game": { "origin": origin } });
+
+        assert_eq!(
+            content_url_from_boot(&boot("https://dotgames.org")),
+            Some("https://dotgames.org/content".to_string())
+        );
+        assert_eq!(
+            content_url_from_boot(&boot("https://dotgames.org/")),
+            Some("https://dotgames.org/content".to_string())
+        );
+
+        for bad in [
+            "http://dotgames.org",
+            "https://dotgames.org/godot",
+            "https://dotgames.org?x=1",
+            "https://user@dotgames.org",
+            "file:///etc",
+            "-x",
+            "",
+        ] {
+            assert_eq!(content_url_from_boot(&boot(bad)), None, "{bad}");
+        }
+
+        assert_eq!(content_url_from_boot(&serde_json::json!({})), None);
+
+        let shell: Vec<String> = vec!["--".into()];
+        let base = Some("https://dotgames.org/content");
+        assert_eq!(
+            content_url_args(&shell, base),
+            vec![
+                "--content-url".to_string(),
+                "https://dotgames.org/content".into()
+            ]
+        );
+        assert!(content_url_args(&shell, None).is_empty());
+        assert!(content_url_args(&["-x".to_string()], base).is_empty());
+        let named: Vec<String> = vec!["--".into(), "--content-url=https://a.example/c".into()];
+        assert!(content_url_args(&named, base).is_empty());
     }
 
     #[test]

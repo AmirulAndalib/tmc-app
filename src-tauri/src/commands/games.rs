@@ -286,9 +286,20 @@ pub async fn game_launch(
             tmc_core::games::build::SoloPack::new(id, request.solo_version.as_deref())
         });
 
-        let resolved = resolve_solo(&state, request.app_id, request.locale.as_deref()).await;
+        let boot = launch_boot(&state, request.app_id, request.locale.as_deref()).await;
+        let resolved = boot
+            .as_ref()
+            .and_then(tmc_core::games::build::SoloPack::from_boot);
 
         if let Some(solo) = resolved.or(linked) {
+            // Where the pack comes from: a solo shell has no server to tell it.
+            let base = boot
+                .as_ref()
+                .and_then(tmc_core::games::build::content_url_from_boot);
+            plan.args.extend(tmc_core::games::build::content_url_args(
+                &plan.args,
+                base.as_deref(),
+            ));
             plan.args
                 .extend(tmc_core::games::build::solo_args(&plan.args, Some(&solo)));
         }
@@ -444,12 +455,13 @@ async fn resolve_server(
     Ok((host, port, udp_port))
 }
 
-/// `boot.solo` for a serverless launch of this app, from `/play/launch`.
-async fn resolve_solo(
+/// The boot descriptor for a serverless launch of this app, from `/play/launch`:
+/// `boot.solo` names the pack and `boot.game.origin` where it is served.
+async fn launch_boot(
     state: &AppState,
     app_id: i64,
     locale: Option<&str>,
-) -> Option<tmc_core::games::build::SoloPack> {
+) -> Option<serde_json::Value> {
     let payload = serde_json::json!({
         "appId": app_id,
         "mode": "web",
@@ -467,7 +479,7 @@ async fn resolve_solo(
         .await
         .ok()?;
 
-    tmc_core::games::build::SoloPack::from_boot(answer.get("boot")?)
+    answer.get("boot").cloned()
 }
 
 /// The one folder TMC games keep downloaded content in. Fixed, and inside the
