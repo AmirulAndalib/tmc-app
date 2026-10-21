@@ -282,6 +282,8 @@ export default function PlayDialog({
     const [native, setNative] = useState<InstalledGameT | null | undefined>(
         undefined
     )
+    /** A TMC pack game whose engine's build this machine could install. */
+    const [engineInstallable, setEngineInstallable] = useState(false)
     const [fullscreen, setFullscreen] = useState(false)
     /*
      * The ACCOUNT's language, for a build whose launch arguments name
@@ -329,32 +331,31 @@ export default function PlayDialog({
         let live = true
 
         void ipc
-            .gamesList()
-            .then((rows) => {
+            .gameNativeTarget(app.id, locale)
+            .then((target) => {
                 if (!live) return
                 /*
-                 * A game's own build first, then its ENGINE's: TMC publishes
-                 * the shell once, under the engine app, and the shell runs each
-                 * game's pack (dot-server-deploy's `export-native`). Rust
-                 * resolves the same fallback from the catalogue at launch.
+                 * A game's own build, or its ENGINE's for a TMC pack game:
+                 * TMC publishes the shell once, under the engine app, and the
+                 * shell runs each game's pack (dot-server-deploy's
+                 * `export-native`). Rust decides which, by the same gate
+                 * `game_launch` uses, so a third-party game made with the
+                 * same engine is never offered the TMC shell.
                  */
-                const engineId = app.engine?.id
-                setNative(
-                    rows.find((r) => r.appId === app.id) ??
-                        (engineId == null
-                            ? undefined
-                            : rows.find((r) => r.appId === engineId)) ??
-                        null
-                )
+                setNative(target.installed)
+                setEngineInstallable(target.engineInstallable)
             })
             .catch(() => {
-                if (live) setNative(null)
+                if (live) {
+                    setNative(null)
+                    setEngineInstallable(false)
+                }
             })
 
         return () => {
             live = false
         }
-    }, [app.id, app.engine?.id])
+    }, [app.id, locale])
 
     useEffect(() => {
         let live = true
@@ -763,7 +764,7 @@ export default function PlayDialog({
 
                             {!canNative &&
                                 !desktopClosed &&
-                                (app.install || (app.engine && app.play)) && (
+                                (app.install || engineInstallable) && (
                                     <p className="flex items-start gap-2 px-1 text-[11px] text-muted">
                                         <FiCpu className="mt-0.5 size-3 shrink-0" />
                                         <span>

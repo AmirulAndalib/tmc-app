@@ -206,12 +206,20 @@ pub async fn game_launch(
     state: State<'_, AppState>,
     request: GameLaunchRequest,
 ) -> AppResult<Session> {
-    let (row, game) = match state.games.get(request.app_id)? {
-        Some(row) => (row, None),
-        None => match engine_install(&state, request.app_id).await? {
-            Some((row, game)) => (row, Some(game)),
-            None => return Err(AppError::invalid("That game is not installed.")),
-        },
+    let target = native_target(
+        &*state.api,
+        |id| state.games.get(id),
+        request.app_id,
+        request.locale.as_deref(),
+    )
+    .await?;
+
+    let (row, game) = match target {
+        NativeTarget::Own(row) => (row, None),
+        NativeTarget::Engine { row, game } => (row, Some(game)),
+        NativeTarget::EngineMissing { .. } | NativeTarget::Nothing => {
+            return Err(AppError::invalid("That game is not installed."))
+        }
     };
 
     /*
@@ -315,8 +323,11 @@ pub async fn game_launch(
         &state,
         &plan,
         SessionSpec {
+            // The INSTALL's id, for the same reason as the refusal above; the
+            // slug and label are the game's, so its play time and history
+            // rows read as the game rather than as the engine it ran on.
             app_id: Some(row.app_id),
-            app_slug: row.slug.clone(),
+            app_slug: ctx.app_slug.clone(),
             label: game
                 .and_then(|g| g.name)
                 .unwrap_or_else(|| row.name.clone()),
@@ -370,38 +381,187 @@ fn engine_of(answer: &serde_json::Value, app_id: i64) -> Option<EngineGame> {
     })
 }
 
-/// The installed build of `app_id`'s ENGINE, for a game that has none of its own.
-///
-/// A TMC game is a pack the shell downloads, and the shell is published once,
-/// under the engine app (dot-server-deploy's `export-native`), because a server
-/// can change which game it runs while its players stay connected. So Arena has
-/// no build and Godot does, and pressing Play on Arena means starting Godot's
-/// build with Arena's pack (`boot.solo`) or Arena's server. The engine is read
-/// from the catalogue here rather than named by the caller, so the webview still
-/// names one app id and Rust decides what runs. `None` when the catalogue is
-/// unreachable, names no engine, or the engine's build is not installed either.
-async fn engine_install(
-    state: &AppState,
-    app_id: i64,
-) -> AppResult<Option<(InstalledGame, EngineGame)>> {
-    let Ok(answer) = state
-        .api
-        .request(
+/// What pressing Play on one app would start on this machine.
+#[derive(Debug)]
+enum NativeTarget {
+    /// The app's own installed build.
+    Own(InstalledGame),
+    /// A TMC pack game, on its engine's installed build.
+    Engine {
+        row: InstalledGame,
+        game: EngineGame,
+    },
+    /// A TMC pack game whose engine's build is not installed.
+    EngineMissing { engine_id: i64 },
+    /// Nothing here runs it.
+    Nothing,
+}
+
+/// The two catalogue questions [`native_target`] asks, so its tests can answer
+/// them without a site.
+trait Catalogue {
+    /// `GET /apps?ids=`: which engine the app names.
+    async fn app(&self, app_id: i64) -> AppResult<serde_json::Value>;
+    /// `POST /play/launch` for a serverless web launch, asked anonymously.
+    async fn solo_boot(&self, app_id: i64, locale: Option<&str>) -> AppResult<serde_json::Value>;
+}
+
+impl Catalogue for tmc_core::api::ApiClient {
+    async fn app(&self, app_id: i64) -> AppResult<serde_json::Value> {
+        self.request(
             tmc_core::api::Method::GET,
             &format!("/apps?ids={app_id}&limit=1"),
             None,
             false,
         )
         .await
-    else {
-        return Ok(None);
-    };
+    }
+
+    /*
+     * Anonymous on purpose. The route counts a signed-in launch as a play and
+     * may mint a handoff, and this is asked when the Play dialog opens, before
+     * anybody has pressed anything. Nothing it decides about a pack depends on
+     * who is asking (`ResolveLaunchSolo` reads the app's pack and nothing else).
+     */
+    async fn solo_boot(&self, app_id: i64, locale: Option<&str>) -> AppResult<serde_json::Value> {
+        self.anonymous_post(
+            "/play/launch",
+            serde_json::json!({
+                "appId": app_id,
+                "mode": "web",
+                "locale": locale.unwrap_or("en"),
+            }),
+        )
+        .await
+    }
+}
+
+const CATALOGUE_UNREACHABLE: &str =
+    "Couldn't reach the catalogue to find this game's TMC build. Check your connection.";
+
+/// Which installed build runs `app_id`: its own, or its engine's.
+///
+/// A TMC game is a pack the shell downloads, and the shell is published once,
+/// under the engine app (dot-server-deploy's `export-native`), because a server
+/// can change which game it runs while its players stay connected. So Arena has
+/// no build and Godot does, and pressing Play on Arena means starting Godot's
+/// build with Arena's pack (`boot.solo`) or Arena's server.
+///
+/// **Only a TMC pack game falls back.** A third-party game made with the same
+/// engine names the same engine, and starting the TMC shell for it would put the
+/// player at the shell's menu, or connect the shell to a server it cannot play.
+/// The site is what knows: it names a signed pack in `boot.solo` only for an app
+/// with one, so the fallback asks `/play/launch` and needs `boot.solo` back. The
+/// catalogue row has no such flag. The engine is read from the catalogue, never
+/// named by the caller, so the webview names one app id and Rust decides what
+/// runs.
+///
+/// An unreachable catalogue is an error rather than `Nothing`: "not installed"
+/// would send somebody who has the build to install it again.
+async fn native_target(
+    site: &impl Catalogue,
+    installed: impl Fn(i64) -> AppResult<Option<InstalledGame>>,
+    app_id: i64,
+    locale: Option<&str>,
+) -> AppResult<NativeTarget> {
+    if let Some(row) = installed(app_id)? {
+        return Ok(NativeTarget::Own(row));
+    }
+
+    let answer = site.app(app_id).await.map_err(catalogue_unreachable)?;
 
     let Some(game) = engine_of(&answer, app_id) else {
-        return Ok(None);
+        return Ok(NativeTarget::Nothing);
     };
 
-    Ok(state.games.get(game.engine_id)?.map(|row| (row, game)))
+    let boot = match site.solo_boot(app_id, locale).await {
+        Ok(answer) => answer.get("boot").cloned(),
+        Err(e @ (AppError::Network(_) | AppError::Internal(_))) => {
+            return Err(catalogue_unreachable(e))
+        }
+        // Refused (play off, a hidden app): not a launch this can make.
+        Err(_) => None,
+    };
+
+    if boot
+        .as_ref()
+        .and_then(tmc_core::games::build::SoloPack::from_boot)
+        .is_none()
+    {
+        return Ok(NativeTarget::Nothing);
+    }
+
+    Ok(match installed(game.engine_id)? {
+        Some(row) => NativeTarget::Engine { row, game },
+        None => NativeTarget::EngineMissing {
+            engine_id: game.engine_id,
+        },
+    })
+}
+
+fn catalogue_unreachable(e: AppError) -> AppError {
+    tracing::debug!("catalogue lookup for a native build failed: {e}");
+    AppError::Network(CATALOGUE_UNREACHABLE.into())
+}
+
+/// What the Play dialog offers natively for one app.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeTargetView {
+    /// The build Play would start: the app's own, or its engine's.
+    pub installed: Option<InstalledGame>,
+    /// Set when the app is a TMC pack game played on this engine's build.
+    pub engine_id: Option<i64>,
+    /// The engine's build is not installed, and the site has one for this
+    /// machine to install.
+    pub engine_installable: bool,
+}
+
+/// The Play dialog's native card and its "Install it" hint, from the same gate
+/// [`game_launch`] uses, so the dialog never offers a launch Rust then refuses.
+#[tauri::command]
+pub async fn game_native_target(
+    state: State<'_, AppState>,
+    app_id: i64,
+    locale: Option<String>,
+) -> AppResult<NativeTargetView> {
+    let target = native_target(
+        &*state.api,
+        |id| state.games.get(id),
+        app_id,
+        locale.as_deref(),
+    )
+    .await?;
+
+    Ok(match target {
+        NativeTarget::Own(row) => NativeTargetView {
+            installed: Some(row),
+            engine_id: None,
+            engine_installable: false,
+        },
+        NativeTarget::Engine { row, game } => NativeTargetView {
+            installed: Some(row),
+            engine_id: Some(game.engine_id),
+            engine_installable: false,
+        },
+        NativeTarget::EngineMissing { engine_id } => NativeTargetView {
+            installed: None,
+            engine_id: Some(engine_id),
+            // Best effort: no hint is the answer when the site cannot say.
+            engine_installable: state
+                .games
+                .resolve(engine_id)
+                .await
+                .ok()
+                .flatten()
+                .is_some(),
+        },
+        NativeTarget::Nothing => NativeTargetView {
+            installed: None,
+            engine_id: None,
+            engine_installable: false,
+        },
+    })
 }
 
 /// The address of one server, read here rather than accepted from the caller.
@@ -583,5 +743,161 @@ mod tests {
         assert_eq!(engine_of(&selfish, 84), None);
         assert_eq!(engine_of(&other, 114), None);
         assert_eq!(engine_of(&serde_json::json!({}), 114), None);
+    }
+
+    /// A site that answers the two questions from fixed values.
+    struct FakeSite {
+        app: AppResult<serde_json::Value>,
+        boot: AppResult<serde_json::Value>,
+        asked_boot: std::cell::Cell<bool>,
+    }
+
+    fn copy(r: &AppResult<serde_json::Value>) -> AppResult<serde_json::Value> {
+        match r {
+            Ok(v) => Ok(v.clone()),
+            Err(AppError::Network(m)) => Err(AppError::Network(m.clone())),
+            Err(AppError::Api(m)) => Err(AppError::Api(m.clone())),
+            Err(e) => Err(AppError::internal(e.to_string())),
+        }
+    }
+
+    impl Catalogue for FakeSite {
+        async fn app(&self, _: i64) -> AppResult<serde_json::Value> {
+            copy(&self.app)
+        }
+
+        async fn solo_boot(&self, _: i64, _: Option<&str>) -> AppResult<serde_json::Value> {
+            self.asked_boot.set(true);
+            copy(&self.boot)
+        }
+    }
+
+    fn arena_on_godot() -> serde_json::Value {
+        serde_json::json!({ "apps": [{
+            "id": 114, "slug": "arena", "name": "Arena", "engine": { "id": 84 },
+        }]})
+    }
+
+    fn with_pack() -> serde_json::Value {
+        serde_json::json!({ "boot": {
+            "solo": { "contentId": "gamemann/game-arena", "version": "0.1.16" },
+            "game": { "origin": "https://dotgames.org" },
+        }})
+    }
+
+    fn site(app: AppResult<serde_json::Value>, boot: AppResult<serde_json::Value>) -> FakeSite {
+        FakeSite {
+            app,
+            boot,
+            asked_boot: std::cell::Cell::new(false),
+        }
+    }
+
+    fn row(app_id: i64) -> InstalledGame {
+        InstalledGame {
+            app_id,
+            slug: Some("godot".into()),
+            name: "Godot".into(),
+            platform: "LINUX_X64".into(),
+            version: "1.0".into(),
+            dir: "/games/godot".into(),
+            entry: None,
+            args: vec!["--".into()],
+            size_bytes: 0,
+            installed_ms: 0,
+            updated_ms: 0,
+            auto_update: false,
+        }
+    }
+
+    /// Rows installed on this "machine".
+    fn only(ids: &'static [i64]) -> impl Fn(i64) -> AppResult<Option<InstalledGame>> {
+        move |id| Ok(ids.contains(&id).then(|| row(id)))
+    }
+
+    #[tokio::test]
+    async fn a_pack_game_runs_on_its_installed_engine() {
+        let s = site(Ok(arena_on_godot()), Ok(with_pack()));
+
+        match native_target(&s, only(&[84]), 114, None).await {
+            Ok(NativeTarget::Engine { row, game }) => {
+                assert_eq!(row.app_id, 84);
+                assert_eq!(game.slug.as_deref(), Some("arena"));
+                assert_eq!(game.name.as_deref(), Some("Arena"));
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_game_with_its_own_build_never_asks_the_site() {
+        let s = site(
+            Err(AppError::Network("down".into())),
+            Err(AppError::Network("down".into())),
+        );
+
+        match native_target(&s, only(&[114, 84]), 114, None).await {
+            Ok(NativeTarget::Own(row)) => assert_eq!(row.app_id, 114),
+            other => panic!("{other:?}"),
+        }
+        assert!(!s.asked_boot.get());
+    }
+
+    #[tokio::test]
+    async fn a_pack_game_without_its_engine_installed_says_so() {
+        let s = site(Ok(arena_on_godot()), Ok(with_pack()));
+
+        match native_target(&s, only(&[]), 114, None).await {
+            Ok(NativeTarget::EngineMissing { engine_id }) => assert_eq!(engine_id, 84),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn another_game_on_the_same_engine_does_not_fall_back() {
+        // A third-party game made with the engine: the site boots it with no
+        // pack, refuses it, or has nothing for it.
+        for boot in [
+            Ok(serde_json::json!({ "boot": { "game": { "origin": "https://dotgames.org" } } })),
+            Ok(serde_json::json!({ "boot": { "solo": null } })),
+            Ok(serde_json::Value::Null),
+            Err(AppError::Api("refused".into())),
+        ] {
+            let s = site(Ok(arena_on_godot()), boot);
+
+            match native_target(&s, only(&[84]), 114, None).await {
+                Ok(NativeTarget::Nothing) => {}
+                other => panic!("{other:?}"),
+            }
+            assert!(s.asked_boot.get());
+        }
+    }
+
+    #[tokio::test]
+    async fn an_app_with_no_engine_is_not_installed() {
+        let s = site(
+            Ok(serde_json::json!({ "apps": [{ "id": 114, "engine": null }] })),
+            Ok(with_pack()),
+        );
+
+        match native_target(&s, only(&[84]), 114, None).await {
+            Ok(NativeTarget::Nothing) => {}
+            other => panic!("{other:?}"),
+        }
+        assert!(!s.asked_boot.get());
+    }
+
+    #[tokio::test]
+    async fn an_unreachable_catalogue_is_an_error_not_not_installed() {
+        for s in [
+            site(Err(AppError::Network("down".into())), Ok(with_pack())),
+            site(Err(AppError::internal("http: 502")), Ok(with_pack())),
+            site(Ok(arena_on_godot()), Err(AppError::Network("down".into()))),
+        ] {
+            match native_target(&s, only(&[84]), 114, None).await {
+                Err(AppError::Network(m)) => assert_eq!(m, CATALOGUE_UNREACHABLE),
+                other => panic!("{other:?}"),
+            }
+        }
     }
 }

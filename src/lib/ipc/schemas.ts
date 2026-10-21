@@ -1417,6 +1417,19 @@ export const InstalledGameSchema = z.object({
 
 export type InstalledGameT = z.infer<typeof InstalledGameSchema>
 
+/**
+ * What Play would start natively for one app: its own build, or (for a TMC
+ * pack game only) its engine's. Rust decides, from the same gate it launches by.
+ */
+export const NativeTargetSchema = z.object({
+    installed: InstalledGameSchema.nullable(),
+    engineId: z.number().nullable(),
+    /** The engine's build is missing here and the site has one to install. */
+    engineInstallable: z.boolean(),
+})
+
+export type NativeTargetT = z.infer<typeof NativeTargetSchema>
+
 /** What the site has for this machine, from `games_available`. */
 export const NativeBuildSchema = z.object({
     appId: z.number(),

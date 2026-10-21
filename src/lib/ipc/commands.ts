@@ -6,6 +6,7 @@ import {
     GameStatusSchema,
     GameUpdateReportSchema,
     InstalledGameSchema,
+    NativeTargetSchema,
     NativeBuildSchema,
     ApiEnvSchema,
     AutoUpdateReportSchema,
@@ -711,6 +712,13 @@ export const ipc = {
     /** Every TMC game installed on this device. */
     gamesList: () => call('games_list', z.array(InstalledGameSchema)),
 
+    /**
+     * The installed build Play on this app would start, if any. A TMC pack
+     * game falls back to its engine's build; any other game never does.
+     */
+    gameNativeTarget: (appId: number, locale?: string) =>
+        call('game_native_target', NativeTargetSchema, { appId, locale }),
+
     /** What the site has for this machine, or null for nothing to install. */
     gamesAvailable: (appId: number) =>
         call('games_available', NativeBuildSchema.nullable(), { appId }),
@@ -806,7 +814,8 @@ export const ipc = {
     // `tmc://console` events (`ConsoleEventSchema`).
 
     consoleProbe: () => call('console_probe', ConsoleProbeSchema),
-    consoleRun: (line: string) => call('console_run', ConsoleStartedSchema, { line }),
+    consoleRun: (line: string) =>
+        call('console_run', ConsoleStartedSchema, { line }),
     consoleStdin: (text: string, newline: boolean) =>
         call('console_stdin', z.void(), { text, newline }),
     consoleStdinClose: () => call('console_stdin_close', z.boolean()),

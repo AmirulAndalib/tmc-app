@@ -339,6 +339,7 @@ pub fn run() {
             commands::games::games_platform,
             commands::games::games_list,
             commands::games::games_available,
+            commands::games::game_native_target,
             commands::games::game_install,
             commands::games::game_uninstall,
             commands::games::game_set_auto_update,

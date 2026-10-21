@@ -806,7 +806,22 @@ mod tests {
             Some("https://dotgames.org/content".to_string())
         );
 
+        // A port is part of the origin, so it is kept.
+        assert_eq!(
+            content_url_from_boot(&boot("https://h:8443")),
+            Some("https://h:8443/content".to_string())
+        );
+        // A backslash is a path separator to a URL parser, so it cannot smuggle
+        // a second host in: the host stays the first one and the path refuses it.
+        assert_eq!(
+            content_url_from_boot(&boot("https:\\\\dotgames.org")),
+            Some("https://dotgames.org/content".to_string())
+        );
+
         for bad in [
+            "https://dotgames.org\\godot",
+            "https://dotgames.org\\@evil.example",
+            "https://evil.example\\.dotgames.org",
             "http://dotgames.org",
             "https://dotgames.org/godot",
             "https://dotgames.org?x=1",
@@ -833,6 +848,22 @@ mod tests {
         assert!(content_url_args(&["-x".to_string()], base).is_empty());
         let named: Vec<String> = vec!["--".into(), "--content-url=https://a.example/c".into()];
         assert!(content_url_args(&named, base).is_empty());
+        // The value goes over as one argv element, backslash and all: there is
+        // no shell to read it, so it is never split or unescaped.
+        let odd = Some("https://h:8443/content\\x");
+        assert_eq!(
+            content_url_args(&shell, odd),
+            vec![
+                "--content-url".to_string(),
+                "https://h:8443/content\\x".into()
+            ]
+        );
+        let spaced: Vec<String> = vec![
+            "--".into(),
+            "--content-url".into(),
+            "https://a.example/c".into(),
+        ];
+        assert!(content_url_args(&spaced, base).is_empty());
     }
 
     #[test]
