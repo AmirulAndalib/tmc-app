@@ -856,8 +856,20 @@ impl DownloadManager {
         let status = response.status();
 
         if status == reqwest::StatusCode::RANGE_NOT_SATISFIABLE {
-            // The `.part` is at least as long as the file. Almost always means
-            // the file changed; start over rather than keep a stale prefix.
+            /*
+             * The `.part` is at least as long as the file. Either it IS the
+             * file (the app died between the last byte and the rename), which
+             * its checksum proves, or the file changed and the prefix is stale.
+             */
+            if let Some(expected) = &state.sha256 {
+                if file_matches(&part, expected) {
+                    state.total = Some(existing);
+                    state.done = existing;
+
+                    return self.finish(id, &mut state, &part, &dest).await;
+                }
+            }
+
             let _ = std::fs::remove_file(&part);
 
             return Err(TransferError::retryable(
@@ -981,21 +993,46 @@ impl DownloadManager {
              * that silently stops being checked on resumed downloads is worse
              * than none.
              */
-            verify(&part, expected)?;
+            if let Err(err) = verify(&part, expected) {
+                /*
+                 * A resumed file is a prefix from an earlier attempt, which may
+                 * be from a different version of the file. Verification already
+                 * deleted it, so a retry starts from zero; only a download that
+                 * failed from zero is final.
+                 */
+                return Err(if resuming {
+                    TransferError::retryable(
+                        "The resumed file did not match its checksum. Starting again.",
+                    )
+                } else {
+                    err
+                });
+            }
         }
 
+        self.finish(id, &mut state, &part, &dest).await
+    }
+
+    /// Move the finished `.tmcpart` onto its name and report it.
+    async fn finish(
+        &self,
+        id: &str,
+        state: &mut DownloadState,
+        part: &std::path::Path,
+        dest: &std::path::Path,
+    ) -> Result<Stop, TransferError> {
         /*
          * Rename LAST. Until this line the target name does not exist, so
          * nothing downstream can pick up a partial file and treat it as
          * complete — which is the failure that produces "the mod installed but
          * the game will not start".
          */
-        std::fs::rename(&part, &dest)
+        std::fs::rename(part, dest)
             .map_err(|e| TransferError::fatal(format!("Could not finish the file: {e}")))?;
 
         state.done = state.total.unwrap_or(state.done);
 
-        self.commit(id, &state).await;
+        self.commit(id, state).await;
 
         audit!(
             self.inner.audit,
@@ -1166,6 +1203,27 @@ fn verify(path: &std::path::Path, expected: &str) -> Result<(), TransferError> {
     Ok(())
 }
 
+/// Whether the file at `path` hashes to `expected`, without touching it.
+fn file_matches(path: &std::path::Path, expected: &str) -> bool {
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return false;
+    };
+
+    let mut hasher = Sha256::new();
+    let mut buf = [0u8; 64 * 1024];
+
+    loop {
+        match std::io::Read::read(&mut file, &mut buf) {
+            Ok(0) => break,
+            Ok(n) => hasher.update(&buf[..n]),
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(_) => return false,
+        }
+    }
+
+    hex::encode(hasher.finalize()).eq_ignore_ascii_case(expected.trim())
+}
+
 /// The checks this module makes for itself.
 fn validate(request: &DownloadRequest) -> AppResult<()> {
     if request.id.is_empty() || request.id.len() > 128 {
@@ -1279,6 +1337,15 @@ mod tests {
 
                         out.extend_from_slice(&body);
                         out
+                    }
+                    Behaviour::Ranges | Behaviour::TruncateOnce(_)
+                        if start > 0 && start as usize >= body.len() =>
+                    {
+                        format!(
+                            "HTTP/1.1 416 Range Not Satisfiable\r\ncontent-length: 0\r\n\
+                             connection: close\r\n\r\n"
+                        )
+                        .into_bytes()
                     }
                     Behaviour::Ranges | Behaviour::TruncateOnce(_) => {
                         let slice = &body[(start as usize).min(body.len())..];
@@ -1514,6 +1581,56 @@ mod tests {
             "a file that failed its checksum must not be left"
         );
         assert!(!part_path(&dest).exists());
+    }
+
+    /// A prefix left by an older version of the file passes every length
+    /// check; only its checksum notices. The download must start again from
+    /// zero by itself rather than fail for good.
+    #[tokio::test]
+    async fn a_resumed_file_that_fails_its_checksum_restarts_from_zero() {
+        let body: Vec<u8> = (0..40_000u32).map(|n| (n % 251) as u8).collect();
+        let digest = hex::encode(Sha256::digest(&body));
+        let server = serve(body.clone(), Behaviour::Ranges).await;
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let dest = tmp.path().join("file.bin");
+
+        std::fs::write(part_path(&dest), vec![9u8; 20_000]).expect("write stale part");
+
+        let mut req = request("d1", server.port, dest.clone());
+        req.sha256 = Some(digest);
+
+        let manager = manager();
+
+        queue_raw(&manager, req).await;
+        wait_for(&manager, "d1", Status::Done).await;
+
+        assert_eq!(std::fs::read(&dest).expect("read"), body);
+        assert!(!part_path(&dest).exists());
+    }
+
+    /// The app can die between the last byte and the rename. The server then
+    /// answers `416` to the range, and the part is the whole file.
+    #[tokio::test]
+    async fn a_part_that_is_already_whole_is_finished_by_its_checksum() {
+        let body: Vec<u8> = (0..30_000u32).map(|n| (n % 241) as u8).collect();
+        let digest = hex::encode(Sha256::digest(&body));
+        let server = serve(body.clone(), Behaviour::Ranges).await;
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let dest = tmp.path().join("file.bin");
+
+        std::fs::write(part_path(&dest), &body).expect("write whole part");
+
+        let mut req = request("d1", server.port, dest.clone());
+        req.sha256 = Some(digest);
+
+        let manager = manager();
+
+        queue_raw(&manager, req).await;
+        wait_for(&manager, "d1", Status::Done).await;
+
+        assert_eq!(std::fs::read(&dest).expect("read"), body);
     }
 
     #[tokio::test]
