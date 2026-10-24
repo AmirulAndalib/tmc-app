@@ -81,7 +81,10 @@ export default function FacetList({
                                     }`}
                                 >
                                     {o.leading}
-                                    <span className="min-w-0 flex-1 truncate">
+                                    <span
+                                        title={o.label}
+                                        className="line-clamp-2 min-w-0 flex-1 break-words leading-tight"
+                                    >
                                         {o.label}
                                     </span>
                                     {o.count !== undefined && o.count > 0 && (
