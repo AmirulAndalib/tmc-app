@@ -16,9 +16,7 @@ use std::collections::HashMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 
 use crate::audit;
 use crate::error::{AppError, AppResult};
@@ -430,71 +428,26 @@ impl Executor<'_> {
                 .await;
         }
 
-        let response = self.http.get(parsed).send().await?;
-
-        if !response.status().is_success() {
-            return Err(AppError::Network(format!(
-                "Download failed ({}).",
-                response.status()
-            )));
-        }
-
-        // Trust the header only to fail EARLY; the streaming counter below is
-        // what actually enforces the cap, since a hostile server can lie.
-        if response.content_length().is_some_and(|len| len > cap) {
-            return Err(AppError::jail("Download exceeds the allowed size."));
-        }
-
         ensure_parent(target)?;
 
-        let mut file = std::fs::File::create(target)?;
-        let mut hasher = Sha256::new();
-        let mut written: u64 = 0;
-
-        let mut stream = response.bytes_stream();
-
-        while let Some(chunk) = stream.next().await {
-            let chunk = chunk?;
-
-            written += chunk.len() as u64;
-
-            if written > cap {
-                drop(file);
-                let _ = std::fs::remove_file(target);
-
-                return Err(AppError::jail("Download exceeds the allowed size."));
-            }
-
-            hasher.update(&chunk);
-            std::io::Write::write_all(&mut file, &chunk)?;
-        }
-
-        drop(file);
-
-        if let Some(expected) = expect_sha {
-            let actual = hex::encode(hasher.finalize());
-
-            if !actual.eq_ignore_ascii_case(expected.trim()) {
-                // Remove it. A file that failed its checksum must not be left
-                // where a later step could pick it up.
-                let _ = std::fs::remove_file(target);
-
+        match crate::download::fetch_direct(&self.http, parsed, target, cap, expect_sha).await {
+            Ok(()) => Ok(()),
+            Err(crate::download::DirectFailure::Other(e)) => Err(e),
+            Err(crate::download::DirectFailure::Checksum { actual }) => {
                 audit!(
                     self.audit,
                     Error,
                     Install,
                     "plugin.download.checksum",
-                    format!("{url}: expected {expected}, got {actual}"),
+                    format!("{url}: expected {}, got {actual}", expect_sha.unwrap_or("")),
                     plugin = self.manifest.id
                 );
 
-                return Err(AppError::jail(
+                Err(AppError::jail(
                     "Downloaded file did not match the expected checksum.",
-                ));
+                ))
             }
         }
-
-        Ok(())
     }
 
     // ------------------------------------------------------------ JSON patch

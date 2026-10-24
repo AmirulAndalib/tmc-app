@@ -1204,6 +1204,144 @@ fn verify(path: &std::path::Path, expected: &str) -> Result<(), TransferError> {
 }
 
 /// Whether the file at `path` hashes to `expected`, without touching it.
+/// Why a queue-less download failed; a checksum mismatch is told apart so the caller can audit it.
+#[derive(Debug)]
+pub(crate) enum DirectFailure {
+    Checksum { actual: String },
+    Other(AppError),
+}
+
+impl From<AppError> for DirectFailure {
+    fn from(e: AppError) -> Self {
+        Self::Other(e)
+    }
+}
+
+/// Download `url` to `dest` without a queue row (a plugin step with no queue handle).
+///
+/// It goes through `dest.tmcpart` and asks for the missing tail with `Range`, as the queue does, so an
+/// interrupted run does not start over; a server that ignores the range (a 200) truncates, and a
+/// resumed file that fails its checksum is fetched once more from zero.
+pub(crate) async fn fetch_direct(
+    http: &reqwest::Client,
+    url: url::Url,
+    dest: &std::path::Path,
+    cap: u64,
+    expect_sha: Option<&str>,
+) -> Result<(), DirectFailure> {
+    let part = part_path(dest);
+
+    for attempt in 0..2 {
+        let existing = std::fs::metadata(&part).map(|m| m.len()).unwrap_or(0);
+        let mut request = http.get(url.clone());
+
+        if existing > 0 {
+            request = request.header("range", format!("bytes={existing}-"));
+        }
+
+        let response = request.send().await.map_err(AppError::from)?;
+        let status = response.status();
+
+        if status == reqwest::StatusCode::RANGE_NOT_SATISFIABLE {
+            // The part is at least as long as the file: it is the file, or the file changed.
+            if expect_sha.is_some_and(|e| file_matches(&part, e)) {
+                return Ok(install_part(&part, dest)?);
+            }
+
+            let _ = std::fs::remove_file(&part);
+
+            if attempt == 0 {
+                continue;
+            }
+
+            return Err(AppError::Network("The file on the server changed.".into()).into());
+        }
+
+        if !status.is_success() {
+            return Err(AppError::Network(format!("Download failed ({status}).")).into());
+        }
+
+        let resuming = existing > 0 && status == reqwest::StatusCode::PARTIAL_CONTENT;
+        let start = if resuming { existing } else { 0 };
+
+        // The header only fails early; the counter below is what enforces the cap.
+        if response.content_length().is_some_and(|len| len + start > cap) {
+            return Err(AppError::jail("Download exceeds the allowed size.").into());
+        }
+
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(!resuming)
+            .append(resuming)
+            .open(&part)
+            .map_err(AppError::from)?;
+        let mut written = start;
+        let mut stream = response.bytes_stream();
+
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(AppError::from)?;
+
+            written += chunk.len() as u64;
+
+            if written > cap {
+                drop(file);
+                let _ = std::fs::remove_file(&part);
+
+                return Err(AppError::jail("Download exceeds the allowed size.").into());
+            }
+
+            std::io::Write::write_all(&mut file, &chunk).map_err(AppError::from)?;
+        }
+
+        drop(file);
+
+        if let Some(expected) = expect_sha {
+            if !file_matches(&part, expected) {
+                let actual = sha256_of(&part);
+
+                let _ = std::fs::remove_file(&part);
+
+                // A prefix from an earlier attempt may belong to another version of the file.
+                if resuming && attempt == 0 {
+                    continue;
+                }
+
+                return Err(DirectFailure::Checksum { actual });
+            }
+        }
+
+        return Ok(install_part(&part, dest)?);
+    }
+
+    Err(AppError::Network("The download did not complete.".into()).into())
+}
+
+fn install_part(part: &std::path::Path, dest: &std::path::Path) -> AppResult<()> {
+    // Windows will not rename over an existing file.
+    let _ = std::fs::remove_file(dest);
+
+    std::fs::rename(part, dest).map_err(AppError::from)
+}
+
+fn sha256_of(path: &std::path::Path) -> String {
+    let mut hasher = Sha256::new();
+
+    if let Ok(mut file) = std::fs::File::open(path) {
+        let mut buf = [0u8; 64 * 1024];
+
+        while let Ok(n) = std::io::Read::read(&mut file, &mut buf) {
+            if n == 0 {
+                break;
+            }
+
+            hasher.update(&buf[..n]);
+        }
+    }
+
+    hex::encode(hasher.finalize())
+}
+
 fn file_matches(path: &std::path::Path, expected: &str) -> bool {
     let Ok(mut file) = std::fs::File::open(path) else {
         return false;
@@ -1556,6 +1694,80 @@ mod tests {
             "the partial prefix must have been discarded, not prepended"
         );
         assert_eq!(std::fs::read(&dest).expect("read"), body);
+    }
+
+    // ------------------------------------------ the queue-less path (plugin step)
+
+    fn sha_hex(body: &[u8]) -> String {
+        hex::encode(Sha256::digest(body))
+    }
+
+    async fn direct(
+        server: &TestServer,
+        dest: &std::path::Path,
+        sha: Option<&str>,
+    ) -> Result<(), DirectFailure> {
+        let url = url::Url::parse(&format!("http://127.0.0.1:{}/f.bin", server.port)).expect("url");
+
+        fetch_direct(&crate::http::client(), url, dest, 1 << 30, sha).await
+    }
+
+    #[tokio::test]
+    async fn a_direct_download_resumes_from_its_part_file() {
+        let body: Vec<u8> = (0..30_000u32).map(|n| (n % 251) as u8).collect();
+        let server = serve(body.clone(), Behaviour::Ranges).await;
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let dest = tmp.path().join("f.bin");
+
+        std::fs::write(part_path(&dest), &body[..12_000]).expect("part");
+        direct(&server, &dest, Some(&sha_hex(&body))).await.expect("done");
+
+        assert_eq!(std::fs::read(&dest).expect("read"), body);
+        assert!(!part_path(&dest).exists());
+    }
+
+    #[tokio::test]
+    async fn a_direct_download_restarts_when_the_server_ignores_range() {
+        let body: Vec<u8> = (0..30_000u32).map(|n| (n % 251) as u8).collect();
+        let server = serve(body.clone(), Behaviour::IgnoreRange).await;
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let dest = tmp.path().join("f.bin");
+
+        std::fs::write(part_path(&dest), &body[..9_000]).expect("part");
+        direct(&server, &dest, None).await.expect("done");
+
+        assert_eq!(std::fs::read(&dest).expect("read"), body);
+    }
+
+    #[tokio::test]
+    async fn a_stale_prefix_is_refetched_from_zero_once() {
+        let body: Vec<u8> = (0..30_000u32).map(|n| (n % 251) as u8).collect();
+        let server = serve(body.clone(), Behaviour::Ranges).await;
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let dest = tmp.path().join("f.bin");
+
+        std::fs::write(part_path(&dest), vec![9u8; 10_000]).expect("stale part");
+        direct(&server, &dest, Some(&sha_hex(&body))).await.expect("done");
+
+        assert_eq!(std::fs::read(&dest).expect("read"), body);
+    }
+
+    #[tokio::test]
+    async fn a_whole_part_is_finished_by_its_checksum_and_a_bad_file_is_refused() {
+        let body = vec![5u8; 8_000];
+        let server = serve(body.clone(), Behaviour::Ranges).await;
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let dest = tmp.path().join("f.bin");
+
+        std::fs::write(part_path(&dest), &body).expect("whole part");
+        direct(&server, &dest, Some(&sha_hex(&body))).await.expect("done");
+        assert_eq!(std::fs::read(&dest).expect("read"), body);
+
+        let other = tmp.path().join("g.bin");
+        let wrong = direct(&server, &other, Some(&"00".repeat(32))).await;
+
+        assert!(matches!(wrong, Err(DirectFailure::Checksum { .. })));
+        assert!(!other.exists() && !part_path(&other).exists());
     }
 
     #[tokio::test]
