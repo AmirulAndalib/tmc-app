@@ -303,6 +303,8 @@ export const ServerInfoSchema = z.object({
     map: z.string().nullable(),
     region: z.string().nullable(),
     country: z.string().nullable(),
+    /** ISO 3166-1 alpha-2, for a flag. */
+    countryCode: z.string().nullable().default(null),
     /** Deep link the app hands to the game, e.g. `steam://connect/…`. */
     connectUrl: z.string().nullable(),
 
@@ -2753,3 +2755,23 @@ export const AvatarSchemaResponseSchema = z.object({
 export type AvatarDocT = z.infer<typeof AvatarDocSchema>
 export type AvatarResponseT = z.infer<typeof AvatarResponseSchema>
 export type AvatarSchemaResponseT = z.infer<typeof AvatarSchemaResponseSchema>
+
+/** `GET /avatar/actions`: what the caller may equip, and what they have. */
+export const AvatarActionOptionSchema = z.object({
+    id: z.number().int(),
+    kind: z.enum(['EMOTE', 'POSE', 'GESTURE']),
+    name: z.string(),
+    description: z.string().nullable().default(null),
+    builtin: z.string().nullable().default(null),
+    loop: z.boolean().default(false),
+    equipped: z.boolean().default(false),
+    slot: z.number().int().nullable().default(null),
+})
+
+export const AvatarActionsResponseSchema = z.object({
+    max: z.number().int(),
+    actions: z.array(AvatarActionOptionSchema),
+})
+
+export type AvatarActionOptionT = z.infer<typeof AvatarActionOptionSchema>
+export type AvatarActionsResponseT = z.infer<typeof AvatarActionsResponseSchema>

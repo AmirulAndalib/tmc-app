@@ -4,6 +4,7 @@ import { call } from '~/lib/ipc'
 import {
     AppListQuerySchema,
     AvatarResponseSchema,
+    AvatarActionsResponseSchema,
     AvatarSchemaResponseSchema,
     type AvatarDocT,
     AppListResponseSchema,
@@ -160,6 +161,12 @@ export const api = {
     avatarSchema: () => get('/avatar/schema', AvatarSchemaResponseSchema),
 
     avatarSave: (doc: AvatarDocT) => send('PUT', '/avatar', z.unknown(), doc),
+
+    avatarActions: () =>
+        get('/avatar/actions', AvatarActionsResponseSchema, undefined, true),
+
+    avatarActionsSave: (kind: 'EMOTE' | 'POSE' | 'GESTURE', actionIds: number[]) =>
+        send('PUT', '/avatar/actions', z.unknown(), { kind, actionIds }),
 
     facets: (kind: ContentKindT, online = true) =>
         get('/facets', FacetsResponseSchema, {

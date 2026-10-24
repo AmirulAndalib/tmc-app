@@ -1,21 +1,21 @@
 import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
+    FiArrowDown,
+    FiArrowUp,
     FiExternalLink,
     FiHeart,
+    FiPlus,
     FiRefreshCw,
     FiSave,
     FiSmile,
     FiUser,
+    FiX,
     FiZap,
 } from 'react-icons/fi'
 
 import { api } from '~/lib/api/client'
-import type {
-    AvatarDocT,
-    AvatarResponseT,
-    AvatarSchemaResponseT,
-} from '~/lib/api/contract'
+import type { AvatarDocT, AvatarSchemaResponseT } from '~/lib/api/contract'
 import { useAuth } from '~/lib/auth/provider'
 import { openExternally } from '~/lib/external'
 import { messageOf } from '~/lib/ipc'
@@ -215,42 +215,144 @@ function SlotEditor({
 
 function ActionTab({
     kind,
-    data,
     manageUrl,
 }: {
     kind: 'EMOTE' | 'POSE' | 'GESTURE'
-    data: AvatarResponseT
     manageUrl: string | null
 }) {
-    const rows = data.actions[kind]
+    const client = useQueryClient()
     const noun =
         kind === 'EMOTE' ? 'emotes' : kind === 'POSE' ? 'poses' : 'gestures'
 
+    const list = useQuery({
+        queryKey: ['avatar', 'actions'],
+        queryFn: () => api.avatarActions(),
+    })
+
+    const save = useMutation({
+        mutationFn: (ids: number[]) => api.avatarActionsSave(kind, ids),
+        onSuccess: () => {
+            void client.invalidateQueries({ queryKey: ['avatar'] })
+        },
+    })
+
+    if (list.error) {
+        return <p className="text-sm text-danger">{messageOf(list.error)}</p>
+    }
+
+    if (!list.data) {
+        return <div className="h-32 animate-pulse rounded-lg bg-surface-2" />
+    }
+
+    const max = list.data.max
+    const all = list.data.actions.filter((a) => a.kind === kind)
+    const equipped = all
+        .filter((a) => a.equipped)
+        .sort((a, b) => (a.slot ?? 0) - (b.slot ?? 0))
+    const available = all.filter((a) => !a.equipped)
+    const ids = equipped.map((a) => a.id)
+    const busy = save.isPending
+
+    const move = (i: number, by: -1 | 1) => {
+        const next = [...ids]
+        const [x] = next.splice(i, 1)
+        if (x !== undefined) next.splice(i + by, 0, x)
+        save.mutate(next)
+    }
+
     return (
-        <div className="flex flex-col gap-3">
-            {rows.length > 0 ? (
-                <ol className="grid grid-cols-1 gap-2 xs:grid-cols-2">
-                    {rows.map((a, i) => (
-                        <li
-                            key={`${a.name}-${i}`}
-                            className="flex items-center gap-3 rounded-lg border border-border bg-surface px-3 py-2.5"
-                        >
-                            <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-accent/15 text-xs font-semibold tabular-nums">
-                                {i + 1}
-                            </span>
-                            <span className="min-w-0 flex-1 truncate text-sm">
-                                {a.name}
-                            </span>
-                            <span className="shrink-0 rounded-full border border-border px-2 py-0.5 text-[0.65rem] text-muted">
-                                {a.builtin ? 'Built in' : 'Uploaded'}
-                            </span>
-                        </li>
-                    ))}
-                </ol>
-            ) : (
-                <p className="rounded-lg border border-dashed border-border px-4 py-6 text-center text-sm text-muted">
-                    Nothing equipped. Games use their built-in {noun}.
-                </p>
+        <div className="flex flex-col gap-4">
+            <div className="flex flex-col gap-2">
+                <h3 className="flex items-center justify-between text-xs font-medium uppercase tracking-wide text-muted">
+                    <span>Equipped</span>
+                    <span className="tabular-nums normal-case tracking-normal">
+                        {equipped.length} / {max}
+                    </span>
+                </h3>
+
+                {equipped.length > 0 ? (
+                    <ol className="flex flex-col gap-2">
+                        {equipped.map((a, i) => (
+                            <li
+                                key={a.id}
+                                className="flex items-center gap-1 rounded-lg border border-border bg-surface-2 py-1.5 pl-2.5 pr-1"
+                            >
+                                <span className="mr-1 flex size-7 shrink-0 items-center justify-center rounded-md bg-accent/15 text-xs font-semibold tabular-nums">
+                                    {i + 1}
+                                </span>
+                                <span className="min-w-0 flex-1 truncate text-sm">
+                                    {a.name}
+                                </span>
+                                <IconBtn
+                                    label={`Move ${a.name} up`}
+                                    disabled={busy || i === 0}
+                                    onClick={() => move(i, -1)}
+                                >
+                                    <FiArrowUp className="size-4" />
+                                </IconBtn>
+                                <IconBtn
+                                    label={`Move ${a.name} down`}
+                                    disabled={busy || i === equipped.length - 1}
+                                    onClick={() => move(i, 1)}
+                                >
+                                    <FiArrowDown className="size-4" />
+                                </IconBtn>
+                                <IconBtn
+                                    label={`Remove ${a.name}`}
+                                    disabled={busy}
+                                    onClick={() =>
+                                        save.mutate(ids.filter((x) => x !== a.id))
+                                    }
+                                >
+                                    <FiX className="size-4" />
+                                </IconBtn>
+                            </li>
+                        ))}
+                    </ol>
+                ) : (
+                    <p className="rounded-lg border border-dashed border-border px-4 py-5 text-center text-sm text-muted">
+                        Nothing equipped. Games use their built-in {noun}.
+                    </p>
+                )}
+            </div>
+
+            <div className="flex flex-col gap-2">
+                <h3 className="text-xs font-medium uppercase tracking-wide text-muted">
+                    Available
+                </h3>
+
+                {available.length > 0 ? (
+                    <ul className="grid grid-cols-1 gap-2 xs:grid-cols-2">
+                        {available.map((a) => (
+                            <li key={a.id}>
+                                <button
+                                    type="button"
+                                    disabled={busy || equipped.length >= max}
+                                    onClick={() => save.mutate([...ids, a.id])}
+                                    className="flex min-h-11 w-full items-center gap-2 rounded-lg border border-border px-3 py-2 text-left text-sm hover:bg-surface-2 disabled:opacity-50"
+                                >
+                                    <FiPlus className="size-4 shrink-0 text-accent" />
+                                    <span className="min-w-0 flex-1 truncate">
+                                        {a.name}
+                                    </span>
+                                    {a.builtin && (
+                                        <span className="shrink-0 rounded-full border border-border px-2 py-0.5 text-[0.65rem] text-muted">
+                                            Built in
+                                        </span>
+                                    )}
+                                </button>
+                            </li>
+                        ))}
+                    </ul>
+                ) : (
+                    <p className="text-sm text-muted">
+                        Everything available is equipped.
+                    </p>
+                )}
+            </div>
+
+            {save.error && (
+                <p className="text-xs text-danger">{messageOf(save.error)}</p>
             )}
 
             <p className="text-xs text-muted">
@@ -258,8 +360,7 @@ function ActionTab({
                 <kbd className="rounded border border-border px-1">
                     {KEY_HINT[kind]}
                 </kbd>{' '}
-                to play the first one; press again to cycle. Choosing which {noun}{' '}
-                to equip in the app is coming soon.
+                to play the first one; press again to cycle.
             </p>
 
             {manageUrl && (
@@ -268,11 +369,36 @@ function ActionTab({
                     onClick={() => void openExternally({ webUrl: manageUrl })}
                     className="flex w-fit items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-sm"
                 >
-                    <FiExternalLink className="size-3.5" />
-                    Manage {noun} on the website
+                    <FiExternalLink className="size-3.5 shrink-0" />
+                    Upload your own on the website
                 </button>
             )}
         </div>
+    )
+}
+
+function IconBtn({
+    label,
+    disabled,
+    onClick,
+    children,
+}: {
+    label: string
+    disabled: boolean
+    onClick: () => void
+    children: React.ReactNode
+}) {
+    return (
+        <button
+            type="button"
+            aria-label={label}
+            title={label}
+            disabled={disabled}
+            onClick={onClick}
+            className="flex size-9 shrink-0 items-center justify-center rounded-md hover:bg-surface disabled:opacity-30"
+        >
+            {children}
+        </button>
     )
 }
 
@@ -378,13 +504,13 @@ export default function AvatarPanel({ siteUrl }: { siteUrl: string | null }) {
                         role="tab"
                         aria-selected={tab === key}
                         onClick={() => setTab(key)}
-                        className={`flex shrink-0 items-center gap-1.5 rounded-full border px-3.5 py-2 text-sm ${
+                        className={`flex shrink-0 items-center gap-1.5 rounded-full border px-3 py-2 text-sm ${
                             tab === key
                                 ? 'border-accent bg-accent text-accent-foreground'
                                 : 'border-border hover:bg-surface-2'
                         }`}
                     >
-                        <Icon className="size-3.5" />
+                        <Icon className="hidden size-3.5 min-[420px]:block" />
                         {label}
                     </button>
                 ))}
@@ -414,7 +540,7 @@ export default function AvatarPanel({ siteUrl }: { siteUrl: string | null }) {
                         />
                     </div>
                 ) : (
-                    <ActionTab kind={tab} data={mine.data} manageUrl={manageUrl} />
+                    <ActionTab kind={tab} manageUrl={manageUrl} />
                 )}
             </div>
 

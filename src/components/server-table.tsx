@@ -12,6 +12,7 @@ import type { BrowseSortT, ContentSummaryT } from '~/lib/api/contract'
 import { appLabel } from '~/lib/api/labels'
 import { GameIcon } from '~/components/game-icon'
 import { requestFor, useLiveQuery, useLiveServer } from '~/lib/hooks/use-live-query'
+import { CountryFlag } from './country-flag'
 import { LatencyChart, LatencyValue } from './latency-graph'
 import { latencyState } from './server-live'
 
@@ -361,7 +362,14 @@ function ServerRow({
                     className={`${MEDIUM_ONLY} max-w-32 truncate px-2 py-2 text-xs text-muted`}
                     title={item.server?.country ?? undefined}
                 >
-                    {item.server?.country ?? '—'}
+                    <span className="flex items-center gap-1.5">
+                        {item.server?.country && (
+                            <CountryFlag code={item.server.countryCode} />
+                        )}
+                        <span className="truncate">
+                            {item.server?.country ?? '—'}
+                        </span>
+                    </span>
                 </td>
 
                 <td
@@ -475,7 +483,12 @@ function ExpandedServer({
                     <span>Query port: {result.queriedPort}</span>
                 )}
                 {result?.protocol && <span>Protocol: {result.protocol}</span>}
-                {item.server?.country && <span>{item.server.country}</span>}
+                {item.server?.country && (
+                    <span className="flex items-center gap-1.5">
+                        <CountryFlag code={item.server.countryCode} />
+                        {item.server.country}
+                    </span>
+                )}
 
                 <button
                     type="button"
