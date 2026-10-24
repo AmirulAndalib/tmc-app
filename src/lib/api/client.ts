@@ -3,6 +3,9 @@ import { z } from 'zod'
 import { call } from '~/lib/ipc'
 import {
     AppListQuerySchema,
+    AvatarResponseSchema,
+    AvatarSchemaResponseSchema,
+    type AvatarDocT,
     AppListResponseSchema,
     BrowseQuerySchema,
     BrowseResponseSchema,
@@ -152,7 +155,17 @@ export const api = {
             ContentDetailSchema
         ),
 
-    facets: (kind: ContentKindT) => get('/facets', FacetsResponseSchema, { kind }),
+    avatar: () => get('/avatar', AvatarResponseSchema, undefined, true),
+
+    avatarSchema: () => get('/avatar/schema', AvatarSchemaResponseSchema),
+
+    avatarSave: (doc: AvatarDocT) => send('PUT', '/avatar', z.unknown(), doc),
+
+    facets: (kind: ContentKindT, online = true) =>
+        get('/facets', FacetsResponseSchema, {
+            kind,
+            ...(kind === 'server' ? { online } : {}),
+        }),
 
     /**
      * Which listed server is at an address.

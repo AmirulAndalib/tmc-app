@@ -1,5 +1,5 @@
 import { useMemo, useState, type ReactNode } from 'react'
-import { FiChevronDown, FiChevronRight } from 'react-icons/fi'
+import { FiChevronDown, FiChevronRight, FiMap, FiTag } from 'react-icons/fi'
 
 import {
     BrowseEnvironmentVals,
@@ -9,6 +9,9 @@ import {
     type FacetsResponseT,
 } from '~/lib/api/contract'
 import { appLabel } from '~/lib/api/labels'
+import { CountryFlag } from '~/components/country-flag'
+import FacetList from '~/components/facet-list'
+import { GameIcon } from '~/components/game-icon'
 import Select from '~/components/select'
 
 /**
@@ -42,12 +45,14 @@ type GroupProps = {
     title: string
     /** How many filters in this group are set. Drives the badge and the default. */
     active: number
+    /** Open on first draw even with nothing set. */
+    defaultOpen?: boolean
     children: ReactNode
 }
 
-function Group({ title, active, children }: GroupProps) {
+function Group({ title, active, defaultOpen, children }: GroupProps) {
     // Open when it holds something, and thereafter whatever the user last did.
-    const [open, setOpen] = useState(active > 0)
+    const [open, setOpen] = useState(active > 0 || !!defaultOpen)
 
     return (
         <div className="border-b border-border last:border-0">
@@ -261,64 +266,37 @@ export default function BrowseFilters({
                 <Group
                     title={isServer ? 'Game & region' : 'Game'}
                     active={counts.game}
+                    defaultOpen
                 >
                     {hasApp && (facets?.apps.length ?? 0) > 0 && (
-                        <Field label="Game">
-                            <Select
-                                label="Game"
-                                fullWidth
-                                value={get('app') ?? ''}
-                                onChange={(next) => set('app', next || null)}
-                                options={[
-                                    { value: '', label: 'All games' },
-                                    ...(facets?.apps ?? []).map((game) => ({
-                                        value: String(game.id),
-                                        label: appLabel(game),
-                                        hint: `${game.count.toLocaleString()} items`,
-                                        icon: game.icon ? (
-                                            <img
-                                                src={game.icon}
-                                                alt=""
-                                                loading="lazy"
-                                                className="size-4 rounded-sm object-cover"
-                                            />
-                                        ) : undefined,
-                                    })),
-                                ]}
-                            />
-                        </Field>
+                        <FacetList
+                            label="Game"
+                            multiple={false}
+                            selected={get('app') ? [get('app') ?? ''] : []}
+                            onToggle={(id) =>
+                                set('app', get('app') === id ? null : id)
+                            }
+                            options={(facets?.apps ?? []).map((game) => ({
+                                id: String(game.id),
+                                label: appLabel(game),
+                                count: game.count,
+                                leading: <GameIcon app={game} size="sm" />,
+                            }))}
+                        />
                     )}
 
                     {isServer && (facets?.countries.length ?? 0) > 0 && (
-                        <div className="flex flex-col gap-1">
-                            <span className="text-[0.7rem] text-muted">
-                                Country
-                            </span>
-                            <div className="flex max-h-40 flex-col gap-1 overflow-y-auto rounded-lg border border-border p-2">
-                                {facets?.countries.map((country) => (
-                                    <label
-                                        key={country.id}
-                                        className="flex items-center gap-2 text-xs"
-                                    >
-                                        <input
-                                            type="checkbox"
-                                            checked={ids('countries').includes(
-                                                country.id
-                                            )}
-                                            onChange={() =>
-                                                toggleId('countries', country.id)
-                                            }
-                                        />
-                                        <span className="truncate">
-                                            {country.name}
-                                        </span>
-                                        <span className="ml-auto shrink-0 text-muted">
-                                            {country.count}
-                                        </span>
-                                    </label>
-                                ))}
-                            </div>
-                        </div>
+                        <FacetList
+                            label="Country"
+                            selected={ids('countries').map(String)}
+                            onToggle={(id) => toggleId('countries', Number(id))}
+                            options={(facets?.countries ?? []).map((c) => ({
+                                id: String(c.id),
+                                label: c.name,
+                                count: c.count,
+                                leading: <CountryFlag code={c.shortCode} />,
+                            }))}
+                        />
                     )}
 
                     {isServer && (
@@ -409,7 +387,35 @@ export default function BrowseFilters({
                         />
                     </Field>
 
-                    <Field label="Map">
+                    {(facets?.maps.length ?? 0) > 0 && (
+                        <FacetList
+                            label="Popular maps"
+                            multiple={false}
+                            maxHeightClass="max-h-48"
+                            selected={get('map') ? [get('map') ?? ''] : []}
+                            onToggle={(id) =>
+                                set('map', get('map') === id ? null : id)
+                            }
+                            options={(facets?.maps ?? []).map((m) => ({
+                                id: m.key ?? m.name,
+                                label: m.name,
+                                count: m.count,
+                                leading: m.image ? (
+                                    <img
+                                        src={m.image}
+                                        alt=""
+                                        aria-hidden
+                                        loading="lazy"
+                                        className="size-5 shrink-0 rounded object-cover"
+                                    />
+                                ) : (
+                                    <FiMap className="size-4 shrink-0 text-muted" />
+                                ),
+                            }))}
+                        />
+                    )}
+
+                    <Field label="Map name">
                         <input
                             value={get('map') ?? ''}
                             onChange={(e) => set('map', e.target.value || null)}
@@ -440,26 +446,28 @@ export default function BrowseFilters({
                 )}
 
                 {(facets?.categories.length ?? 0) > 0 && (
-                    <div className="flex flex-col gap-1">
-                        <span className="text-[0.7rem] text-muted">Categories</span>
-                        <div className="flex max-h-44 flex-col gap-1 overflow-y-auto rounded-lg border border-border p-2">
-                            {facets?.categories.map((cat) => (
-                                <label
-                                    key={cat.id}
-                                    className={`flex items-center gap-2 text-xs ${
-                                        cat.parentId != null ? 'pl-4' : ''
-                                    }`}
-                                >
-                                    <input
-                                        type="checkbox"
-                                        checked={ids('cats').includes(cat.id)}
-                                        onChange={() => toggleId('cats', cat.id)}
-                                    />
-                                    <span className="truncate">{cat.name}</span>
-                                </label>
-                            ))}
-                        </div>
-                    </div>
+                    <FacetList
+                        label="Categories"
+                        selected={ids('cats').map(String)}
+                        onToggle={(id) => toggleId('cats', Number(id))}
+                        options={(facets?.categories ?? []).map((cat) => ({
+                            id: String(cat.id),
+                            label: cat.name,
+                            count: cat.count,
+                            indent: cat.parentId != null,
+                            leading: cat.icon ? (
+                                <img
+                                    src={cat.icon}
+                                    alt=""
+                                    aria-hidden
+                                    loading="lazy"
+                                    className="size-5 shrink-0 rounded object-cover"
+                                />
+                            ) : (
+                                <FiTag className="size-4 shrink-0 text-muted" />
+                            ),
+                        }))}
+                    />
                 )}
 
                 {/* Only meaningful once tags are actually selected, and the

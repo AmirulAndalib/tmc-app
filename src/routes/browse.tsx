@@ -330,9 +330,13 @@ export default function BrowseRoute() {
         staleTime: 60 * 1000,
     })
 
+    // Counts follow the list's own online switch, so a number never promises
+    // rows the list hides.
+    const onlineOnly = search.get('online') !== '0'
+
     const facets = useQuery({
-        queryKey: ['facets', kind],
-        queryFn: () => api.facets(kind),
+        queryKey: ['facets', kind, onlineOnly],
+        queryFn: () => api.facets(kind, onlineOnly),
         staleTime: 10 * 60 * 1000,
     })
 

@@ -674,6 +674,7 @@ export const FacetsResponseSchema = z.object({
         RefSchema.extend({
             count: z.number().int(),
             parentId: z.number().int().nullable(),
+            icon: z.string().nullable().default(null),
         })
     ),
     /**
@@ -686,7 +687,24 @@ export const FacetsResponseSchema = z.object({
      * than no filter.
      */
     countries: z
-        .array(RefSchema.extend({ count: z.number().int() }))
+        .array(
+            RefSchema.extend({
+                count: z.number().int(),
+                /** ISO 3166-1 alpha-2, for a flag. */
+                shortCode: z.string().nullable().default(null),
+            })
+        )
+        .default([]),
+    /** The maps most servers run, for the server browser's map filter. */
+    maps: z
+        .array(
+            RefSchema.extend({
+                count: z.number().int(),
+                /** The map's own name, which is what the `mapName` filter matches. */
+                key: z.string().nullable().default(null),
+                image: z.string().nullable().default(null),
+            })
+        )
         .default([]),
 })
 
@@ -1975,12 +1993,21 @@ export const PlayLaunchRequestSchema = z.object({
     serverId: z.number().int().positive().optional(),
     locale: z.string().max(16).default('en'),
     options: PlayOptionValuesSchema.optional(),
+    /**
+     * An engine build to load on purpose, instead of the automatic one. Web
+     * mode only; refused when it is not an existing, non-disabled build.
+     */
+    build: z
+        .string()
+        .max(64)
+        .regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/)
+        .optional(),
 })
 
 /**
  * A resolved launch, or `null` when there is not one.
  *
- * `null` is the whole refusal vocabulary and it covers every reason: the app is
+ * `null` is the whole refusal body and it covers every reason (the reason code rides in the `X-Launch-Refused` header): the app is
  * hidden, the feature is off, the mode is not available, the server belongs to
  * another game, or `directPlay` is off and no server was named. Naming which
  * would tell a caller which columns to probe, and none of them changes what the
@@ -2547,3 +2574,182 @@ export type StatDefT = z.infer<typeof StatDefSchema>
 /** Every VISIBLE stat, ordered by key. What a leaderboard picker lists. */
 export const StatDefsResponse = z.array(StatDefSchema)
 export type StatDefsResponseT = z.infer<typeof StatDefsResponse>
+
+// --------------------------------------------------------------- Workshop
+
+/*
+ * The Workshop: subscriptions that load into solo games. The site's half of the
+ * contract is docs/workshop.md; the client's is dot-cloud's docs/workshop.md.
+ * Mirrored in tmc-app like everything above, though only Dot games read these.
+ */
+
+export const WorkshopQuerySchema = z.object({
+    /** The game's content id, `<owner>/<repo>`. */
+    game: z.string().min(3).max(200),
+    /** The previous response's `revision`. */
+    since: z.coerce.string().max(64).optional(),
+    /**
+     * What the client is. Decides which script packs it is given: the code
+     * review policy is held per platform, `web` (the browser sandbox) apart
+     * from native (`desktop`, `mobile`). ABSENT reads as native, the strict
+     * case, so an old client never gets less review than it used to.
+     */
+    platform: z.enum(['web', 'desktop', 'mobile']).optional(),
+})
+
+export const WorkshopAcceptsSchema = z.object({
+    kinds: z.array(z.string()),
+    map_kinds: z.array(z.string()),
+})
+
+export const WorkshopItemSchema = z.object({
+    subscriptionId: z.string(),
+    assetId: z.number().int(),
+    name: z.string(),
+    image: z.string().nullable(),
+    webUrl: z.string(),
+    via: z
+        .object({ collectionId: z.number().int(), name: z.string() })
+        .nullable(),
+    scope: z.enum(['all', 'listed']),
+    autoUpdate: z.boolean(),
+    pack: z.object({
+        contentId: z.string(),
+        version: z.string(),
+        manifestUrl: z.string().nullable(),
+        manifestSha: z.string().nullable(),
+        bytes: z.number(),
+        kinds: z.array(z.string()),
+        runsCode: z.boolean(),
+        approved: z.boolean(),
+        keyId: z.string(),
+    }),
+})
+
+export const WorkshopRemovedReasonSchema = z.enum([
+    'scope',
+    'paused',
+    'incompatible',
+    'unavailable',
+    'not_approved',
+])
+
+export const WorkshopRemovedSchema = z.object({
+    subscriptionId: z.string(),
+    assetId: z.number().int(),
+    contentId: z.string().nullable(),
+    reason: WorkshopRemovedReasonSchema,
+})
+
+export const WorkshopListResponse = z.object({
+    game: z
+        .object({
+            appId: z.number().int(),
+            contentId: z.string(),
+            name: z.string(),
+            accepts: WorkshopAcceptsSchema.nullable(),
+        })
+        .nullable(),
+    account: z.string(),
+    revision: z.string(),
+    unchanged: z.boolean(),
+    full: z.boolean(),
+    items: z.array(WorkshopItemSchema),
+    removed: z.array(WorkshopRemovedSchema),
+})
+
+export const WorkshopScopeRequest = z
+    .object({
+        subscriptionId: z.string().min(1).max(64),
+        game: z.string().min(3).max(200).optional(),
+        on: z.boolean().optional(),
+        all: z.boolean().optional(),
+    })
+    .refine(
+        (v) =>
+            (v.all !== undefined && v.game === undefined) ||
+            (v.all === undefined && v.game !== undefined && v.on !== undefined),
+        { message: 'Send either {game, on} or {all}.' }
+    )
+
+export const WorkshopScopeResponse = z.object({
+    subscriptionId: z.string(),
+    scope: z.enum(['all', 'listed']),
+    games: z.array(z.string()),
+    revision: z.string().optional(),
+})
+
+export type WorkshopListResponseT = z.infer<typeof WorkshopListResponse>
+export type WorkshopItemT = z.infer<typeof WorkshopItemSchema>
+export type WorkshopRemovedT = z.infer<typeof WorkshopRemovedSchema>
+
+// ---------------------------------------------------------------- Avatar
+
+/** The figure's document, as `GET`/`PUT /avatar` carry it. */
+export const AvatarDocSchema = z.object({
+    version: z.number().int(),
+    schema_id: z.string(),
+    parts: z.record(z.string(), z.string()),
+    colours: z.record(z.string(), z.array(z.string())),
+})
+
+export const AvatarActionSchema = z.object({
+    kind: z.string(),
+    name: z.string(),
+    builtin: z.string().nullable().default(null),
+    loop: z.boolean().default(false),
+})
+
+/** `GET /avatar`: the caller's own figure and what they have equipped. */
+export const AvatarResponseSchema = z.object({
+    avatar: AvatarDocSchema,
+    digest: z.string(),
+    schema: z.object({ id: z.string(), version: z.number().int() }),
+    /** False for a member who never saved one: the document is then the defaults. */
+    saved: z.boolean(),
+    twoD: z
+        .object({ url: z.string(), width: z.number(), height: z.number() })
+        .nullable()
+        .default(null),
+    updatedAt: z.string().nullable().default(null),
+    model: z
+        .object({ name: z.string() })
+        .passthrough()
+        .nullable()
+        .default(null),
+    actions: z
+        .object({
+            EMOTE: z.array(AvatarActionSchema).default([]),
+            POSE: z.array(AvatarActionSchema).default([]),
+            GESTURE: z.array(AvatarActionSchema).default([]),
+        })
+        .default({ EMOTE: [], POSE: [], GESTURE: [] }),
+})
+
+/** `GET /avatar/schema`: the slots and parts the editor offers. */
+export const AvatarSchemaResponseSchema = z.object({
+    id: z.string(),
+    version: z.number().int(),
+    slots: z.array(
+        z.object({
+            id: z.string(),
+            display_name: z.string(),
+            required: z.boolean().default(false),
+            default_part: z.string().default(''),
+            layer: z.number().default(0),
+        })
+    ),
+    parts: z.array(
+        z.object({
+            id: z.string(),
+            slot: z.string(),
+            display_name: z.string(),
+            colour_channels: z.number().int().default(0),
+            retired: z.boolean().default(false),
+        })
+    ),
+})
+
+export type AvatarDocT = z.infer<typeof AvatarDocSchema>
+export type AvatarResponseT = z.infer<typeof AvatarResponseSchema>
+export type AvatarSchemaResponseT = z.infer<typeof AvatarSchemaResponseSchema>
