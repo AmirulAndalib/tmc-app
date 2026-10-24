@@ -41,7 +41,7 @@ Why a separate REST API rather than the website's tRPC:
 - Every content type has a **different** row shape. The app draws one grid; the normalisation into `ContentSummary` has to happen once, server-side.
 - Rust calls it too.
 
-Endpoints: `/auth/device`, `/auth/token`, `/auth/refresh`, `/auth/revoke`, `/me` (GET + PATCH), `/browse`, `/content/:kind/:id`, `/facets`, `/avatar` (GET + PUT), `/avatar/schema`, `/avatar/actions` (GET + PUT), `/apps`, `/play/launch`, `/version`.
+Endpoints: `/auth/device`, `/auth/token`, `/auth/refresh`, `/auth/revoke`, `/me` (GET + PATCH), `/browse`, `/content/:kind/:id`, `/facets`, `/avatar` (GET + PUT), `/avatar/schema`, `/avatar/actions` (GET + PUT), `/avatar/wearables` (GET + PUT), `/apps`, `/play/launch`, `/version`.
 
 **The game backbone's player routes are in the contract too**, section "Social": `/friends` (+ `/requests`, `/request`, `/respond`, `/cancel`, `/remove`), `/party/mine`, `/party/invites`, `/party/invite/respond`, `/party/leave`, `/stats/top`, `/stats/me` and `/stats/defs` (the picker; a 404 from an older site falls back to the held keys) — website-city's `docs/api/app-social.md` routes. `client.ts` parses them with the contract's `*Response` schemas; `respond`/`cancel`/`remove` answer `data: null` and are parsed with `z.null()`, and an accepted `party/invite/respond` answers the join (`PartyInviteRespondResponse`). `lib/api/social.ts` keeps only the UI's short type names and display helpers; its test parses the site's documented examples through the contract schemas. Stat `kind` stays a string in the contract (`StatKindVals` is labels only), so a new kind still ranks. The app never POSTs `/presence`: only a game token places its player.
 
@@ -63,3 +63,5 @@ Not every declared field is implemented: **`timeRange` is accepted and ignored**
 **`/facets` counts with the browse list predicate**, so a facet number equals the `total` the list shows when it is chosen. `online=0` (servers) counts the whole listing from the site rollups. Responses are cached in Redis under `appapi:facets:ver`; `INCR` it to drop them. Categories carry an `icon`, countries a `shortCode` (for the bundled flag SVGs) and `maps` lists popular maps.
 
 **`/avatar/actions` equips emotes, poses and gestures** on the member's built-in figure: GET lists everything they may equip with its slot, PUT replaces one kind's ordered list (at most `max`). Server rows carry `countryCode` for the flag. `online=0` facets count with the list predicate, not the site rollups, which cover a shorter window.
+
+**`/avatar/wearables` dresses the built-in figure**: GET lists every wearable the member may wear (`slot`, `bone`, `licence`, `equipped`, and `locked` when a store sells it and they have not bought it), PUT `{ wearableId, equipped }` wears one in its slot (replacing the one there) or takes it off. The panel's Wearables tab draws a stick figure with a marker on each worn slot; a rendered preview is not built.

@@ -2775,3 +2775,27 @@ export const AvatarActionsResponseSchema = z.object({
 
 export type AvatarActionOptionT = z.infer<typeof AvatarActionOptionSchema>
 export type AvatarActionsResponseT = z.infer<typeof AvatarActionsResponseSchema>
+
+/** `GET /avatar/wearables`: what the caller may wear on the built-in figure, and what they do. */
+export const AvatarWearableOptionSchema = z.object({
+    id: z.number().int(),
+    name: z.string(),
+    description: z.string().nullable().default(null),
+    slot: z.string(),
+    bone: z.string(),
+    licence: z.string(),
+    credit: z.string().nullable().default(null),
+    triangles: z.number().int().default(0),
+    ownerName: z.string().nullable().default(null),
+    equipped: z.boolean().default(false),
+    /** Sold in a store the caller has not bought from: equip is refused. */
+    locked: z.boolean().default(false),
+})
+
+export const AvatarWearablesResponseSchema = z.object({
+    slots: z.array(z.string()),
+    wearables: z.array(AvatarWearableOptionSchema),
+})
+
+export type AvatarWearableOptionT = z.infer<typeof AvatarWearableOptionSchema>
+export type AvatarWearablesResponseT = z.infer<typeof AvatarWearablesResponseSchema>

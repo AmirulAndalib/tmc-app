@@ -5,6 +5,7 @@ import {
     FiArrowUp,
     FiExternalLink,
     FiHeart,
+    FiPackage,
     FiPlus,
     FiRefreshCw,
     FiSave,
@@ -20,13 +21,14 @@ import { useAuth } from '~/lib/auth/provider'
 import { openExternally } from '~/lib/external'
 import { messageOf } from '~/lib/ipc'
 
-type TabKey = 'avatar' | 'EMOTE' | 'POSE' | 'GESTURE'
+type TabKey = 'avatar' | 'EMOTE' | 'POSE' | 'GESTURE' | 'WEARABLES'
 
 const TABS: { key: TabKey; label: string; icon: typeof FiUser }[] = [
     { key: 'avatar', label: 'Avatar', icon: FiUser },
     { key: 'EMOTE', label: 'Emotes', icon: FiSmile },
     { key: 'POSE', label: 'Poses', icon: FiHeart },
     { key: 'GESTURE', label: 'Gestures', icon: FiZap },
+    { key: 'WEARABLES', label: 'Wearables', icon: FiPackage },
 ]
 
 const KEY_HINT: Record<'EMOTE' | 'POSE' | 'GESTURE', string> = {
@@ -377,6 +379,166 @@ function ActionTab({
     )
 }
 
+const SLOT_LABEL: Record<string, string> = {
+    hat: 'Hat',
+    face: 'Face',
+    neck: 'Neck',
+    back: 'Back',
+    waist: 'Waist',
+    hand_right: 'Right hand',
+    hand_left: 'Left hand',
+}
+
+/** Where each slot sits on the 120x160 stick figure, for the worn-slot markers. */
+const SLOT_SPOT: Record<string, [number, number]> = {
+    hat: [60, 8],
+    face: [60, 34],
+    neck: [60, 52],
+    back: [100, 70],
+    waist: [60, 100],
+    hand_right: [16, 100],
+    hand_left: [104, 100],
+}
+
+/** The member's figure with a marker on each slot that has something on it. */
+function WornFigure({ worn }: { worn: Set<string> }) {
+    return (
+        <svg
+            viewBox="0 0 120 160"
+            role="img"
+            aria-label={`Wearing in: ${[...worn].map((s) => SLOT_LABEL[s] ?? s).join(', ') || 'nothing'}`}
+            className="h-40 w-32 shrink-0 rounded-xl bg-background text-muted"
+        >
+            <circle cx="60" cy="32" r="20" fill="none" stroke="currentColor" opacity="0.4" strokeWidth="2" />
+            <rect x="36" y="54" width="48" height="50" rx="12" fill="none" stroke="currentColor" opacity="0.4" strokeWidth="2" />
+            <rect x="44" y="104" width="12" height="46" rx="5" fill="none" stroke="currentColor" opacity="0.4" strokeWidth="2" />
+            <rect x="64" y="104" width="12" height="46" rx="5" fill="none" stroke="currentColor" opacity="0.4" strokeWidth="2" />
+            {Object.entries(SLOT_SPOT).map(([slot, [x, y]]) => (
+                <circle
+                    key={slot}
+                    cx={x}
+                    cy={y}
+                    r={worn.has(slot) ? 6 : 3.5}
+                    className={worn.has(slot) ? 'fill-accent' : 'fill-current'}
+                    opacity={worn.has(slot) ? 1 : 0.35}
+                />
+            ))}
+        </svg>
+    )
+}
+
+function WearablesTab({ manageUrl }: { manageUrl: string | null }) {
+    const client = useQueryClient()
+    const list = useQuery({
+        queryKey: ['avatar', 'wearables'],
+        queryFn: () => api.avatarWearables(),
+    })
+    const equip = useMutation({
+        mutationFn: (v: { id: number; equipped: boolean }) =>
+            api.avatarWearableEquip(v.id, v.equipped),
+        onSuccess: () => {
+            void client.invalidateQueries({ queryKey: ['avatar', 'wearables'] })
+        },
+    })
+
+    if (list.error) {
+        return <p className="text-sm text-danger">{messageOf(list.error)}</p>
+    }
+
+    if (!list.data) {
+        return <div className="h-32 animate-pulse rounded-lg bg-surface-2" />
+    }
+
+    const busy = equip.isPending
+    const worn = new Set(
+        list.data.wearables.filter((w) => w.equipped).map((w) => w.slot)
+    )
+
+    return (
+        <div className="flex flex-col gap-4">
+            <div className="flex items-center gap-3">
+                <WornFigure worn={worn} />
+                <p className="text-sm text-muted">
+                    Hats, glasses, backpacks and held items hang on your
+                    figure in games that support them. One per slot.
+                </p>
+            </div>
+
+            {list.data.slots.map((slot) => {
+                const rows = list.data.wearables.filter((w) => w.slot === slot)
+                const on = rows.find((w) => w.equipped)
+
+                return (
+                    <div key={slot} className="flex flex-col gap-2">
+                        <h3 className="flex items-center justify-between text-xs font-medium uppercase tracking-wide text-muted">
+                            <span>{SLOT_LABEL[slot] ?? slot}</span>
+                            <span className="normal-case tracking-normal">
+                                {on ? on.name : 'Empty'}
+                            </span>
+                        </h3>
+
+                        {rows.length > 0 ? (
+                            <ul className="grid grid-cols-1 gap-2 xs:grid-cols-2">
+                                {rows.map((w) => (
+                                    <li key={w.id}>
+                                        <button
+                                            type="button"
+                                            aria-pressed={w.equipped}
+                                            disabled={busy || (w.locked && !w.equipped)}
+                                            onClick={() =>
+                                                equip.mutate({
+                                                    id: w.id,
+                                                    equipped: !w.equipped,
+                                                })
+                                            }
+                                            className={`flex min-h-11 w-full items-center gap-2 rounded-lg border px-3 py-2 text-left text-sm disabled:opacity-50 ${
+                                                w.equipped
+                                                    ? 'border-accent bg-accent/15'
+                                                    : 'border-border hover:bg-surface-2'
+                                            }`}
+                                        >
+                                            <span className="min-w-0 flex-1 truncate">
+                                                {w.name}
+                                            </span>
+                                            {w.locked && (
+                                                <span className="shrink-0 rounded-full border border-border px-2 py-0.5 text-[0.65rem] text-muted">
+                                                    In the store
+                                                </span>
+                                            )}
+                                            {w.equipped && (
+                                                <FiX className="size-4 shrink-0" />
+                                            )}
+                                        </button>
+                                    </li>
+                                ))}
+                            </ul>
+                        ) : (
+                            <p className="text-sm text-muted">
+                                Nothing for this slot yet.
+                            </p>
+                        )}
+                    </div>
+                )
+            })}
+
+            {equip.error && (
+                <p className="text-xs text-danger">{messageOf(equip.error)}</p>
+            )}
+
+            {manageUrl && (
+                <button
+                    type="button"
+                    onClick={() => void openExternally({ webUrl: manageUrl })}
+                    className="flex w-fit items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-sm"
+                >
+                    <FiExternalLink className="size-3.5 shrink-0" />
+                    Make your own on the website
+                </button>
+            )}
+        </div>
+    )
+}
+
 function IconBtn({
     label,
     disabled,
@@ -404,7 +566,7 @@ function IconBtn({
 
 /**
  * The signed-in member's avatar: the figure and its parts, plus the emotes,
- * poses and gestures they have equipped.
+ * poses, gestures and wearables they have equipped.
  *
  * The figure is account-wide (a per-server override is the website's), so the
  * panel is the same on every game page. Hidden when the site has avatars off.
@@ -539,6 +701,8 @@ export default function AvatarPanel({ siteUrl }: { siteUrl: string | null }) {
                             onChange={setDraft}
                         />
                     </div>
+                ) : tab === 'WEARABLES' ? (
+                    <WearablesTab manageUrl={manageUrl} />
                 ) : (
                     <ActionTab kind={tab} manageUrl={manageUrl} />
                 )}

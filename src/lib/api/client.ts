@@ -5,6 +5,7 @@ import {
     AppListQuerySchema,
     AvatarResponseSchema,
     AvatarActionsResponseSchema,
+    AvatarWearablesResponseSchema,
     AvatarSchemaResponseSchema,
     type AvatarDocT,
     AppListResponseSchema,
@@ -167,6 +168,12 @@ export const api = {
 
     avatarActionsSave: (kind: 'EMOTE' | 'POSE' | 'GESTURE', actionIds: number[]) =>
         send('PUT', '/avatar/actions', z.unknown(), { kind, actionIds }),
+
+    avatarWearables: () =>
+        get('/avatar/wearables', AvatarWearablesResponseSchema, undefined, true),
+
+    avatarWearableEquip: (wearableId: number, equipped: boolean) =>
+        send('PUT', '/avatar/wearables', z.unknown(), { wearableId, equipped }),
 
     facets: (kind: ContentKindT, online = true) =>
         get('/facets', FacetsResponseSchema, {
