@@ -430,7 +430,7 @@ impl Executor<'_> {
 
         ensure_parent(target)?;
 
-        match crate::download::fetch_direct(&self.http, parsed, target, cap, expect_sha).await {
+        match crate::download::fetch_direct(self.http, parsed, target, cap, expect_sha).await {
             Ok(()) => Ok(()),
             Err(crate::download::DirectFailure::Other(e)) => Err(e),
             Err(crate::download::DirectFailure::Checksum { actual }) => {

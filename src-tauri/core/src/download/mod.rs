@@ -1263,7 +1263,10 @@ pub(crate) async fn fetch_direct(
         let start = if resuming { existing } else { 0 };
 
         // The header only fails early; the counter below is what enforces the cap.
-        if response.content_length().is_some_and(|len| len + start > cap) {
+        if response
+            .content_length()
+            .is_some_and(|len| len + start > cap)
+        {
             return Err(AppError::jail("Download exceeds the allowed size.").into());
         }
 
@@ -1562,11 +1565,10 @@ mod tests {
                     Behaviour::Ranges | Behaviour::TruncateOnce(_)
                         if start > 0 && start as usize >= body.len() =>
                     {
-                        format!(
-                            "HTTP/1.1 416 Range Not Satisfiable\r\ncontent-length: 0\r\n\
-                             connection: close\r\n\r\n"
-                        )
-                        .into_bytes()
+                        "HTTP/1.1 416 Range Not Satisfiable\r\ncontent-length: 0\r\n\
+                         connection: close\r\n\r\n"
+                            .to_string()
+                            .into_bytes()
                     }
                     Behaviour::Ranges | Behaviour::TruncateOnce(_) => {
                         let slice = &body[(start as usize).min(body.len())..];
@@ -1803,7 +1805,9 @@ mod tests {
         let dest = tmp.path().join("f.bin");
 
         std::fs::write(part_path(&dest), &body[..12_000]).expect("part");
-        direct(&server, &dest, Some(&sha_hex(&body))).await.expect("done");
+        direct(&server, &dest, Some(&sha_hex(&body)))
+            .await
+            .expect("done");
 
         assert_eq!(std::fs::read(&dest).expect("read"), body);
         assert!(!part_path(&dest).exists());
@@ -1928,7 +1932,9 @@ mod tests {
         let dest = tmp.path().join("f.bin");
 
         std::fs::write(part_path(&dest), vec![9u8; 10_000]).expect("stale part");
-        direct(&server, &dest, Some(&sha_hex(&body))).await.expect("done");
+        direct(&server, &dest, Some(&sha_hex(&body)))
+            .await
+            .expect("done");
 
         assert_eq!(std::fs::read(&dest).expect("read"), body);
     }
@@ -1941,7 +1947,9 @@ mod tests {
         let dest = tmp.path().join("f.bin");
 
         std::fs::write(part_path(&dest), &body).expect("whole part");
-        direct(&server, &dest, Some(&sha_hex(&body))).await.expect("done");
+        direct(&server, &dest, Some(&sha_hex(&body)))
+            .await
+            .expect("done");
         assert_eq!(std::fs::read(&dest).expect("read"), body);
 
         let other = tmp.path().join("g.bin");
