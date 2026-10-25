@@ -169,11 +169,17 @@ export const api = {
     avatarActionsSave: (kind: 'EMOTE' | 'POSE' | 'GESTURE', actionIds: number[]) =>
         send('PUT', '/avatar/actions', z.unknown(), { kind, actionIds }),
 
-    avatarWearables: () =>
-        get('/avatar/wearables', AvatarWearablesResponseSchema, undefined, true),
+    /** `appId` narrows to what that game renders and adds the game's own wearables. */
+    avatarWearables: (appId?: number) =>
+        get(
+            '/avatar/wearables',
+            AvatarWearablesResponseSchema,
+            appId === undefined ? undefined : { appId: String(appId) },
+            true
+        ),
 
-    avatarWearableEquip: (wearableId: number, equipped: boolean) =>
-        send('PUT', '/avatar/wearables', z.unknown(), { wearableId, equipped }),
+    avatarWearableEquip: (wearableId: number, equipped: boolean, appId?: number) =>
+        send('PUT', '/avatar/wearables', z.unknown(), { wearableId, equipped, appId }),
 
     facets: (kind: ContentKindT, online = true) =>
         get('/facets', FacetsResponseSchema, {

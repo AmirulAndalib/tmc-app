@@ -427,15 +427,15 @@ function WornFigure({ worn }: { worn: Set<string> }) {
     )
 }
 
-function WearablesTab({ manageUrl }: { manageUrl: string | null }) {
+function WearablesTab({ manageUrl, appId }: { manageUrl: string | null; appId: number }) {
     const client = useQueryClient()
     const list = useQuery({
-        queryKey: ['avatar', 'wearables'],
-        queryFn: () => api.avatarWearables(),
+        queryKey: ['avatar', 'wearables', appId],
+        queryFn: () => api.avatarWearables(appId),
     })
     const equip = useMutation({
         mutationFn: (v: { id: number; equipped: boolean }) =>
-            api.avatarWearableEquip(v.id, v.equipped),
+            api.avatarWearableEquip(v.id, v.equipped, appId),
         onSuccess: () => {
             void client.invalidateQueries({ queryKey: ['avatar', 'wearables'] })
         },
@@ -571,7 +571,7 @@ function IconBtn({
  * The figure is account-wide (a per-server override is the website's), so the
  * panel is the same on every game page. Hidden when the site has avatars off.
  */
-export default function AvatarPanel({ siteUrl }: { siteUrl: string | null }) {
+export default function AvatarPanel({ siteUrl, appId }: { siteUrl: string | null; appId: number }) {
     const { status } = useAuth()
     const signedIn = status === 'signedIn'
     const client = useQueryClient()
@@ -702,7 +702,7 @@ export default function AvatarPanel({ siteUrl }: { siteUrl: string | null }) {
                         />
                     </div>
                 ) : tab === 'WEARABLES' ? (
-                    <WearablesTab manageUrl={manageUrl} />
+                    <WearablesTab manageUrl={manageUrl} appId={appId} />
                 ) : (
                     <ActionTab kind={tab} manageUrl={manageUrl} />
                 )}

@@ -135,7 +135,7 @@ export default function GameRoute() {
 
             <Leaderboards appId={app.id} />
 
-            <AvatarPanel siteUrl={app.webUrl ?? null} />
+            <AvatarPanel siteUrl={app.webUrl ?? null} appId={app.id} />
 
             {target && (
                 <PlayDialog target={target} onClose={() => setTarget(null)} />

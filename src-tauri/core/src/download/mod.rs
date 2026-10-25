@@ -828,8 +828,8 @@ impl DownloadManager {
                 .map_err(|e| TransferError::fatal(format!("Could not create the folder: {e}")))?;
         }
 
-        // What is already on disk from a previous attempt.
-        let existing = std::fs::metadata(&part).map(|m| m.len()).unwrap_or(0);
+        // What is already on disk from a previous attempt, if it can be trusted to be a prefix.
+        let existing = resumable_len(&part, state.sha256.is_some());
 
         let url = url::Url::parse(&state.url)
             .map_err(|_| TransferError::fatal("That is not a valid download URL."))?;
@@ -844,9 +844,7 @@ impl DownloadManager {
 
         let mut request = self.inner.http.get(url);
 
-        if existing > 0 {
-            request = request.header("range", format!("bytes={existing}-"));
-        }
+        request = with_range(request, &part, existing);
 
         let response = request
             .send()
@@ -908,6 +906,10 @@ impl DownloadManager {
             return Err(TransferError::fatal(
                 "That file is larger than this app will download.",
             ));
+        }
+
+        if !resuming {
+            write_validator(&part, response_validator(&response).as_deref());
         }
 
         let mut file = std::fs::OpenOptions::new()
@@ -1029,6 +1031,7 @@ impl DownloadManager {
          */
         std::fs::rename(part, dest)
             .map_err(|e| TransferError::fatal(format!("Could not finish the file: {e}")))?;
+        let _ = std::fs::remove_file(validator_path(part));
 
         state.done = state.total.unwrap_or(state.done);
 
@@ -1232,13 +1235,8 @@ pub(crate) async fn fetch_direct(
     let part = part_path(dest);
 
     for attempt in 0..2 {
-        let existing = std::fs::metadata(&part).map(|m| m.len()).unwrap_or(0);
-        let mut request = http.get(url.clone());
-
-        if existing > 0 {
-            request = request.header("range", format!("bytes={existing}-"));
-        }
-
+        let existing = resumable_len(&part, expect_sha.is_some());
+        let request = with_range(http.get(url.clone()), &part, existing);
         let response = request.send().await.map_err(AppError::from)?;
         let status = response.status();
 
@@ -1267,6 +1265,10 @@ pub(crate) async fn fetch_direct(
         // The header only fails early; the counter below is what enforces the cap.
         if response.content_length().is_some_and(|len| len + start > cap) {
             return Err(AppError::jail("Download exceeds the allowed size.").into());
+        }
+
+        if !resuming {
+            write_validator(&part, response_validator(&response).as_deref());
         }
 
         let mut file = std::fs::OpenOptions::new()
@@ -1317,7 +1319,88 @@ pub(crate) async fn fetch_direct(
     Err(AppError::Network("The download did not complete.".into()).into())
 }
 
+/// The sidecar holding what identified the file when its `.tmcpart` was started.
+fn validator_path(part: &std::path::Path) -> PathBuf {
+    let mut name = part.as_os_str().to_owned();
+
+    name.push(".etag");
+
+    PathBuf::from(name)
+}
+
+/// The strong ETag, else Last-Modified: what `If-Range` can compare the file against.
+fn response_validator(response: &reqwest::Response) -> Option<String> {
+    let header = |name| {
+        response
+            .headers()
+            .get(name)
+            .and_then(|v| v.to_str().ok())
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+    };
+
+    header(reqwest::header::ETAG)
+        .filter(|v| !v.starts_with("W/"))
+        .or_else(|| header(reqwest::header::LAST_MODIFIED))
+        .map(str::to_owned)
+}
+
+fn write_validator(part: &std::path::Path, validator: Option<&str>) {
+    let path = validator_path(part);
+
+    match validator {
+        Some(v) => {
+            let _ = std::fs::write(path, v);
+        }
+        None => {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+}
+
+fn read_validator(part: &std::path::Path) -> Option<String> {
+    std::fs::read_to_string(validator_path(part))
+        .ok()
+        .map(|v| v.trim().to_owned())
+        .filter(|v| !v.is_empty())
+}
+
+/// Bytes of `part` that may be resumed. A prefix with no recorded validator can only be trusted
+/// when a checksum will catch a stale one; without either it is dropped, since an old prefix plus
+/// a new tail would install silently.
+fn resumable_len(part: &std::path::Path, has_sha: bool) -> u64 {
+    let len = std::fs::metadata(part).map(|m| m.len()).unwrap_or(0);
+
+    if len > 0 && !has_sha && read_validator(part).is_none() {
+        let _ = std::fs::remove_file(part);
+
+        return 0;
+    }
+
+    len
+}
+
+/// Ask for the missing tail, and only if the file is still the one the prefix came from.
+fn with_range(
+    request: reqwest::RequestBuilder,
+    part: &std::path::Path,
+    existing: u64,
+) -> reqwest::RequestBuilder {
+    if existing == 0 {
+        return request;
+    }
+
+    let request = request.header("range", format!("bytes={existing}-"));
+
+    match read_validator(part) {
+        Some(v) => request.header("if-range", v),
+        None => request,
+    }
+}
+
 fn install_part(part: &std::path::Path, dest: &std::path::Path) -> AppResult<()> {
+    let _ = std::fs::remove_file(validator_path(part));
+
     // Windows will not rename over an existing file.
     let _ = std::fs::remove_file(dest);
 
@@ -1734,6 +1817,104 @@ mod tests {
         let dest = tmp.path().join("f.bin");
 
         std::fs::write(part_path(&dest), &body[..9_000]).expect("part");
+        direct(&server, &dest, None).await.expect("done");
+
+        assert_eq!(std::fs::read(&dest).expect("read"), body);
+    }
+
+    /// A server that sends `etag` and honours `If-Range`: a different validator gets the whole file.
+    async fn serve_etag(body: Vec<u8>, etag: &'static str) -> TestServer {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut socket, _)) = listener.accept().await else {
+                    return;
+                };
+                let mut buf = vec![0u8; 4096];
+                let read = socket.read(&mut buf).await.unwrap_or(0);
+                let head = String::from_utf8_lossy(&buf[..read]).to_string();
+                let header = |name: &str| {
+                    head.lines()
+                        .find(|l| l.to_ascii_lowercase().starts_with(name))
+                        .and_then(|l| l.split_once(':'))
+                        .map(|(_, v)| v.trim().to_owned())
+                };
+                let start: usize = header("range:")
+                    .and_then(|r| r.split('=').nth(1).map(str::to_owned))
+                    .and_then(|r| r.trim_end_matches('-').parse().ok())
+                    .unwrap_or(0);
+                let matches = header("if-range:").is_none_or(|v| v == etag);
+                let out = if start > 0 && matches {
+                    let mut out = format!(
+                        "HTTP/1.1 206 Partial Content\r\netag: {etag}\r\ncontent-length: {}\r\n\
+                         content-range: bytes {start}-{}/{}\r\nconnection: close\r\n\r\n",
+                        body.len() - start,
+                        body.len() - 1,
+                        body.len()
+                    )
+                    .into_bytes();
+
+                    out.extend_from_slice(&body[start..]);
+                    out
+                } else {
+                    let mut out = format!(
+                        "HTTP/1.1 200 OK\r\netag: {etag}\r\ncontent-length: {}\r\n\
+                         connection: close\r\n\r\n",
+                        body.len()
+                    )
+                    .into_bytes();
+
+                    out.extend_from_slice(&body);
+                    out
+                };
+
+                let _ = socket.write_all(&out).await;
+                let _ = socket.flush().await;
+            }
+        });
+
+        TestServer { port }
+    }
+
+    #[tokio::test]
+    async fn a_prefix_with_a_matching_validator_resumes_without_a_checksum() {
+        let body: Vec<u8> = (0..30_000u32).map(|n| (n % 251) as u8).collect();
+        let server = serve_etag(body.clone(), "\"v1\"").await;
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let dest = tmp.path().join("f.bin");
+
+        std::fs::write(part_path(&dest), &body[..12_000]).expect("part");
+        write_validator(&part_path(&dest), Some("\"v1\""));
+        direct(&server, &dest, None).await.expect("done");
+
+        assert_eq!(std::fs::read(&dest).expect("read"), body);
+        assert!(!validator_path(&part_path(&dest)).exists());
+    }
+
+    #[tokio::test]
+    async fn a_prefix_from_another_version_restarts_without_a_checksum() {
+        let body: Vec<u8> = (0..30_000u32).map(|n| (n % 251) as u8).collect();
+        let server = serve_etag(body.clone(), "\"v2\"").await;
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let dest = tmp.path().join("f.bin");
+
+        std::fs::write(part_path(&dest), vec![9u8; 12_000]).expect("old prefix");
+        write_validator(&part_path(&dest), Some("\"v1\""));
+        direct(&server, &dest, None).await.expect("done");
+
+        assert_eq!(std::fs::read(&dest).expect("read"), body);
+    }
+
+    #[tokio::test]
+    async fn a_prefix_with_no_validator_and_no_checksum_is_not_resumed() {
+        let body: Vec<u8> = (0..30_000u32).map(|n| (n % 251) as u8).collect();
+        let server = serve(body.clone(), Behaviour::Ranges).await;
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let dest = tmp.path().join("f.bin");
+
+        std::fs::write(part_path(&dest), vec![9u8; 12_000]).expect("old prefix");
         direct(&server, &dest, None).await.expect("done");
 
         assert_eq!(std::fs::read(&dest).expect("read"), body);
