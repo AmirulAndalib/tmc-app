@@ -445,6 +445,20 @@ pub fn solo_args(args: &[String], solo: Option<&SoloPack>) -> Vec<String> {
     out
 }
 
+/// [`solo_args`], or why a launch that has a solo pack cannot carry it.
+///
+/// The error is for the player: a template with no bare `--` would otherwise
+/// start the shell at its own connect screen with nothing said.
+pub fn solo_args_or_why(args: &[String], solo: &SoloPack) -> Result<Vec<String>, &'static str> {
+    let out = solo_args(args, Some(solo));
+
+    if out.is_empty() {
+        return Err("This build's launch template has no `--` separator, so the game cannot be passed to it. The build needs republishing.");
+    }
+
+    Ok(out)
+}
+
 /// The bare `--` (or Godot's `++`) that ends the engine's own arguments.
 ///
 /// **It is never the flag a missing value belonged to.** A Godot export reads
@@ -907,6 +921,19 @@ mod tests {
         }));
 
         assert_eq!(solo_args(&args, latest.as_ref()), ["--solo", "tmc/arena"]);
+    }
+
+    #[test]
+    fn a_template_without_the_separator_is_refused_with_a_reason() {
+        let solo = SoloPack::new("tmc/arena", None).unwrap();
+
+        let err = solo_args_or_why(&["--connect".to_string()], &solo).unwrap_err();
+        assert!(err.contains("--"));
+        assert!(err.contains("republishing"));
+        assert_eq!(
+            solo_args_or_why(&["--".to_string()], &solo).unwrap(),
+            ["--solo", "tmc/arena"]
+        );
     }
 
     #[test]

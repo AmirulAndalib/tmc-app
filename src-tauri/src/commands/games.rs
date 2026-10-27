@@ -308,16 +308,16 @@ pub async fn game_launch(
                 &plan.args,
                 base.as_deref(),
             ));
-            let solo_args = tmc_core::games::build::solo_args(&plan.args, Some(&solo));
-
             // No bare `--` in the published template: the shell would start at
             // its own connect screen. Say so rather than opening it silently.
-            if solo_args.is_empty() {
-                let why = "This build's launch template has no `--` separator, so the game cannot be passed to it. The build needs republishing.";
-                tmc_core::audit!(state.audit, Error, App, "game.launch.solo", why);
+            let solo_args = match tmc_core::games::build::solo_args_or_why(&plan.args, &solo) {
+                Ok(args) => args,
+                Err(why) => {
+                    tmc_core::audit!(state.audit, Error, App, "game.launch.solo", why);
 
-                return Err(AppError::invalid(why));
-            }
+                    return Err(AppError::invalid(why));
+                }
+            };
 
             plan.args.extend(solo_args);
         } else {
