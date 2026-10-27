@@ -308,8 +308,26 @@ pub async fn game_launch(
                 &plan.args,
                 base.as_deref(),
             ));
-            plan.args
-                .extend(tmc_core::games::build::solo_args(&plan.args, Some(&solo)));
+            let solo_args = tmc_core::games::build::solo_args(&plan.args, Some(&solo));
+
+            // No bare `--` in the published template: the shell would start at
+            // its own connect screen. Say so rather than opening it silently.
+            if solo_args.is_empty() {
+                let why = "This build's launch template has no `--` separator, so the game cannot be passed to it. The build needs republishing.";
+                tmc_core::audit!(state.audit, Error, App, "game.launch.solo", why);
+
+                return Err(AppError::invalid(why));
+            }
+
+            plan.args.extend(solo_args);
+        } else {
+            tmc_core::audit!(
+                state.audit,
+                Warn,
+                App,
+                "game.launch.solo",
+                "No solo pack from /play/launch (no boot.solo) and no link fallback; the game starts at its own menu."
+            );
         }
     }
     // UDP or not: the player's choice for a network that drops it.
@@ -317,6 +335,14 @@ pub async fn game_launch(
         &plan.args,
         settings.game_use_udp,
     ));
+
+    tmc_core::audit!(
+        state.audit,
+        Info,
+        App,
+        "game.launch",
+        format!("app {} args: {}", row.app_id, plan.args.join(" "))
+    );
 
     let session = crate::spawn::run(
         &app,
