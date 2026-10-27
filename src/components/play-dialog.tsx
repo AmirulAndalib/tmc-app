@@ -4,6 +4,7 @@ import { Link } from 'react-router-dom'
 import {
     FiAlertTriangle,
     FiCpu,
+    FiDownload,
     FiExternalLink,
     FiGlobe,
     FiHardDrive,
@@ -62,7 +63,7 @@ import type { InstalledGameT, LaunchPreviewT, SandboxRowT } from '~/lib/ipc/sche
  */
 
 /** The ways a game can be started, in the order they are offered. */
-type Mode = 'native' | 'web' | 'sandbox' | 'connect'
+type Mode = 'native' | 'install' | 'web' | 'sandbox' | 'connect'
 
 export type PlayTargetT = {
     appId: number
@@ -284,6 +285,10 @@ export default function PlayDialog({
     )
     /** A TMC pack game whose engine's build this machine could install. */
     const [engineInstallable, setEngineInstallable] = useState(false)
+    const [engineId, setEngineId] = useState<number | null>(null)
+    /** Whether this OS can run an installed build at all (false on mobile). */
+    const [canInstallHere, setCanInstallHere] = useState(false)
+    const [installing, setInstalling] = useState(false)
     const [fullscreen, setFullscreen] = useState(false)
     /*
      * The ACCOUNT's language, for a build whose launch arguments name
@@ -344,6 +349,7 @@ export default function PlayDialog({
                  */
                 setNative(target.installed)
                 setEngineInstallable(target.engineInstallable)
+                setEngineId(target.engineId)
             })
             .catch(() => {
                 if (live) {
@@ -356,6 +362,23 @@ export default function PlayDialog({
             live = false
         }
     }, [app.id, locale])
+
+    useEffect(() => {
+        let live = true
+
+        void ipc
+            .gamesPlatform()
+            .then((info) => {
+                if (live) setCanInstallHere(info.installable)
+            })
+            .catch(() => {
+                if (live) setCanInstallHere(false)
+            })
+
+        return () => {
+            live = false
+        }
+    }, [])
 
     useEffect(() => {
         let live = true
@@ -418,6 +441,29 @@ export default function PlayDialog({
     const canNative = native != null && !desktopClosed
 
     /*
+     * What Install would install: the game's own build, or its engine's shell
+     * for a TMC pack game (the two cases `native_target` decides in Rust).
+     * Null when TMC publishes nothing this machine can run.
+     */
+    const engineAppId = engineId ?? app.engine?.id ?? null
+    const installTarget = useMemo<{
+        appId: number
+        name: string
+        slug?: string
+    } | null>(() => {
+        if (native !== null || !canInstallHere || desktopClosed) return null
+
+        if (engineInstallable && engineAppId !== null)
+            return { appId: engineAppId, name: app.engine?.name ?? app.name }
+
+        return app.install
+            ? { appId: app.id, name: app.name, slug: app.slug ?? undefined }
+            : null
+    }, [native, canInstallHere, desktopClosed, engineInstallable, engineAppId, app])
+
+    const canInstall = installTarget !== null
+
+    /*
      * Chosen once the facts are in, not on every render.
      *
      * The default is the mode that produces the best result rather than the
@@ -437,13 +483,15 @@ export default function PlayDialog({
     ) {
         const best = canNative
             ? 'native'
-            : canSandbox
-              ? 'sandbox'
-              : canWeb
-                ? 'web'
-                : canConnect
-                  ? 'connect'
-                  : null
+            : canInstall
+              ? 'install'
+              : canSandbox
+                ? 'sandbox'
+                : canWeb
+                  ? 'web'
+                  : canConnect
+                    ? 'connect'
+                    : null
 
         if (best !== null) setMode(best)
     }
@@ -497,6 +545,50 @@ export default function PlayDialog({
             setBusy(false)
         }
     }, [app.id, server, values, locale, target.solo, onClose])
+
+    /*
+     * Install, then start. The build goes through the ordinary download queue
+     * (Downloads shows it); `gameInstall` resolves once it is unpacked and
+     * verified, and only then is the launch made, with the same `gameLaunch`
+     * the installed case uses.
+     */
+    const installAndPlay = useCallback(async () => {
+        if (!installTarget) return
+
+        setBusy(true)
+        setInstalling(true)
+        setError(null)
+
+        try {
+            await ipc.gameInstall(installTarget)
+
+            const now = await ipc.gameNativeTarget(app.id, locale)
+
+            setNative(now.installed)
+
+            if (!now.installed) {
+                setError('Installed, but this game cannot be started from it.')
+
+                return
+            }
+
+            await ipc.gameLaunch({
+                appId: app.id,
+                serverId: server ? Number(server.id) : undefined,
+                options: values,
+                locale,
+                solo: server ? undefined : target.solo?.contentId,
+                soloVersion: server ? undefined : target.solo?.version,
+            })
+
+            onClose()
+        } catch (err) {
+            setError(messageOf(err))
+        } finally {
+            setInstalling(false)
+            setBusy(false)
+        }
+    }, [installTarget, app.id, locale, server, values, target.solo, onClose])
 
     const launchSandbox = useCallback(async () => {
         const id = Number(sandboxId)
@@ -568,7 +660,8 @@ export default function PlayDialog({
             />
         )
 
-    const nothing = !canNative && !canWeb && !canConnect && !canSandbox
+    const nothing =
+        !canNative && !canInstall && !canWeb && !canConnect && !canSandbox
 
     return (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
@@ -643,13 +736,49 @@ export default function PlayDialog({
                                     active={mode === 'native'}
                                     onSelect={() => setMode('native')}
                                     icon={FiCpu}
-                                    title="Play the TMC build"
+                                    title="Play natively"
                                     body={
                                         server
                                             ? `Starts version ${native.version} on this machine and joins the server.`
                                             : `Starts version ${native.version} installed on this machine.`
                                     }
                                 >
+                                    {options.length > 0 && (
+                                        <div className="flex flex-col gap-3">
+                                            {options.map((option) => (
+                                                <OptionField
+                                                    key={option.key}
+                                                    option={option}
+                                                    value={values[option.key]}
+                                                    onChange={(next) =>
+                                                        setValues((prev) => ({
+                                                            ...prev,
+                                                            [option.key]: next,
+                                                        }))
+                                                    }
+                                                />
+                                            ))}
+                                        </div>
+                                    )}
+                                </ModeCard>
+                            )}
+
+                            {canInstall && (
+                                <ModeCard
+                                    active={mode === 'install'}
+                                    onSelect={() => setMode('install')}
+                                    icon={FiDownload}
+                                    title="Install and play locally (recommended)"
+                                    body="Downloads the native game once, then starts it. Faster than the web build, with every setting and mod support."
+                                >
+                                    {installing && (
+                                        <p className="mb-3 text-[11px] text-muted">
+                                            Downloading and installing. The game
+                                            starts when this finishes; progress is
+                                            also on the Downloads screen.
+                                        </p>
+                                    )}
+
                                     {options.length > 0 && (
                                         <div className="flex flex-col gap-3">
                                             {options.map((option) => (
@@ -699,9 +828,19 @@ export default function PlayDialog({
                                     active={mode === 'web'}
                                     onSelect={() => setMode('web')}
                                     icon={FiGlobe}
-                                    title="Play in a window"
+                                    title="Play in a window (web build)"
                                     body="Runs the game's web build in a window of its own. Nothing is installed."
                                 >
+                                    <p className="mb-3 flex items-start gap-2 rounded-lg border border-warning/40 bg-warning/10 p-2 text-[11px] text-muted">
+                                        <FiAlertTriangle className="mt-0.5 size-3 shrink-0 text-warning" />
+                                        <span>
+                                            The web build runs in a browser view. It
+                                            is slower, may lack features (mods, some
+                                            settings, threads), and is not the
+                                            native game.
+                                        </span>
+                                    </p>
+
                                     <label className="mb-3 flex cursor-pointer items-start gap-2 text-xs">
                                         <input
                                             type="checkbox"
@@ -762,24 +901,6 @@ export default function PlayDialog({
                                 />
                             )}
 
-                            {!canNative &&
-                                !desktopClosed &&
-                                (app.install || engineInstallable) && (
-                                    <p className="flex items-start gap-2 px-1 text-[11px] text-muted">
-                                        <FiCpu className="mt-0.5 size-3 shrink-0" />
-                                        <span>
-                                            TMC publishes a build of this game.{' '}
-                                            <Link
-                                                to="/library?view=tmc"
-                                                className="underline"
-                                            >
-                                                Install it
-                                            </Link>{' '}
-                                            to play it without a browser.
-                                        </span>
-                                    </p>
-                                )}
-
                             {!canSandbox && (
                                 <p className="flex items-start gap-2 px-1 text-[11px] text-muted">
                                     <FiHardDrive className="mt-0.5 size-3 shrink-0" />
@@ -818,6 +939,7 @@ export default function PlayDialog({
                         disabled={busy || mode === null}
                         onClick={() => {
                             if (mode === 'native') void launchNative()
+                            else if (mode === 'install') void installAndPlay()
                             else if (mode === 'web') void launchWeb()
                             else if (mode === 'sandbox') void launchSandbox()
                             else if (mode === 'connect') void connect()
@@ -825,7 +947,13 @@ export default function PlayDialog({
                         className="flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-accent-foreground disabled:opacity-50"
                     >
                         <FiPlay className="size-3.5" />
-                        {busy ? 'Starting…' : 'Play'}
+                        {installing
+                            ? 'Installing…'
+                            : busy
+                              ? 'Starting…'
+                              : mode === 'install'
+                                ? 'Install and play'
+                                : 'Play'}
                     </button>
                 </footer>
             </div>
